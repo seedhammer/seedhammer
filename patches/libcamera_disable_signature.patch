@@ -1,0 +1,14 @@
+diff --git a/src/libcamera/ipa_manager.cpp b/src/libcamera/ipa_manager.cpp
+index 030ef43f..6f141cf4 100644
+--- a/src/libcamera/ipa_manager.cpp
++++ b/src/libcamera/ipa_manager.cpp
+@@ -306,7 +306,8 @@ bool IPAManager::isSignatureValid([[maybe_unused]] IPAModule *ipa) const
+ 
+ 	return valid;
+ #else
+-	return false;
++	// Ignore signatures.
++	return true;
+ #endif
+ }
+ 

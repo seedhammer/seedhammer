@@ -1,0 +1,13 @@
+diff --git a/src/libcamera/v4l2_device.cpp b/src/libcamera/v4l2_device.cpp
+index 57a88d96..ad9d1e37 100644
+--- a/src/libcamera/v4l2_device.cpp
++++ b/src/libcamera/v4l2_device.cpp
+@@ -86,7 +86,7 @@ int V4L2Device::open(unsigned int flags)
+ 		return -EBUSY;
+ 	}
+ 
+-	UniqueFD fd(syscall(SYS_openat, AT_FDCWD, deviceNode_.c_str(), flags));
++	UniqueFD fd(syscall(SYS_openat, AT_FDCWD, deviceNode_.c_str(), flags|O_CLOEXEC));
+ 	if (!fd.isValid()) {
+ 		int ret = -errno;
+ 		LOG(V4L2, Error) << "Failed to open V4L2 device '"
