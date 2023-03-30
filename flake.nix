@@ -362,11 +362,7 @@
                     --prefix=/ \
                     --libdir=lib
                   cd build
-                  export
-                  echo "LDFLAGS" $NIX_LDFLAGS
                 '';
-
-                ninjaFlags = [ "-v" ];
 
                 installPhase = ''
                   mkdir -p $out/lib/libcamera $out/share/libcamera/ipa/raspberrypi
@@ -375,13 +371,6 @@
                     ./src/v4l2/v4l2-compat.so \
                     $out/lib
                   cp ./src/ipa/raspberrypi/ipa_rpi.so $out/lib/libcamera
-                  export
-                  echo $CC
-                  echo $CXX
-                  echo "LDFLAGS" $NIX_LDFLAGS
-                  echo $PATH
-                  echo `find $out/lib -type f|sort`
-                  patchelf --print-rpath `find $out/lib -type f|sort`
                   cp ../src/ipa/raspberrypi/data/*.json $out/share/libcamera/ipa/raspberrypi
                   patchelf --set-rpath "/lib" `find $out/lib -type f`
                 '';
@@ -403,7 +392,6 @@
                 LIBCAM="${self.packages.${system}.libcamera}"
                 chmod +w `find $out/`
                 cclib="${pkgs.stdenv.cc.cc.lib}/${pkgs.stdenv.targetPlatform.config}/lib"
-                echo "CCLIB:" $cclib
 
                 cp "$cclib/libstdc++.so.6" \
                   "$cclib/libgcc_s.so.1" \
@@ -411,7 +399,6 @@
                   $out/lib/
                 chmod +w `find $out/`
                 patchelf --set-rpath "/lib" `find $out/lib -type f`
-                echo "******" ${pkgs.stdenv.cc.libc}
                 cp "${pkgs.stdenv.cc.libc}/lib/${loader-lib}" \
                   $out/lib
                 cp -R "$LIBCAM/lib/" $out/
