@@ -817,7 +817,7 @@ func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, desc urtypes.Out
 		KeyIdx:     keyIdx,
 		Font:       &sh.Fontsh,
 	}
-	plate, err := backup.Engrave(mjolnir.StrokeWidth, plateDesc)
+	plate, err := backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
 	if err != nil {
 		t.Fatal(err)
 	}

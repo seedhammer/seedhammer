@@ -961,7 +961,7 @@ func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (
 		KeyIdx:     keyIdx,
 		Font:       &sh.Fontsh,
 	}
-	return backup.Engrave(mjolnir.StrokeWidth, plateDesc)
+	return backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
 }
 
 func NewEngraveScreen(ctx *Context, desc urtypes.OutputDescriptor, m bip39.Mnemonic, passphrase string) (*EngraveScreen, error) {

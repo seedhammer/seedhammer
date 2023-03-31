@@ -1,9 +1,8 @@
 package mjolnir
 
 import (
+	"image"
 	"testing"
-
-	"golang.org/x/image/math/f32"
 )
 
 func TestEndToEnd(t *testing.T) {
@@ -13,9 +12,9 @@ func TestEndToEnd(t *testing.T) {
 	prog := &Program{}
 	design := func() {
 		for i := 0; i < 2000; i++ {
-			prog.Line(f32.Vec2{float32(i), float32(i) * 2})
-			prog.Line(f32.Vec2{float32(i) * 4, float32(i) * 3})
-			prog.Move(f32.Vec2{float32(i), float32(i)})
+			prog.Line(image.Pt(i, i*2))
+			prog.Line(image.Pt(i*4, i*3))
+			prog.Move(image.Pt(i, i))
 		}
 	}
 	design()

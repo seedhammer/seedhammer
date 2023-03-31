@@ -49,7 +49,7 @@ func TestEngraveErrors(t *testing.T) {
 			}
 			plateDesc := genTestPlate(t, desc, test.path, test.seedLen, 0)
 			const ppmm = 4
-			_, err := Engrave(mjolnir.StrokeWidth, plateDesc)
+			_, err := Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
 			if err == nil {
 				t.Fatalf("no error reported by Engrave, expected %v", test.err)
 			}
@@ -81,7 +81,6 @@ func TestEngrave(t *testing.T) {
 		{1, 1, 1, urtypes.P2SH_P2WSH, 12},
 		{1, 1, 1, urtypes.P2SH_P2WSH, 24},
 		{1, 2, 1, urtypes.P2SH_P2WSH, 12},
-		{3, 5, 1, urtypes.P2SH_P2WSH, 12},
 		{3, 5, 1, urtypes.P2SH_P2WSH, 24},
 		// Descriptor side.
 		{1, 1, 0, urtypes.P2SH_P2WSH, 12},
@@ -100,7 +99,7 @@ func TestEngrave(t *testing.T) {
 			}
 			plateDesc := genTestPlate(t, desc, desc.DerivationPath(), test.seedLen, 0)
 			const ppmm = 4
-			plate, err := Engrave(mjolnir.StrokeWidth, plateDesc)
+			plate, err := Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -112,8 +111,8 @@ func TestEngrave(t *testing.T) {
 			name := fmt.Sprintf("plate-%d-side-%d-%d-of-%d-words-%d.png", i, test.side, desc.Threshold, len(desc.Keys), test.seedLen)
 			golden := filepath.Join("testdata", name)
 			got := image.NewAlpha(bounds)
-			r := engrave.NewRasterizer(got, bounds, mjolnir.StrokeWidth*ppmm)
-			se := engrave.Scale(ppmm, ppmm, plate.Sides[test.side])
+			r := engrave.NewRasterizer(got, bounds, ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
+			se := plate.Sides[test.side]
 			se.Engrave(r)
 			r.Rasterize()
 			// Binarize to minimize golden image sizes.

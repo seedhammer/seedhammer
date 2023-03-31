@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"math"
 
 	"github.com/skip2/go-qrcode"
 	"github.com/srwiley/rasterx"
@@ -30,65 +31,98 @@ func (c Commands) Engrave(p Program) {
 }
 
 // Program is an interface to output an engraving.
-// Units are in millimeters.
 type Program interface {
-	Move(p f32.Vec2)
-	Line(p f32.Vec2)
+	Move(p image.Point)
+	Line(p image.Point)
 }
 
 type transformedProgram struct {
 	prog  Program
-	trans f32.Aff3
+	trans transform
 }
 
-func (t *transformedProgram) Move(p f32.Vec2) {
-	t.prog.Move(affine.Transform(t.trans, p))
+func (t *transformedProgram) Move(p image.Point) {
+	t.prog.Move(t.trans.transform(p))
+}
+
+func (t *transformedProgram) Line(p image.Point) {
+	t.prog.Line(t.trans.transform(p))
+}
+
+type offsetProgram struct {
+	prog Program
+	off  image.Point
+}
+
+func (o *offsetProgram) Move(p image.Point) {
+	o.prog.Move(p.Add(o.off))
 
 }
 
-func (t *transformedProgram) Line(p f32.Vec2) {
-	t.prog.Line(affine.Transform(t.trans, p))
+func (o *offsetProgram) Line(p image.Point) {
+	o.prog.Line(p.Add(o.off))
 }
 
-func TransformedProgram(prog Program, transform f32.Aff3) Program {
-	return &transformedProgram{
-		prog:  prog,
-		trans: transform,
+func roundCoord(p f32.Vec2) image.Point {
+	return image.Point{
+		X: int(math.Round(float64(p[0]))),
+		Y: int(math.Round(float64(p[1]))),
+	}
+}
+
+type transform [6]int
+
+func (m transform) transform(p image.Point) image.Point {
+	return image.Point{
+		X: p.X*m[0] + p.Y*m[1] + m[2],
+		Y: p.X*m[3] + p.Y*m[4] + m[5],
+	}
+}
+
+func rotating(radians float64) transform {
+	sin, cos := math.Sincos(float64(radians))
+	s, c := int(math.Round(sin)), int(math.Round(cos))
+	return transform{
+		c, -s, 0,
+		s, c, 0,
+	}
+}
+
+func offsetting(x, y int) transform {
+	return transform{
+		1, 0, x,
+		0, 1, y,
 	}
 }
 
 type transformCmd struct {
-	t   f32.Aff3
+	t   transform
 	cmd Command
 }
 
-func Scale(x, y float32, cmd Command) Command {
-	return transformCmd{
-		t:   affine.Scaling(f32.Vec2{x, y}),
-		cmd: cmd,
-	}
-}
-
-func Offset(x, y float32, cmd Command) Command {
-	return transformCmd{
-		t:   affine.Offsetting(f32.Vec2{x, y}),
-		cmd: cmd,
-	}
-}
-
-func Rotate(radians float32, cmd Command) Command {
-	return transformCmd{
-		t:   affine.Rotating(radians),
-		cmd: cmd,
-	}
-}
-
 func (t transformCmd) Engrave(p Program) {
-	p = TransformedProgram(p, t.t)
+	p = &transformedProgram{
+		prog:  p,
+		trans: t.t,
+	}
 	t.cmd.Engrave(p)
 }
 
-func QR(strokeWidth float32, scale int, level qrcode.RecoveryLevel, content []byte) Command {
+func Offset(x, y int, cmd Command) Command {
+	return transformCmd{
+		t:   offsetting(x, y),
+		cmd: cmd,
+	}
+}
+
+func Rotate(radians float64, cmd Command) Command {
+	return transformCmd{
+		t:   rotating(radians),
+		cmd: cmd,
+	}
+}
+
+func QR(strokeWidth int, scale int, level qrcode.RecoveryLevel, content []byte) Command {
 	return qrCmd{
 		strokeWidth: strokeWidth,
 		scale:       scale,
@@ -98,7 +132,7 @@ func QR(strokeWidth float32, scale int, level qrcode.RecoveryLevel, content []by
 }
 
 type qrCmd struct {
-	strokeWidth float32
+	strokeWidth int
 	scale       int
 	content     []byte
 	level       qrcode.RecoveryLevel
@@ -119,13 +153,13 @@ func (q qrCmd) Engrave(p Program) {
 			line := y*q.scale + i
 			// Swap direction every other line.
 			rev := line%2 != 0
-			radius := float32(.5)
+			radius := q.strokeWidth / 2
 			if rev {
 				radius = -radius
 			}
 			drawLine := func(endx int) {
-				start := affine.Scale(f32.Vec2{float32(firstx*q.scale) + radius, float32(line)}, q.strokeWidth)
-				end := affine.Scale(f32.Vec2{float32(endx*q.scale) - radius, float32(line)}, q.strokeWidth)
+				start := image.Pt(firstx*q.scale*q.strokeWidth+radius, line*q.strokeWidth)
+				end := image.Pt(endx*q.scale*q.strokeWidth-radius, line*q.strokeWidth)
 				p.Move(start)
 				p.Line(end)
 				draw = false
@@ -150,7 +184,17 @@ func (q qrCmd) Engrave(p Program) {
 	}
 }
 
-func String(face *font.Face, mmPrEm float32, msg string) *StringCmd {
+type Rect image.Rectangle
+
+func (r Rect) Engrave(p Program) {
+	p.Move(r.Min)
+	p.Line(image.Pt(r.Max.X, r.Min.Y))
+	p.Line(r.Max)
+	p.Line(image.Pt(r.Min.X, r.Max.Y))
+	p.Line(r.Min)
+}
+
+func String(face *font.Face, mmPrEm int, msg string) *StringCmd {
 	return &StringCmd{
 		LineHeight: 1,
 		face:       face,
@@ -163,7 +207,7 @@ type StringCmd struct {
 	LineHeight float32
 
 	face   *font.Face
-	mmPrEm float32
+	mmPrEm int
 	msg    string
 }
 
@@ -185,11 +229,11 @@ func (s *StringCmd) Engrave(p Program) {
 			switch seg.Op {
 			case font.SegmentOpMoveTo:
 				p1 := affine.Add(pos, affine.Scale(seg.Args[0], ppem))
-				p.Move(p1)
+				p.Move(roundCoord(p1))
 				p0 = p1
 			case font.SegmentOpLineTo:
 				p1 := affine.Add(pos, affine.Scale(seg.Args[0], ppem))
-				p.Line(p1)
+				p.Line(roundCoord(p1))
 				p0 = p1
 			case font.SegmentOpQuadTo:
 				p12 := affine.Add(pos, affine.Scale(seg.Args[0], ppem))
@@ -218,9 +262,9 @@ func (s *StringCmd) Engrave(p Program) {
 //
 // See "Piecewise Linear Approximation of Bézier Curves" by Kaspar Fischer, October 16, 2000,
 // http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.86.162&rep=rep1&type=pdf.
-func approxCubeBezier(move func(to f32.Vec2), p0, p1, p2, p3 f32.Vec2) {
+func approxCubeBezier(move func(to image.Point), p0, p1, p2, p3 f32.Vec2) {
 	if isFlat(p0, p1, p2, p3) {
-		move(p3)
+		move(roundCoord(p3))
 	} else {
 		l0, l1, l2, l3 := subdivideCubeBezier(0, .5, p0, p1, p2, p3)
 		approxCubeBezier(move, l0, l1, l2, l3)
@@ -234,34 +278,40 @@ type Rasterizer struct {
 	started bool
 	dasher  *rasterx.Dasher
 	img     image.Image
+	scale   float32
 }
 
-func (r *Rasterizer) Line(p f32.Vec2) {
-	p[0] -= float32(r.img.Bounds().Min.X)
-	p[1] -= float32(r.img.Bounds().Min.Y)
+func (r *Rasterizer) Line(p image.Point) {
+	pf := f32.Vec2{
+		float32(p.X)*r.scale - float32(r.img.Bounds().Min.X),
+		float32(p.Y)*r.scale - float32(r.img.Bounds().Min.Y),
+	}
 	if !r.started {
 		r.dasher.Start(rasterx.ToFixedP(float64(r.p[0]), float64(r.p[1])))
 		r.started = true
 	}
-	r.dasher.Line(rasterx.ToFixedP(float64(p[0]), float64(p[1])))
+	r.dasher.Line(rasterx.ToFixedP(float64(pf[0]), float64(pf[1])))
 }
 
-func (r *Rasterizer) Move(p f32.Vec2) {
-	p[0] -= float32(r.img.Bounds().Min.X)
-	p[1] -= float32(r.img.Bounds().Min.Y)
+func (r *Rasterizer) Move(p image.Point) {
+	pf := f32.Vec2{
+		float32(p.X)*r.scale - float32(r.img.Bounds().Min.X),
+		float32(p.Y)*r.scale - float32(r.img.Bounds().Min.Y),
+	}
 	if r.started {
 		r.dasher.Stop(false)
 		r.started = false
 	}
-	r.p = p
+	r.p = pf
 }
 
-func NewRasterizer(img draw.Image, dr image.Rectangle, strokeWidth float32) *Rasterizer {
+func NewRasterizer(img draw.Image, dr image.Rectangle, scale, strokeWidth float32) *Rasterizer {
 	width, height := dr.Dx(), dr.Dy()
 	scanner := rasterx.NewScannerGV(width, height, img, img.Bounds())
 	r := &Rasterizer{
 		dasher: rasterx.NewDasher(width, height, scanner),
 		img:    img,
+		scale:  scale,
 	}
 	stroke := strokeWidth * 64
 	r.dasher.SetStroke(fixed.Int26_6(stroke), 0, rasterx.RoundCap, rasterx.RoundCap, rasterx.RoundGap, rasterx.ArcClip, nil, 0)
@@ -291,7 +341,7 @@ func subdivideCubeBezier(t0, t1 float32, p0, p1, p2, p3 f32.Vec2) (s0, s1, s2, s
 }
 
 func isFlat(p0, p1, p2, p3 f32.Vec2) bool {
-	const tolerance = 1e-3
+	const tolerance = .2
 	ux := 3.0*p1[0] - 2.0*p0[0] - p3[0]
 	uy := 3.0*p1[1] - 2.0*p0[1] - p3[1]
 	vx := 3.0*p2[0] - 2.0*p3[0] - p0[0]

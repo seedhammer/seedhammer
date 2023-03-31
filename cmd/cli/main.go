@@ -72,7 +72,7 @@ func dump(plateDesc backup.PlateDesc, output string) error {
 	for i := range plateDesc.Descriptor.Keys {
 		desc := plateDesc
 		desc.KeyIdx = i
-		plate, err := backup.Engrave(mjolnir.StrokeWidth, desc)
+		plate, err := backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, desc)
 		if err != nil {
 			return err
 		}
@@ -83,8 +83,8 @@ func dump(plateDesc backup.PlateDesc, output string) error {
 		}
 		for s := range plate.Sides {
 			img := image.NewNRGBA(bounds)
-			r := engrave.NewRasterizer(img, img.Bounds(), mjolnir.StrokeWidth*ppmm)
-			se := engrave.Scale(ppmm, ppmm, plate.Sides[s])
+			r := engrave.NewRasterizer(img, img.Bounds(), ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
+			se := plate.Sides[s]
 			se.Engrave(r)
 			r.Rasterize()
 			buf := new(bytes.Buffer)
@@ -156,7 +156,7 @@ func genPlate(m0 bip39.Mnemonic) backup.PlateDesc {
 }
 
 func hammer(plateDesc backup.PlateDesc, side int, dev string) error {
-	plate, err := backup.Engrave(mjolnir.StrokeWidth, plateDesc)
+	plate, err := backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
 	if err != nil {
 		return err
 	}

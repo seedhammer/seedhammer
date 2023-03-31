@@ -6,13 +6,13 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
+	"image"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
 
-	"golang.org/x/image/math/f32"
 	"seedhammer.com/mjolnir"
 )
 
@@ -42,9 +42,12 @@ func main() {
 		}
 		vals[i] = float32(f)
 	}
-	points := make([]f32.Vec2, len(vals)/2)
+	points := make([]image.Point, len(vals)/2)
 	for i := range points {
-		points[i] = f32.Vec2{vals[i*2], vals[i*2+1]}
+		points[i] = image.Point{
+			X: int(float32(vals[i*2]) * mjolnir.Millimeter),
+			Y: int(float32(vals[i*2+1]) * mjolnir.Millimeter),
+		}
 	}
 	if err := engrave(*serialDev, points); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to engrave: %v\n", err)
@@ -52,7 +55,7 @@ func main() {
 	}
 }
 
-func engrave(dev string, coords []f32.Vec2) error {
+func engrave(dev string, coords []image.Point) error {
 	s, err := mjolnir.Open(dev)
 	if err != nil {
 		return err

@@ -7,33 +7,35 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"math"
 	"runtime"
 
 	"github.com/tarm/serial"
-	"golang.org/x/image/math/f32"
-	"seedhammer.com/affine"
 )
 
 type Program struct {
 	DryRun     bool
 	MoveSpeed  float32
 	PrintSpeed float32
-	End        f32.Vec2
+	End        image.Point
 	cmds       chan [cmdSize]byte
-	pen        f32.Vec2
 	count      int
 	sent       int
 }
 
-const StrokeWidth = 0.3
+const (
+	// StrokeWidth in millimeters.
+	StrokeWidth = 0.3
+	// Step is the step distance in millimeters per machine unit.
+	Step = 0.00796
+	// Millimeters is machine units per millimeter.
+	Millimeter = 1 / Step
+)
 
 const (
-	stepSize = 0.00796
-	// Machine units per millimeter.
-	millimeter = 1 / stepSize
-	cmdSize    = 10
+	cmdSize = 10
 
 	defaultMoveSpeed  = .75
 	defaultPrintSpeed = .1
@@ -299,10 +301,10 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 		}
 	}
 
-	moveTo := func(x, y float32) {
+	moveTo := func(p image.Point) {
 		move := new(Program)
 		f := func() {
-			move.Move(f32.Vec2{x, y})
+			move.Move(p)
 		}
 		f()
 		move.Prepare()
@@ -314,7 +316,8 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	// Move to origin.
 	origin()
 	// Avoid false origin.
-	moveTo(10, 10)
+	off := int(math.Round(10 * Millimeter))
+	moveTo(image.Pt(off, off))
 	origin()
 	// 0 lowest, 1 highest.
 	moveSpeed := prog.MoveSpeed
@@ -331,7 +334,7 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	runProgram(prog, progress)
 	if eerr == nil || eerr == ErrCancelled {
 		setSpeeds(300, 300, 0xe6)
-		moveTo(prog.End[0], prog.End[1])
+		moveTo(prog.End)
 	}
 
 	return eerr
@@ -339,9 +342,8 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 
 var ErrCancelled = errors.New("cancelled")
 
-func mkcoords(p f32.Vec2) [9]byte {
-	p = affine.Scale(p, millimeter)
-	x, y := int(math.Round(float64(p[0]))), int(math.Round(float64(p[1])))
+func mkcoords(p image.Point) [9]byte {
+	x, y := p.X, p.Y
 	if x < 0 || x > 0xffffff || y < 0 || y > 0xffffff {
 		panic(fmt.Errorf("(%d,%d) out of range", x, y))
 	}
@@ -364,7 +366,7 @@ func (p *Program) Prepare() {
 	p.cmds = make(chan [cmdSize]byte)
 }
 
-func (p *Program) Move(to f32.Vec2) {
+func (p *Program) Move(to image.Point) {
 	var cmd [cmdSize]byte
 	cmd[0] = moveCmd
 	coords := mkcoords(to)
@@ -377,7 +379,7 @@ func (p *Program) pause() {
 	//	p.cmd([...]byte{0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 }
 
-func (p *Program) Line(to f32.Vec2) {
+func (p *Program) Line(to image.Point) {
 	if p.DryRun {
 		p.Move(to)
 		return
