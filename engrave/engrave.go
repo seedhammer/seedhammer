@@ -123,30 +123,26 @@ func Rotate(radians float64, cmd Command) Command {
 }
 
 func QR(strokeWidth int, scale int, level qrcode.RecoveryLevel, content []byte) Command {
+	qr, err := qrcode.New(string(content), level)
+	if err != nil {
+		panic(err)
+	}
+	qr.DisableBorder = true
 	return qrCmd{
 		strokeWidth: strokeWidth,
 		scale:       scale,
-		content:     content,
-		level:       level,
+		qr:          qr.Bitmap(),
 	}
 }
 
 type qrCmd struct {
 	strokeWidth int
 	scale       int
-	content     []byte
-	level       qrcode.RecoveryLevel
+	qr          [][]bool
 }
 
 func (q qrCmd) Engrave(p Program) {
-	qr, err := qrcode.New(string(q.content), q.level)
-	if err != nil {
-		panic(err)
-	}
-	qr.DisableBorder = true
-	bitmap := qr.Bitmap()
-	for y := 0; y < len(bitmap); y++ {
-		row := bitmap[y]
+	for y, row := range q.qr {
 		for i := 0; i < q.scale; i++ {
 			draw := false
 			var firstx int
