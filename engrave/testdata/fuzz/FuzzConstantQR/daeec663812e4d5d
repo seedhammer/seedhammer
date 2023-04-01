@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("\xf29ȶ(BBa\xf7007AA07")

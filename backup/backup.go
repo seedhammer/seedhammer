@@ -137,9 +137,17 @@ func Engrave(scale, strokeWidth float32, plate PlateDesc) (Plate, error) {
 			p.Sides = append(p.Sides, seedBackSide(scalef, plate.Title, plate.Font, plate.Mnemonic, b.Size()))
 		case !seedOnly:
 			urs := splitUR(plate.Descriptor, plate.KeyIdx)
-			p.Sides = append(p.Sides, descriptorSide(scalef, sw, plate.Font, urs, p.Size, b.Size()))
+			side, err := descriptorSide(scalef, sw, plate.Font, urs, p.Size, b.Size())
+			if err != nil {
+				return p, err
+			}
+			p.Sides = append(p.Sides, side)
 		}
-		p.Sides = append(p.Sides, frontSide(scalef, sw, plate, p.Size, b.Size()))
+		side, err := frontSide(scalef, sw, plate, p.Size, b.Size())
+		if err != nil {
+			return p, err
+		}
+		p.Sides = append(p.Sides, side)
 		bounds := measure(engrave.Commands(p.Sides))
 		safetyMargin := image.Pt(scalef(outerMargin), scalef(outerMargin))
 		if !bounds.In(image.Rectangle{Min: safetyMargin, Max: b.Size().Sub(safetyMargin)}) {
@@ -279,7 +287,7 @@ const plateFontSize = 5.
 const plateFontSizeUR = 4.1
 const plateSmallFontSize = 3.5
 
-func frontSide(scale func(float32) int, strokeWidth int, plate PlateDesc, size PlateSize, plateDims image.Point) engrave.Command {
+func frontSide(scale func(float32) int, strokeWidth int, plate PlateDesc, size PlateSize, plateDims image.Point) (engrave.Command, error) {
 	var cmds engrave.Commands
 	cmd := func(c engrave.Command) {
 		cmds = append(cmds, c)
@@ -338,7 +346,11 @@ func frontSide(scale func(float32) int, strokeWidth int, plate PlateDesc, size P
 	cmd(engrave.Offset(scale(44), (plateDims.Y-col1b.Y)/2, col2))
 
 	// Engrave seed QR.
-	qr, sz := dims(engrave.QR(strokeWidth, 3, qrcode.High, seedqr.CompactQR(plate.Mnemonic)))
+	qrCmd, err := engrave.ConstantQR(strokeWidth, 3, qrcode.High, seedqr.CompactQR(plate.Mnemonic))
+	if err != nil {
+		return nil, err
+	}
+	qr, sz := dims(qrCmd)
 	cmd(engrave.Offset(scale(60)-sz.X/2, (plateDims.Y-sz.Y)/2, qr))
 
 	if size != SmallPlate {
@@ -359,9 +371,9 @@ func frontSide(scale func(float32) int, strokeWidth int, plate PlateDesc, size P
 	}
 	if size == LargePlate {
 		// Avoid the middle holes.
-		return engrave.Offset(0, scale(24.5), cmds)
+		return engrave.Offset(0, scale(24.5), cmds), nil
 	}
-	return cmds
+	return cmds, nil
 }
 
 func wordColumn(font *font.Face, fontSize int, mnemonic bip39.Mnemonic, start, end int) engrave.Command {
@@ -376,7 +388,7 @@ func wordColumn(font *font.Face, fontSize int, mnemonic bip39.Mnemonic, start, e
 	return cmd
 }
 
-func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, urs []string, size PlateSize, plateDims image.Point) engrave.Command {
+func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, urs []string, size PlateSize, plateDims image.Point) (engrave.Command, error) {
 	var cmds engrave.Commands
 	cmd := func(c engrave.Command) {
 		cmds = append(cmds, c)
@@ -404,7 +416,11 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, ur
 	charPerLine := int(width / charWidth)
 	offy := scale(outerMargin)
 	for i, ur := range urs {
-		qr, qrsz := dims(engrave.QR(strokeWidth, 2, qrcode.Medium, []byte(ur)))
+		qrcmd, err := engrave.QR(strokeWidth, 2, qrcode.Medium, []byte(ur))
+		if err != nil {
+			return nil, err
+		}
+		qr, qrsz := dims(qrcmd)
 		qrBorder := scale(2)
 		charPerQRLine := (width - 2*qrBorder - qrsz.X) / charWidth
 		qrLines := (qrsz.Y + 2*qrBorder + fontHeight - 1) / fontHeight
@@ -450,7 +466,7 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, ur
 		}
 	}
 
-	return cmds
+	return cmds, nil
 }
 
 func seedBackSide(scale func(float32) int, title string, font *font.Face, plate bip39.Mnemonic, size image.Point) engrave.Command {
