@@ -840,6 +840,10 @@ func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, desc urtypes.Out
 		for {
 			select {
 			case got := <-r.p.engrave.closed:
+				// Verify the step is advanced after engrave completion.
+				for scr.instructions[scr.step].Type == EngraveInstruction {
+					r.Frame(t)
+				}
 				want := simEngrave(t, side)
 				if !reflect.DeepEqual(want, got) {
 					t.Fatalf("engraver commands mismatch for side %v", side)

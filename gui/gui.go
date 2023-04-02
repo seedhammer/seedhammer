@@ -1091,6 +1091,9 @@ loop:
 		case p := <-s.engrave.progress:
 			s.engrave.lastProgress = p
 		case err := <-s.engrave.errs:
+			// Clear out progress channel.
+			for range s.engrave.progress {
+			}
 			s.engrave = engraveState{}
 			if err != nil {
 				log.Printf("gui: connection lost to engraver: %v", err)
