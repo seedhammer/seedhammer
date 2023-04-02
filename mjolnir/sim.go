@@ -62,6 +62,7 @@ func (s *Simulator) run() {
 	for {
 		select {
 		case <-s.close:
+			s.close <- struct{}{}
 			return
 		case r := <-s.in:
 			var n int
@@ -197,6 +198,7 @@ func (s *Simulator) Write(data []byte) (int, error) {
 }
 
 func (s *Simulator) Close() error {
-	close(s.close)
+	s.close <- struct{}{}
+	<-s.close
 	return nil
 }

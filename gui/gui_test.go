@@ -854,6 +854,7 @@ func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, desc urtypes.Out
 
 func simEngrave(t *testing.T, plate engrave.Command) []mjolnir.Cmd {
 	sim := mjolnir.NewSimulator()
+	defer sim.Close()
 	prog := &mjolnir.Program{}
 	plate.Engrave(prog)
 	prog.Prepare()
