@@ -2,7 +2,6 @@ package mjolnir
 
 import (
 	"errors"
-	"time"
 )
 
 type Simulator struct {
@@ -111,7 +110,6 @@ func (s *Simulator) doRead(data []byte) (int, error) {
 		case s.nbuffered == 0 && s.ncmds == 0:
 			return read([]byte{programCompleteStatus})
 		default:
-			time.Sleep(400 * time.Microsecond)
 			s.nbuffered--
 			return read([]byte{programStepStatus})
 		}
