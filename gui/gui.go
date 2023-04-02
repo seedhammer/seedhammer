@@ -1075,8 +1075,8 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 		go func() {
 			defer close(errs)
 			defer close(progress)
+			defer dev.Close()
 			err := mjolnir.Engrave(dev, prog, progress, cancel)
-			dev.Close()
 			errs <- err
 		}()
 		go s.plate.Sides[ins.Side].Engrave(prog)
