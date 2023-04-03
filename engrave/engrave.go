@@ -679,6 +679,323 @@ func (r Rect) Engrave(p Program) {
 	p.Line(r.Min)
 }
 
+const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+// ConstantStringer can engrave text in a timing insensitive way.
+type ConstantStringer struct {
+	moveDist    int
+	endDist     int
+	engraveDist int
+	longest     int
+	wordStart   image.Point
+	wordEnd     image.Point
+	dims        image.Point
+	alphabet    [len(alphabet)]constantRune
+}
+
+type constantRune struct {
+	path []image.Point
+}
+
+func engraveConstantRune(p Program, face *font.Face, em int, r rune) image.Point {
+	m := face.Metrics
+	adv, segs, found := face.Decode(r)
+	if !found {
+		panic(fmt.Errorf("unsupported rune: %s", string(r)))
+	}
+	mustInt := func(v float32) int {
+		i := int(v)
+		if float32(i) != v {
+			panic("constant rune is defined by non-integer value")
+		}
+		return i
+	}
+	iadv := mustInt(adv)
+	iasc := mustInt(m.Ascent)
+	iheight := mustInt(m.Height)
+	pos := image.Pt(0, iasc*em/iheight)
+	for _, seg := range segs {
+		p1 := image.Point{
+			X: mustInt(seg.Args[0][0]) * em / iheight,
+			Y: mustInt(seg.Args[0][1]) * em / iheight,
+		}
+		switch seg.Op {
+		case font.SegmentOpMoveTo:
+			p.Move(pos.Add(p1))
+		case font.SegmentOpLineTo:
+			p.Line(pos.Add(p1))
+		default:
+			panic("constant rune has unsupported segment type")
+		}
+	}
+	return image.Pt(iadv*em/iheight, em)
+}
+
+func NewConstantStringer(face *font.Face, em int, shortest, longest int) *ConstantStringer {
+	var runes []*collectProgram
+	cs := &ConstantStringer{
+		longest: longest,
+	}
+	// Collects path for every letter.
+	for _, r := range alphabet {
+		c := new(collectProgram)
+		cs.dims = engraveConstantRune(c, face, em, r)
+		if c.len > cs.engraveDist {
+			cs.engraveDist = c.len
+		}
+		runes = append(runes, c)
+	}
+	// Expand letters to match the longest letter.
+	suffix := longest - shortest
+	cs.wordEnd = image.Pt((suffix+1)*cs.dims.X, cs.dims.Y)
+	var startDist, endDist int
+	for i, r := range alphabet {
+		c := runes[i]
+		path := c.path
+		last := len(path) - 1
+		n := c.len
+		// Trace backwards, starting from the end.
+		idx := last
+		dir := -1
+		for n != cs.engraveDist {
+			idx += dir
+			needle := path[len(path)-1]
+			p := path[idx]
+			dist := manhattanDist(needle, p)
+			// Shorten path segment if required.
+			if overflow := n + dist - cs.engraveDist; overflow > 0 {
+				d := p.Sub(needle)
+				abs := d
+				if abs.X < 0 {
+					abs.X = -abs.X
+				}
+				if abs.Y < 0 {
+					abs.Y = -abs.Y
+				}
+				if abs.X >= abs.Y {
+					// X determines manhattan distance, shorten it
+					// by overflow.
+					signx := d.X / abs.X
+					d.X -= overflow * signx
+					// Shorten Y proportionally.
+					d.Y -= overflow * d.Y / abs.X
+				} else {
+					// Vice versa.
+					signy := d.Y / abs.Y
+					d.Y -= overflow * signy
+					d.X -= overflow * d.X / abs.Y
+				}
+				p = needle.Add(d)
+				dist -= overflow
+			}
+			n += dist
+			path = append(path, p)
+			if idx == 0 || idx == last {
+				dir = -dir
+			}
+		}
+		cs.alphabet[r-'A'] = constantRune{
+			path: path,
+		}
+		start, end := path[0], path[len(path)-1]
+		cs.wordStart = image.Pt(0, cs.dims.Y/2)
+		midEnd := image.Pt(cs.dims.X, cs.dims.Y/2)
+		if d := manhattanDist(cs.wordStart, start); d > startDist {
+			startDist = d
+		}
+
+		if d := manhattanDist(midEnd, end); d > endDist {
+			endDist = d
+		}
+		if repeatDist := manhattanDist(start, end); repeatDist > cs.moveDist {
+			cs.moveDist = repeatDist
+		}
+		if endDist := manhattanDist(cs.wordEnd, end); endDist > cs.endDist {
+			cs.endDist = endDist
+		}
+	}
+	if d := startDist + endDist; d > cs.moveDist {
+		cs.moveDist = d
+	}
+	return cs
+}
+
+func (c *ConstantStringer) String(txt string) Command {
+	cmd := &constantStringCmd{
+		cs:  c,
+		txt: txt,
+	}
+	// Verify constant-ness.
+	if !c.isConstant(cmd) {
+		// Should be constant by construction.
+		panic("command is not constant")
+	}
+	return cmd
+}
+
+func (c *ConstantStringer) isConstant(cmd Command) bool {
+	pt := new(pattern)
+	cmd.Engrave(pt)
+	// Constant start and end points.
+	if pt.start != c.wordStart || pt.end != c.wordEnd {
+		return false
+	}
+	// Constant number of patterns.
+	if len(pt.pattern) != 2*c.longest+1 {
+		return false
+	}
+	// All pattern elements have constant sizes.
+	line := false
+	for i, p := range pt.pattern {
+		if p.line != line {
+			return false
+		}
+		var wantDist int
+		switch {
+		case i == len(pt.pattern)-1:
+			wantDist = c.endDist
+		case line:
+			wantDist = c.engraveDist
+		default:
+			wantDist = c.moveDist
+		}
+		if wantDist != p.len {
+			return false
+		}
+		line = !line
+	}
+	return true
+}
+
+type constantStringCmd struct {
+	cs  *ConstantStringer
+	txt string
+}
+
+func (s *constantStringCmd) Engrave(p Program) {
+	needle := s.cs.wordStart
+	p.Move(needle)
+	repeats := s.cs.longest / len(s.txt)
+	rest := s.cs.longest - repeats*len(s.txt)
+	for i, r := range s.txt {
+		l := s.cs.alphabet[r-'A']
+		extra := 0
+		if rest > 0 {
+			rest--
+			extra = 1
+		}
+		for j := 0; j < repeats+extra; j++ {
+			off := image.Pt(i*s.cs.dims.X, 0)
+			start := l.path[0].Add(off)
+			constantMove(p, start, needle, s.cs.moveDist)
+			needle = start
+			for _, pos := range l.path[1:] {
+				needle = pos.Add(off)
+				p.Line(needle)
+			}
+		}
+	}
+	constantMove(p, s.cs.wordEnd, needle, s.cs.endDist)
+}
+
+// constantMove moves to dst from src in at least dist manhattan distance.
+func constantMove(p Program, dst, src image.Point, dist int) {
+	extra := dist - manhattanDist(dst, src)
+	for extra > 0 {
+		dp := dst.Sub(src)
+		d := manhattanDist(dst, src)
+		// Each backwards move costs 2 units
+		// because of the return trip.
+		e := extra / 2
+		if e <= d && extra%2 == 1 {
+			// extra is odd. Move orthogonally 1 unit to increase
+			// total distance by 1.
+			ortho := image.Point{
+				X: -dp.Y / d,
+				Y: dp.X / d,
+			}
+			extra--
+			src = src.Add(ortho)
+			p.Move(src)
+		}
+		if e > d {
+			e = d
+		}
+		extra -= e * 2
+		back := image.Point{
+			X: dp.X * e / d,
+			Y: dp.Y * e / d,
+		}
+		p.Move(dst)
+		src = dst.Sub(back)
+		p.Move(src)
+	}
+	p.Move(dst)
+}
+
+type collectProgram struct {
+	path []image.Point
+	len  int
+}
+
+func (m *collectProgram) Line(p image.Point) {
+	if len(m.path) == 0 {
+		panic("no start point for constant rune")
+	}
+	needle := m.path[len(m.path)-1]
+	d := manhattanDist(needle, p)
+	if d == 0 {
+		return
+	}
+	m.len += d
+	m.path = append(m.path, p)
+}
+
+func (m *collectProgram) Move(p image.Point) {
+	if len(m.path) > 0 {
+		panic("move during constant rune")
+	}
+	m.path = append(m.path, p)
+}
+
+// pattern records the pattern of the engraving instructions
+// sent to it.
+type pattern struct {
+	start, end image.Point
+	pattern    []patternElem
+}
+
+type patternElem struct {
+	line bool
+	len  int
+}
+
+func (c *pattern) Line(p image.Point) {
+	c.instruct(p, true)
+}
+
+func (c *pattern) Move(p image.Point) {
+	c.instruct(p, false)
+}
+
+func (c *pattern) instruct(p image.Point, line bool) {
+	if len(c.pattern) == 0 {
+		c.start = p
+		c.end = p
+		c.pattern = append(c.pattern, patternElem{line: line})
+		return
+	}
+	prev := c.end
+	elem := &c.pattern[len(c.pattern)-1]
+	dist := manhattanDist(prev, p)
+	if elem.line != line {
+		c.pattern = append(c.pattern, patternElem{line: line, len: dist})
+	} else {
+		elem.len += dist
+	}
+	c.end = p
+}
+
 func String(face *font.Face, em int, txt string) *StringCmd {
 	return &StringCmd{
 		LineHeight: 1,

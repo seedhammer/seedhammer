@@ -199,6 +199,11 @@ func RandomWord() Word {
 	return Word(binary.BigEndian.Uint16(u16[:])) % Word(n)
 }
 
+const (
+	Shortest = 3
+	Longest  = 8
+)
+
 var Wordlist = [...]string{
 	"abandon",
 	"ability",

@@ -4,9 +4,12 @@ import (
 	"io"
 	"math/rand"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/skip2/go-qrcode"
+	"seedhammer.com/bip39"
+	"seedhammer.com/font/constant"
 )
 
 func TestConstantQR(t *testing.T) {
@@ -41,6 +44,14 @@ func TestConstantQR(t *testing.T) {
 				t.Fatalf("entropy: %x: engraving plan doesn't match QR code", entropy)
 			}
 		}
+	}
+}
+
+func TestConstantString(t *testing.T) {
+	s := NewConstantStringer(&constant.Font, 1000, bip39.Shortest, bip39.Longest)
+	for _, w := range bip39.Wordlist {
+		w := strings.ToUpper(w)
+		s.String(w)
 	}
 }
 
