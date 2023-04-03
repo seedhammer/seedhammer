@@ -377,15 +377,23 @@ func frontSide(scale func(float32) int, strokeWidth int, plate PlateDesc, size P
 }
 
 func wordColumn(font *font.Face, fontSize int, mnemonic bip39.Mnemonic, start, end int) engrave.Command {
-	var b strings.Builder
+	var cmds engrave.Commands
+	y := 0
 	for i := start; i < end; i++ {
+		num := engrave.String(font, fontSize, fmt.Sprintf("%2d:", i+1))
+		num.LineHeight = .8
+		d := num.Measure()
 		w := mnemonic[i]
 		word := strings.ToUpper(bip39.LabelFor(w))
-		fmt.Fprintf(&b, "%2d:%-8s\n", i+1, word)
+		txt := engrave.String(font, fontSize, word)
+		txt.LineHeight = .8
+		cmds = append(cmds,
+			engrave.Offset(0, y, num),
+			engrave.Offset(d.X, y, txt),
+		)
+		y += d.Y
 	}
-	cmd := engrave.String(font, fontSize, b.String())
-	cmd.LineHeight = .8
-	return cmd
+	return cmds
 }
 
 func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, urs []string, size PlateSize, plateDims image.Point) (engrave.Command, error) {

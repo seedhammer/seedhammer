@@ -697,6 +697,14 @@ type StringCmd struct {
 }
 
 func (s *StringCmd) Engrave(p Program) {
+	s.engrave(p)
+}
+
+func (s *StringCmd) Measure() image.Point {
+	return s.engrave(nil)
+}
+
+func (s *StringCmd) engrave(p Program) image.Point {
 	em := float32(s.em)
 	ceil := func(v float32) int {
 		return int(math.Ceil(float64(v)))
@@ -708,47 +716,51 @@ func (s *StringCmd) Engrave(p Program) {
 			float32(p1.Y) + p2[1]*em,
 		}
 	}
+	height := ceil(s.face.Metrics.Height * em * s.LineHeight)
 	for _, r := range s.txt {
 		if r == '\n' {
 			pos.X = 0
-			pos.Y += ceil(s.face.Metrics.Height * em * s.LineHeight)
+			pos.Y += height
 			continue
 		}
 		adv, segs, found := s.face.Decode(r)
 		if !found {
 			panic(fmt.Errorf("unsupported rune: %s", string(r)))
 		}
-		var p0 f32.Vec2
-		for _, seg := range segs {
-			switch seg.Op {
-			case font.SegmentOpMoveTo:
-				p1 := addScale(pos, seg.Args[0])
-				p.Move(roundCoord(p1))
-				p0 = p1
-			case font.SegmentOpLineTo:
-				p1 := addScale(pos, seg.Args[0])
-				p.Line(roundCoord(p1))
-				p0 = p1
-			case font.SegmentOpQuadTo:
-				p12 := addScale(pos, seg.Args[0])
-				p3 := addScale(pos, seg.Args[1])
-				// Expand to cubic.
-				p1 := mix(p12, p0, 1.0/3.0)
-				p2 := mix(p12, p3, 1.0/3.0)
-				approxCubeBezier(p.Line, p0, p1, p2, p3)
-				p0 = p3
-			case font.SegmentOpCubeTo:
-				p1 := addScale(pos, seg.Args[0])
-				p2 := addScale(pos, seg.Args[1])
-				p3 := addScale(pos, seg.Args[2])
-				approxCubeBezier(p.Line, p0, p1, p2, p3)
-				p0 = p3
-			default:
-				panic(errors.New("unsupported segment"))
+		if p != nil {
+			var p0 f32.Vec2
+			for _, seg := range segs {
+				switch seg.Op {
+				case font.SegmentOpMoveTo:
+					p1 := addScale(pos, seg.Args[0])
+					p.Move(roundCoord(p1))
+					p0 = p1
+				case font.SegmentOpLineTo:
+					p1 := addScale(pos, seg.Args[0])
+					p.Line(roundCoord(p1))
+					p0 = p1
+				case font.SegmentOpQuadTo:
+					p12 := addScale(pos, seg.Args[0])
+					p3 := addScale(pos, seg.Args[1])
+					// Expand to cubic.
+					p1 := mix(p12, p0, 1.0/3.0)
+					p2 := mix(p12, p3, 1.0/3.0)
+					approxCubeBezier(p.Line, p0, p1, p2, p3)
+					p0 = p3
+				case font.SegmentOpCubeTo:
+					p1 := addScale(pos, seg.Args[0])
+					p2 := addScale(pos, seg.Args[1])
+					p3 := addScale(pos, seg.Args[2])
+					approxCubeBezier(p.Line, p0, p1, p2, p3)
+					p0 = p3
+				default:
+					panic(errors.New("unsupported segment"))
+				}
 			}
 		}
 		pos.X += int(adv * em)
 	}
+	return image.Pt(pos.X, height)
 }
 
 // approxCubeBezier uses de Casteljau subdivision to approximate a cubic Bézier
