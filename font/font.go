@@ -45,6 +45,9 @@ func (f *Face) Decode(ch rune) (float32, []Segment, bool) {
 		return 0, nil, false
 	}
 	glyph := f.Index[ch]
+	if glyph == (Glyph{}) {
+		return 0, nil, false
+	}
 	enc := f.Segments[glyph.Start:glyph.End]
 	var segs []Segment
 	decPoint := func() f32.Vec2 {
