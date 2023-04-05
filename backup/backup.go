@@ -69,48 +69,8 @@ type Plate struct {
 	Sides []engrave.Command
 }
 
-type measureProgram struct {
-	p      image.Point
-	Bounds image.Rectangle
-}
-
-func (m *measureProgram) Line(p image.Point) {
-	m.expand(p)
-	m.expand(m.p)
-}
-
-func (m *measureProgram) expand(p image.Point) {
-	if p.X < m.Bounds.Min.X {
-		m.Bounds.Min.X = p.X
-	} else if p.X > m.Bounds.Max.X {
-		m.Bounds.Max.X = p.X
-	}
-	if p.Y < m.Bounds.Min.Y {
-		m.Bounds.Min.Y = p.Y
-	} else if p.Y > m.Bounds.Max.Y {
-		m.Bounds.Max.Y = p.Y
-	}
-}
-
-func (m *measureProgram) Move(p image.Point) {
-	m.p = p
-}
-
-func measure(c engrave.Command) image.Rectangle {
-	inf := image.Rectangle{Min: image.Pt(1e6, 1e6), Max: image.Pt(-1e6, -1e6)}
-	measure := measureProgram{
-		Bounds: inf,
-	}
-	c.Engrave(&measure)
-	b := measure.Bounds
-	if b == inf {
-		b = image.Rectangle{}
-	}
-	return b
-}
-
 func dims(c engrave.Command) (engrave.Command, image.Point) {
-	b := measure(c)
+	b := engrave.Measure(c)
 	return engrave.Offset(-b.Min.X, -b.Min.Y, c), b.Size()
 }
 
@@ -149,7 +109,7 @@ func Engrave(scale, strokeWidth float32, plate PlateDesc) (Plate, error) {
 			return p, err
 		}
 		p.Sides = append(p.Sides, side)
-		bounds := measure(engrave.Commands(p.Sides))
+		bounds := engrave.Measure(engrave.Commands(p.Sides))
 		safetyMargin := image.Pt(scalef(outerMargin), scalef(outerMargin))
 		if !bounds.In(image.Rectangle{Min: safetyMargin, Max: b.Size().Sub(safetyMargin)}) {
 			continue

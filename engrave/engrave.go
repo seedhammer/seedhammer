@@ -319,18 +319,18 @@ func ConstantQR(strokeWidth, scale int, level qrcode.RecoveryLevel, content []by
 		// Engrave the end point until the required number is filled.
 		engrave(end)
 	}
-	plan := constantTimeQRPlan(modules)
-	// The plan should be constant time by construction, but be paranoid.
-	if !isConstantTimeQRPlan(qrc.VersionNumber, dim, plan) {
-		panic("constant time plan is not constant")
+	cmd := constantQRCmd{
+		strokeWidth: strokeWidth,
+		scale:       scale,
+		plan:        modules,
 	}
-	return constantQRCmd{
-		strokeWidth:  strokeWidth,
-		scale:        scale,
-		posMarkers:   posMarkers,
-		alignMarkers: alignMarkers,
-		plan:         plan,
-	}, nil
+	// Verify constant-ness without the static markers.
+	if !isConstantQR(cmd, dim, qrc.VersionNumber) {
+		panic("constant QR engraving is not constant")
+	}
+	cmd.posMarkers = posMarkers
+	cmd.alignMarkers = alignMarkers
+	return cmd, nil
 }
 
 func fillAlignmentMarker(qr bitmap, off image.Point) {
@@ -450,70 +450,6 @@ type constantQRCmd struct {
 	plan         []image.Point
 }
 
-// constantTimeQRPlan returns the constant pattern movements for a QR code.
-// A module is assumed engraved at every qrMoves movements, after the starting position
-// placed first in the result.
-func constantTimeQRPlan(modules []image.Point) []image.Point {
-	plan := []image.Point{
-		modules[0],
-	}
-	// move a constant number of times before reaching p.
-	for _, m := range modules[1:] {
-		for i := qrMoves - 1; i >= 0; i-- {
-			needle := plan[len(plan)-1]
-			d := m.Sub(needle)
-			// Exactly one (manhattan) unit per move.
-			if d.X < -1 {
-				d.X = -1
-			}
-			if d.X > 1 {
-				d.X = 1
-			}
-			if d.Y < -1 {
-				d.Y = -1
-			}
-			if d.Y > 1 {
-				d.Y = 1
-			}
-			if manhattanDist(needle, m) < i+1 {
-				// Too close to target; add dummy move.
-				switch {
-				case d.X == 0:
-					d.X = 1
-				case d.Y == 0:
-					d.Y = 1
-				default:
-					d.X = 0
-				}
-			}
-			plan = append(plan, needle.Add(d))
-		}
-	}
-	return plan
-}
-
-func isConstantTimeQRPlan(version, dim int, plan []image.Point) bool {
-	// Plan length must be exactly qrMoves per expected module count,
-	// not counting the starting point.
-	nmod := constantTimeQRModules(version)
-	want := 1 + qrMoves*(nmod-1)
-	if len(plan) != want {
-		return false
-	}
-	needle := plan[0]
-	start, end := constantTimeStartEnd(dim)
-	if needle != start {
-		return false
-	}
-	for _, p := range plan[1:] {
-		if manhattanDist(p, needle) != 1 {
-			return false
-		}
-		needle = p
-	}
-	return needle == end
-}
-
 func (q constantQRCmd) engraveAlignMarker(p Program, off image.Point) {
 	q.engraveBorder(p, 5, 5, off)
 	q.engraveBlock(p, 1, 1, off.Add(image.Pt(2, 2)))
@@ -584,6 +520,15 @@ func (q constantQRCmd) engraveBlock(p Program, width, height int, off image.Poin
 	}
 }
 
+func (q constantQRCmd) centerOf(p image.Point) image.Point {
+	sw := q.strokeWidth
+	radius := sw / 2
+	return image.Point{
+		X: radius + (p.X*q.scale+1)*sw,
+		Y: radius + (p.Y*q.scale+1)*sw,
+	}
+}
+
 func (q constantQRCmd) Engrave(p Program) {
 	for _, off := range q.posMarkers {
 		q.engravePositionMarker(p, off)
@@ -592,16 +537,16 @@ func (q constantQRCmd) Engrave(p Program) {
 		q.engraveAlignMarker(p, off)
 	}
 	sw := q.strokeWidth
-	radius := sw / 2
 	for i, m := range q.plan {
-		center := image.Point{
-			X: radius + (m.X*q.scale+1)*sw,
-			Y: radius + (m.Y*q.scale+1)*sw,
+		center := q.centerOf(m)
+		if i == 0 {
+			p.Move(center)
+		} else {
+			prev := q.centerOf(q.plan[i-1])
+			constantMove(p, center, prev, qrMoves*sw*q.scale)
 		}
-		p.Move(center)
-		// Engrave a module every qrMoves moves, excluding the
-		// start and end positions.
-		if i == 0 || i == len(q.plan)-1 || i%qrMoves != 0 {
+		// Exclude the start and end positions.
+		if i == 0 || i == len(q.plan)-1 {
 			continue
 		}
 		switch q.scale {
@@ -626,17 +571,20 @@ func (q constantQRCmd) Engrave(p Program) {
 }
 
 func manhattanDist(p1, p2 image.Point) int {
-	d := p1.Sub(p2)
-	if d.X < 0 {
-		d.X = -d.X
+	return manhattanLen(p1.Sub(p2))
+}
+
+func manhattanLen(v image.Point) int {
+	if v.X < 0 {
+		v.X = -v.X
 	}
-	if d.Y < 0 {
-		d.Y = -d.Y
+	if v.Y < 0 {
+		v.Y = -v.Y
 	}
-	if d.X > d.Y {
-		return d.X
+	if v.X > v.Y {
+		return v.X
 	} else {
-		return d.Y
+		return v.Y
 	}
 }
 
@@ -684,7 +632,7 @@ const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 // ConstantStringer can engrave text in a timing insensitive way.
 type ConstantStringer struct {
 	moveDist    int
-	endDist     int
+	finalDist   int
 	engraveDist int
 	longest     int
 	wordStart   image.Point
@@ -745,10 +693,20 @@ func NewConstantStringer(face *font.Face, em int, shortest, longest int) *Consta
 		}
 		runes = append(runes, c)
 	}
+	// We rely on the advance being even so there is equal
+	// distance from either edge to the center.
+	if cs.dims.X%2 == 1 {
+		cs.dims.X--
+	}
 	// Expand letters to match the longest letter.
 	suffix := longest - shortest
-	cs.wordEnd = image.Pt((suffix+1)*cs.dims.X, cs.dims.Y)
-	var startDist, endDist int
+	// end in the center of the rune between the shortest and
+	// longest string. Minimizes the final movement.
+	cs.finalDist = suffix * cs.dims.X / 2
+	endx := shortest*cs.dims.X + cs.finalDist
+	cs.wordStart = image.Pt(0, cs.dims.Y/2)
+	cs.wordEnd = image.Pt(endx, cs.dims.Y/2)
+	center := image.Pt(cs.dims.X/2, cs.dims.Y/2)
 	for i, r := range alphabet {
 		c := runes[i]
 		path := c.path
@@ -798,24 +756,12 @@ func NewConstantStringer(face *font.Face, em int, shortest, longest int) *Consta
 			path: path,
 		}
 		start, end := path[0], path[len(path)-1]
-		cs.wordStart = image.Pt(0, cs.dims.Y/2)
-		midEnd := image.Pt(cs.dims.X, cs.dims.Y/2)
-		if d := manhattanDist(cs.wordStart, start); d > startDist {
-			startDist = d
+		if d := manhattanDist(center, start); d > cs.moveDist {
+			cs.moveDist = d
 		}
-
-		if d := manhattanDist(midEnd, end); d > endDist {
-			endDist = d
+		if d := manhattanDist(center, end); d > cs.moveDist {
+			cs.moveDist = d
 		}
-		if repeatDist := manhattanDist(start, end); repeatDist > cs.moveDist {
-			cs.moveDist = repeatDist
-		}
-		if endDist := manhattanDist(cs.wordEnd, end); endDist > cs.endDist {
-			cs.endDist = endDist
-		}
-	}
-	if d := startDist + endDist; d > cs.moveDist {
-		cs.moveDist = d
 	}
 	return cs
 }
@@ -831,6 +777,36 @@ func (c *ConstantStringer) String(txt string) Command {
 		panic("command is not constant")
 	}
 	return cmd
+}
+
+func isConstantQR(cmd constantQRCmd, dim, ver int) bool {
+	pt := new(pattern)
+	cmd.Engrave(pt)
+	start, end := constantTimeStartEnd(dim)
+	start = cmd.centerOf(start)
+	end = cmd.centerOf(end)
+	// Constant start and end points.
+	if pt.start != start || pt.end != end {
+		return false
+	}
+	// Constant number of patterns: 2 per module, 1
+	// for the end
+	npatterns := 2*(constantTimeQRModules(ver)-2) + 1
+	if len(pt.pattern) != npatterns {
+		return false
+	}
+	sc := cmd.scale * cmd.strokeWidth
+	moveLen := qrMoves * sc
+	for _, p := range pt.pattern {
+		wantLen := moveLen
+		if p.line {
+			wantLen = sc * cmd.scale
+		}
+		if p.len != wantLen {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *ConstantStringer) isConstant(cmd Command) bool {
@@ -852,12 +828,14 @@ func (c *ConstantStringer) isConstant(cmd Command) bool {
 		}
 		var wantDist int
 		switch {
+		case i == 0:
+			wantDist = c.moveDist + c.dims.X/2
 		case i == len(pt.pattern)-1:
-			wantDist = c.endDist
+			wantDist = c.moveDist + c.dims.X/2 + c.finalDist
 		case line:
 			wantDist = c.engraveDist
 		default:
-			wantDist = c.moveDist
+			wantDist = 2*c.moveDist + c.dims.X
 		}
 		if wantDist != p.len {
 			return false
@@ -886,6 +864,10 @@ func (s *constantStringCmd) Engrave(p Program) {
 		}
 		for j := 0; j < repeats+extra; j++ {
 			off := image.Pt(i*s.cs.dims.X, 0)
+			// Move to center. Always equal distance.
+			center := off.Add(image.Pt(s.cs.dims.X/2, s.cs.dims.Y/2))
+			needle = center
+			p.Move(needle)
 			start := l.path[0].Add(off)
 			constantMove(p, start, needle, s.cs.moveDist)
 			needle = start
@@ -893,44 +875,73 @@ func (s *constantStringCmd) Engrave(p Program) {
 				needle = pos.Add(off)
 				p.Line(needle)
 			}
+			constantMove(p, center, needle, s.cs.moveDist)
+			needle = center
+			end := off.Add(image.Pt(s.cs.dims.X, s.cs.dims.Y/2))
+			p.Move(end)
+			needle = end
 		}
 	}
-	constantMove(p, s.cs.wordEnd, needle, s.cs.endDist)
+	// constantMove by itself is correct but risks engraving out of bounds.
+	// To keep movement inside the bounds of the word, move closer so
+	// that the distance is less than half the line height.
+	wantDist := s.cs.finalDist
+	dist := manhattanDist(s.cs.wordEnd, needle)
+	if d := dist - s.cs.dims.Y/2; d > 0 {
+		dir := s.cs.wordEnd.Sub(needle)
+		mid := needle.Add(dir.Mul(d).Div(dist))
+		wantDist -= manhattanDist(mid, needle)
+		needle = mid
+		p.Move(needle)
+	}
+	// Then let constantMove take care of the rest.
+	constantMove(p, s.cs.wordEnd, needle, wantDist)
 }
 
-// constantMove moves to dst from src in at least dist manhattan distance.
+// constantMove moves to dst from src in exactly dist manhattan distance.
+// It spends extra moves by moving along the square with dst in the center
+// and src on its boundary.
+// constantMove assumes the distance between dst and src is less than or
+// equal to dist.
+// constantMove panics if dst equals src and dist is 1.
 func constantMove(p Program, dst, src image.Point, dist int) {
+	// extra is the distance to spend.
 	extra := dist - manhattanDist(dst, src)
+	if dst == src {
+		if extra == 1 {
+			panic("dst and src coincides and dist allows no movement")
+		}
+		// If src and dst coincides the implied square reduces to a
+		// point which cannot be used for spending moves.
+		// Instead move half of extra away and continue from there.
+		d := extra / 2
+		src = src.Add(image.Pt(d, 0))
+		p.Move(src)
+		extra -= d * 2
+	}
+	defer p.Move(dst)
+	dp := src.Sub(dst)
+	d := manhattanLen(dp)
+	// axis is the direction from dst to src along the longest axis.
+	axis := dp.Div(d)
+	// Tie-break diagonals arbitrarily.
+	if axis.X != 0 && axis.Y != 0 {
+		axis.X = 0
+	}
 	for extra > 0 {
-		dp := dst.Sub(src)
-		d := manhattanDist(dst, src)
-		// Each backwards move costs 2 units
-		// because of the return trip.
-		e := extra / 2
-		if e <= d && extra%2 == 1 {
-			// extra is odd. Move orthogonally 1 unit to increase
-			// total distance by 1.
-			ortho := image.Point{
-				X: -dp.Y / d,
-				Y: dp.X / d,
-			}
-			extra--
-			src = src.Add(ortho)
-			p.Move(src)
+		dp := src.Sub(dst)
+		axis = image.Pt(-axis.Y, axis.X)
+		// cornerDist is the distance from src to the corner along
+		// moveDir.
+		cornerDist := d - dp.X*axis.X - dp.Y*axis.Y
+		moveDist := cornerDist
+		if moveDist > extra {
+			moveDist = extra
 		}
-		if e > d {
-			e = d
-		}
-		extra -= e * 2
-		back := image.Point{
-			X: dp.X * e / d,
-			Y: dp.Y * e / d,
-		}
-		p.Move(dst)
-		src = dst.Sub(back)
+		extra -= moveDist
+		src = src.Add(axis.Mul(moveDist))
 		p.Move(src)
 	}
-	p.Move(dst)
 }
 
 type collectProgram struct {
@@ -1148,6 +1159,46 @@ func (r *Rasterizer) Rasterize() {
 		r.dasher.Stop(false)
 	}
 	r.dasher.Draw()
+}
+
+type measureProgram struct {
+	p      image.Point
+	bounds image.Rectangle
+}
+
+func (m *measureProgram) Line(p image.Point) {
+	m.expand(p)
+	m.expand(m.p)
+}
+
+func (m *measureProgram) expand(p image.Point) {
+	if p.X < m.bounds.Min.X {
+		m.bounds.Min.X = p.X
+	} else if p.X > m.bounds.Max.X {
+		m.bounds.Max.X = p.X
+	}
+	if p.Y < m.bounds.Min.Y {
+		m.bounds.Min.Y = p.Y
+	} else if p.Y > m.bounds.Max.Y {
+		m.bounds.Max.Y = p.Y
+	}
+}
+
+func (m *measureProgram) Move(p image.Point) {
+	m.p = p
+}
+
+func Measure(c Command) image.Rectangle {
+	inf := image.Rectangle{Min: image.Pt(1e6, 1e6), Max: image.Pt(-1e6, -1e6)}
+	measure := measureProgram{
+		bounds: inf,
+	}
+	c.Engrave(&measure)
+	b := measure.bounds
+	if b == inf {
+		b = image.Rectangle{}
+	}
+	return b
 }
 
 func subdivideCubeBezier(t0, t1 float32, p0, p1, p2, p3 f32.Vec2) (s0, s1, s2, s3 f32.Vec2) {
