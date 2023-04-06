@@ -19,10 +19,10 @@ import (
 var (
 	serialDev = flag.String("device", "", "serial device")
 	dryrun    = flag.Bool("n", false, "dry run")
-	//coords    = flag.String("coords", "0,0, 100,3, 179,3, 179,52, 179,131, 100,131, 100,52", "coordinates to mark")
+	coords    = flag.String("coords", "0,0, 100,3, 179,3, 179,52, 179,131, 100,131, 100,52, 0,0", "coordinates to mark")
 	//repeat    = flag.Int("repeat", 10, "number of repetitions")
 	repeat = flag.Int("repeat", 1, "number of repetitions")
-	coords = flag.String("coords", "0,0", "coordinates to mark")
+	//coords = flag.String("coords", "0,0", "coordinates to mark")
 )
 
 func main() {
@@ -63,15 +63,29 @@ func engrave(dev string, coords []image.Point) error {
 	defer s.Close()
 
 	prog := &mjolnir.Program{
-		DryRun:    *dryrun,
-		MoveSpeed: .9,
-		End:       coords[len(coords)-1],
+		DryRun: *dryrun,
+		//MoveSpeed:  .75, Use default from mjolnir/driver.go
+		//PrintSpeed: 0, Use default from mjolnir/driver.go
+		End: coords[len(coords)-1],
 	}
 	design := func() {
 		for i := 0; i < *repeat; i++ {
 			for _, c := range coords {
-				prog.Move(c)
-				prog.Line(c)
+				szf := 2.0 * mjolnir.Millimeter
+				sz := int(szf)
+
+				left := c.Add(image.Pt(-sz, 0))
+				if left.X < 0 {
+					left.X = 0
+				}
+				prog.Move(left)
+				prog.Line(c.Add(image.Pt(+sz, 0)))
+				top := c.Add(image.Pt(0, -sz))
+				if top.Y < 0 {
+					top.Y = 0
+				}
+				prog.Move(top)
+				prog.Line(c.Add(image.Pt(0, +sz)))
 			}
 		}
 	}
