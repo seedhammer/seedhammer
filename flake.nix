@@ -4,14 +4,9 @@
   inputs = {
     nixpkgs.url = "nixpkgs";
     utils.url = "github:numtide/flake-utils";
-    gomod2nix = {
-      url = "github:nix-community/gomod2nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.utils.follows = "utils";
-    };
   };
 
-  outputs = { self, nixpkgs, utils, gomod2nix }:
+  outputs = { self, nixpkgs, utils }:
     utils.lib.eachDefaultSystem (system:
       let
         arch = builtins.head (builtins.split "-" system);
@@ -27,21 +22,12 @@
               fpu = "vfp";
             };
           };
-          overlays = [
-            gomod2nix.overlays.default
-          ];
         };
         timestamp = "2009/01/03T12:15:05";
         loader-lib = "ld-musl-armhf.so.1";
       in
       {
         formatter = localpkgs.nixpkgs-fmt;
-        apps = {
-          gomod2nix = {
-            type = "app";
-            program = "${gomod2nix.packages.${system}.default}/bin/gomod2nix";
-          };
-        };
         lib = {
           mkkernel =
             let
@@ -356,28 +342,32 @@
             let
               libcamera = self.packages.${system}.libcamera;
               pkgs = crosspkgs;
+              tags = builtins.concatStringsSep "," ([ "netgo" ] ++ (if debug then [ "debug" ] else [ ]));
             in
-            pkgs.buildGoApplication {
-              go = pkgs.buildPackages.go_1_20;
+            pkgs.stdenv.mkDerivation {
               name = "controller";
               src = ./.;
-              modules = ./gomod2nix.toml;
-              tags = [ "netgo" ] ++ (if debug then [ "debug" ] else [ ]);
-              subPackages = [ "cmd/controller" ];
-              # PIE is required by musl.
-              buildFlags = "-buildmode=pie";
-              CGO_ENABLED = 1;
-              GOARM = "6";
-              CGO_CXXFLAGS = "-I${libcamera}/include";
-              CGO_LDFLAGS = "-L${libcamera}/lib";
-              # Go programs may break by using strip; use ldflags -w -s instead.
-              dontStrip = true;
-              # Don't include debug information.
-              ldflags = "-w -s";
 
               nativeBuildInputs = with pkgs.buildPackages; [
+                go_1_20
                 nukeReferences
               ];
+
+              buildPhase = ''
+                export HOME="$PWD/gohome"
+                export GOMODCACHE=${self.packages.${system}.go-deps}
+
+                # -buildmode=pie is required by musl.
+                CGO_CXXFLAGS="-I${libcamera}/include" \
+                  CGO_LDFLAGS="-L${libcamera}/lib" \
+                  CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
+                  go build -trimpath -buildmode pie -tags ${tags} -ldflags="-s -w" ./cmd/controller
+              '';
+
+              installPhase = ''
+                mkdir -p $out/bin
+                cp controller $out/bin
+              '';
 
               fixupPhase = ''
                 patchelf --set-rpath "/lib" \
@@ -394,6 +384,31 @@
         };
         packages =
           {
+            go-deps = let pkgs = localpkgs; in pkgs.stdenvNoCC.mkDerivation {
+              pname = "go-deps";
+              version = "1";
+
+              src = builtins.filterSource
+                (path: type: baseNameOf path == "go.mod" || baseNameOf path == "go.sum")
+                ./.;
+
+              dontBuild = true;
+
+              nativeBuildInputs = with pkgs.buildPackages; [
+                cacert
+                go_1_20
+              ];
+
+              installPhase = ''
+                mkdir -p $out
+                export HOME="$PWD/gohome"
+                GOMODCACHE=$out go mod download
+              '';
+
+              outputHashMode = "recursive";
+              outputHashAlgo = "sha256";
+              outputHash = "ST/4Sx0jItRvT9kgFqxkGMKBJF8f+/vaxb8+OWZHqZU=";
+            };
             controller = self.lib.${system}.mkcontroller false;
             controller-debug = self.lib.${system}.mkcontroller true;
             util-linux =
@@ -571,6 +586,7 @@
             initramfs-debug = self.lib.${system}.mkinitramfs true;
             image = self.lib.${system}.mkimage false;
             image-debug = self.lib.${system}.mkimage true;
+            # reload the controller binary to a running seedhammer debug image.
             reload = let pkgs = localpkgs; in pkgs.writeShellScriptBin "reload" ''
               set -e
               USBDEV=$1
@@ -585,36 +601,25 @@
               cat "$PROG" > "$USBDEV"
               exec cat "$USBDEV"
             '';
-            reload-fast =
-              let
-                libcamera = self.packages.${system}.libcamera;
-                pkgs = localpkgs;
-              in
-              pkgs.writeShellScriptBin "reload" ''
-                set -e
-                USBDEV=$1
-                if [ -z "$USBDEV" ]; then
-                    echo "error: specify USB device"
-                    exit 1
-                fi
-                TMPDIR="$(mktemp -d)"
-                trap 'rm -rf -- "$TMPDIR"' EXIT
+            # reload-fast is a faster, but impure, way of reloading the controller binary
+            # from a developer shell.
+            reload-fast = let pkgs = localpkgs; in pkgs.writeShellScriptBin "reload-fast" ''
+              set -e
+              USBDEV=$1
+              if [ -z "$1" ]; then
+                  echo "error: specify USB device"
+                  exit 1
+              fi
 
-                PROG="$TMPDIR/controller"
+              eval "$buildPhase"
+              eval "$installPhase"
+              eval "$fixupPhase"
 
-                CGO_ENABLED=1 \
-                GOOS=linux \
-                GOARCH=arm \
-                GOARM=6 \
-                CGO_CXXFLAGS="-I${libcamera}/include" \
-                CGO_LDFLAGS="-L${libcamera}/lib" \
-                go build -buildmode pie -ldflags="-w -s" -trimpath -tags debug,netgo -o "$PROG" ./cmd/controller
-                patchelf --set-rpath "/lib" --set-interpreter "/lib/${loader-lib}" "$PROG"
-
-                echo "reload $(wc -c < "$PROG")" > "$USBDEV"
-                cat "$PROG" > "$USBDEV"
-                exec cat "$USBDEV"
-              '';
+              PROG=outputs/out/bin/controller
+              echo "reload $(wc -c < "$PROG")" > "$USBDEV"
+              cat "$PROG" > "$USBDEV"
+              exec cat "$USBDEV"
+            '';
             mkrelease = let pkgs = localpkgs; in pkgs.writeShellScriptBin "mkrelease" ''
               set -eu
 
@@ -664,7 +669,7 @@
             '';
             default = self.packages.${system}.image;
           };
-        # Build a shell capable of running #reload-fast.
-        devShells.default = crosspkgs.go_1_20;
+        # developer shell for running .#reload-fast.
+        devShells.default = self.packages.${system}.controller-debug;
       });
 }

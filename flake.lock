@@ -1,28 +1,5 @@
 {
   "nodes": {
-    "gomod2nix": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "utils": [
-          "utils"
-        ]
-      },
-      "locked": {
-        "lastModified": 1677459247,
-        "narHash": "sha256-JbakfAiPYmCCV224yAMq/XO0udN5coWv/oazblMKdoY=",
-        "owner": "nix-community",
-        "repo": "gomod2nix",
-        "rev": "3cbf3a51fe32e2f57af4c52744e7228bab22983d",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-community",
-        "repo": "gomod2nix",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1683082554,
@@ -39,7 +16,6 @@
     },
     "root": {
       "inputs": {
-        "gomod2nix": "gomod2nix",
         "nixpkgs": "nixpkgs",
         "utils": "utils"
       }
