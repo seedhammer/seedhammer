@@ -36,7 +36,7 @@ func TestConstantQR(t *testing.T) {
 			want := bitmapForBools(bm)
 			_, _, got := bitmapForQRStatic(qrc.VersionNumber, dim)
 			qrCmd := cmd.(constantQRCmd)
-			for _, p := range qrCmd.plan[1 : len(qrCmd.plan)-1] {
+			for _, p := range qrCmd.plan {
 				got.Set(p)
 			}
 			if !reflect.DeepEqual(got, want) {
