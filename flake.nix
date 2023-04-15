@@ -27,7 +27,7 @@
         crosspkgsFor = system: import nixpkgs {
           inherit system;
           crossSystem = {
-            system = "armv6l-linux";
+            config = "armv6l-unknown-linux-musleabihf";
             gcc = {
               arch = "armv6k";
               fpu = "vfp";
@@ -255,7 +255,7 @@
               allowedReferences = [ ];
             };
           mkcontroller = debug:
-            let pkgs = crosspkgs.pkgsMusl; in pkgs.buildGoApplication {
+            let pkgs = crosspkgs; in pkgs.buildGoApplication {
               name = "controller";
               src = ./.;
               modules = ./gomod2nix.toml;
@@ -286,7 +286,7 @@
             controller-debug = self.lib.${system}.mkcontroller true;
             libcamera =
               let
-                pkgs = crosspkgs.pkgsMusl;
+                pkgs = crosspkgs;
                 cross-file = pkgs.writeText "cross-file.conf" ''
                   [properties]
                   needs_exe_wrapper = true
@@ -380,7 +380,7 @@
 
                 allowedReferences = [ ];
               };
-            camera-driver = let pkgs = crosspkgs.pkgsMusl; in pkgs.stdenv.mkDerivation {
+            camera-driver = let pkgs = crosspkgs; in pkgs.stdenv.mkDerivation {
               name = "camera-driver";
 
               dontUnpack = true;
@@ -508,6 +508,6 @@
             default = self.packages.${system}.image;
           };
         # Build a shell capable of running #reload-fast.
-        devShells.default = (crosspkgsFor system).pkgsMusl.go;
+        devShells.default = (crosspkgsFor system).go;
       });
 }
