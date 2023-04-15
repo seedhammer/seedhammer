@@ -15,16 +15,10 @@
     utils.lib.eachDefaultSystem (system:
       let
         arch = builtins.head (builtins.split "-" system);
-        darwinpkgs = import nixpkgs {
-          system = "${arch}-darwin";
-        };
         localpkgs = import nixpkgs {
           inherit system;
         };
-        linuxpkgs = import nixpkgs {
-          system = "${arch}-linux";
-        };
-        crosspkgsFor = system: import nixpkgs {
+        crosspkgs = import nixpkgs {
           inherit system;
           crossSystem = {
             config = "armv6l-unknown-linux-musleabihf";
@@ -37,7 +31,6 @@
             gomod2nix.overlays.default
           ];
         };
-        crosspkgs = crosspkgsFor "${arch}-linux";
         timestamp = "2009/01/03T12:15:05";
         loader-lib = "ld-musl-armhf.so.1";
       in
@@ -223,7 +216,7 @@
             };
           mkimage = debug:
             let
-              pkgs = linuxpkgs;
+              pkgs = localpkgs;
               firmware = self.packages.${system}.firmware;
               kernel =
                 if debug then
@@ -241,7 +234,7 @@
                 boot_delay=0
                 camera_auto_detect=1
               '' + (if debug then "dtoverlay=dwc2" else ""));
-              util-linux = self.packages."${arch}-linux".util-linux;
+              util-linux = self.packages.${system}.util-linux;
             in
             pkgs.stdenvNoCC.mkDerivation {
               name = "disk-image";
@@ -602,10 +595,9 @@
               ${pkgs.mtools}/bin/mdel -i "$dst@@$OFFSET" ::cmdline.txt
               ${pkgs.mtools}/bin/mcopy -bpm -i "$dst@@$OFFSET" "$TMPDIR/cmdline.txt" ::
             '';
-            darwin-builder = darwinpkgs.darwin.builder;
             default = self.packages.${system}.image;
           };
         # Build a shell capable of running #reload-fast.
-        devShells.default = (crosspkgsFor system).go_1_20;
+        devShells.default = crosspkgs.go_1_20;
       });
 }

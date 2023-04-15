@@ -35,9 +35,6 @@ $ nix build
 $ ls result/seedhammer.img
 ```
 
-Note that on macOS you will need to [set up a Linux builder](https://nixos.org/manual/nixpkgs/unstable/#sec-darwin-builder)
-and start it with `nix run .#darwin-builder`.
-
 The `seedhammer.img` image contains the Pi Zero firmware, the Linux kernel and drivers, and the
 `controller` program that drives the Pi hardware and engraver.
 
