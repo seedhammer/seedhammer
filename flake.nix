@@ -440,11 +440,16 @@
               dontStrip = true;
               dontFixup = true;
 
+              nativeBuildInputs = with pkgs.buildPackages; [
+                binutils
+              ];
+
               installPhase = ''
                 mkdir -p $out/lib/libcamera
                 LIBCAM="${self.packages.${system}.libcamera}"
                 chmod +w `find $out/`
-                cclib="${pkgs.stdenv.cc.cc.lib}/${pkgs.stdenv.targetPlatform.config}/lib"
+                prefix=${pkgs.stdenv.targetPlatform.config}
+                cclib="${pkgs.stdenv.cc.cc.lib}/$prefix/lib"
 
                 cp "$cclib/libstdc++.so.6" \
                   "$cclib/libgcc_s.so.1" \
@@ -452,8 +457,9 @@
                   $out/lib/
                 chmod +w `find $out/`
                 patchelf --set-rpath "/lib" `find $out/lib -type f`
-                cp "${pkgs.stdenv.cc.libc}/lib/${loader-lib}" \
-                  $out/lib
+                # Copy the dynamic link while stripping it of indeterministic sections.
+                "$prefix"-objcopy -R .note.gnu.build-id "${pkgs.stdenv.cc.libc}/lib/${loader-lib}" \
+                  $out/lib/${loader-lib}
                 cp -R "$LIBCAM/lib/" $out/
                 cp -R "$LIBCAM/share/" $out/
               '';
