@@ -186,6 +186,41 @@
 
               allowedReferences = [ ];
             };
+          mkinitramfs = debug:
+            let
+              pkgs = localpkgs;
+              controller =
+                if debug then
+                  self.packages.${system}.controller-debug
+                else
+                  self.packages.${system}.controller;
+            in
+            pkgs.stdenvNoCC.mkDerivation {
+              name = "initramfs";
+
+              dontUnpack = true;
+              buildPhase = ''
+                # Create initramfs with controller program and libraries.
+                mkdir initramfs
+                cp ${controller}/bin/controller initramfs/controller
+                cp -R "${self.packages.${system}.camera-driver}"/* initramfs/
+                # Set constant mtimes and permissions for determinism.
+                chmod 0755 `find initramfs`
+                ${pkgs.coreutils}/bin/touch -d '${timestamp}' `find initramfs`
+
+                ${pkgs.findutils}/bin/find initramfs -mindepth 1 -printf '%P\n'\
+                  | sort \
+                  | ${pkgs.cpio}/bin/cpio -D initramfs --reproducible -H newc -o --owner +0:+0 --quiet \
+                  | ${pkgs.gzip}/bin/gzip > initramfs.cpio.gz
+              '';
+
+              installPhase = ''
+                mkdir -p $out
+                cp initramfs.cpio.gz $out/
+              '';
+
+              allowedReferences = [ ];
+            };
           mkimage = debug:
             let
               pkgs = linuxpkgs;
@@ -196,11 +231,7 @@
                 else
                   self.packages.${system}.kernel;
 
-              controller =
-                if debug then
-                  self.packages.${system}.controller-debug
-                else
-                  self.packages.${system}.controller;
+              initramfs = self.lib.${system}.mkinitramfs debug;
               img-name = if debug then "seedhammer-debug.img" else "seedhammer.img";
               cmdlinetxt = pkgs.writeText "cmdline.txt" "console=tty1 rdinit=/controller oops=panic devfs=nomount";
               configtxt = pkgs.writeText "config.txt" (''
@@ -212,7 +243,7 @@
               '' + (if debug then "dtoverlay=dwc2" else ""));
             in
             pkgs.stdenvNoCC.mkDerivation {
-              name = "build image template";
+              name = "disk-image";
 
               dontUnpack = true;
               buildPhase = ''
@@ -228,7 +259,7 @@
                 dd if=/dev/zero of=disk.img bs=1M count=15
                 ${pkgs.util-linux}/bin/sfdisk disk.img <<EOF
                   label: dos
-                  label-id: 0xceedb0at
+                  label-id: 0xceedb0ad
 
                   disk.img1 : type=c, bootable
                 EOF
@@ -244,21 +275,9 @@
                 cp ${configtxt} boot/config.txt
                 cp ${firmware}/boot/bootcode.bin ${firmware}/boot/start.elf \
                   ${firmware}/boot/fixup.dat \
-                  ${kernel}/kernel.img ${kernel}/*.dtb boot/
+                  ${kernel}/kernel.img ${kernel}/*.dtb \
+                  ${initramfs}/initramfs.cpio.gz boot/
                 cp ${kernel}/overlays/* overlays/
-
-                # Create initramfs with controller program and libraries.
-                mkdir initramfs
-                cp ${controller}/bin/controller initramfs/controller
-                cp -R "${self.packages.${system}.camera-driver}"/* initramfs/
-                # Set constant mtimes and permissions for determinism.
-                chmod 0755 `find initramfs`
-                ${pkgs.coreutils}/bin/touch -d '${timestamp}' `find initramfs`
-
-                ${pkgs.findutils}/bin/find initramfs -mindepth 1 -printf '%P\n'\
-                  | sort \
-                  | ${pkgs.cpio}/bin/cpio -D initramfs --reproducible -H newc -o --owner 0:0 --quiet \
-                  | ${pkgs.gzip}/bin/gzip > boot/initramfs.cpio.gz
 
                 chmod 0755 `find boot overlays`
                 ${pkgs.coreutils}/bin/touch -d '${timestamp}' `find boot overlays`
@@ -452,6 +471,8 @@
               sparseCheckout = [ "boot" ];
               sha256 = "sha256-lX33EMZas1cdCFb/UZc6yjIWZ/4Rj2/yI07GZjnL7fs=";
             };
+            initramfs = self.lib.${system}.mkinitramfs false;
+            initramfs-debug = self.lib.${system}.mkinitramfs true;
             image = self.lib.${system}.mkimage false;
             image-debug = self.lib.${system}.mkimage true;
             reload = let pkgs = localpkgs; in pkgs.writeShellScriptBin "reload" ''
