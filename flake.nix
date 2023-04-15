@@ -35,16 +35,6 @@
           };
           overlays = [
             gomod2nix.overlays.default
-            (self: super: {
-              go = super.go_1_20.overrideAttrs (finalAttrs: previousAttrs: {
-                patches = [
-                  # Original patches, except those that result in Go binaries
-                  # with /nix/store references.
-                  ./patches/remove-tools-1.11.patch
-                  ./patches/go_no_vendor_checks-1.16.patch
-                ];
-              });
-            })
           ];
         };
         crosspkgs = crosspkgsFor "${arch}-linux";
@@ -256,6 +246,7 @@
             };
           mkcontroller = debug:
             let pkgs = crosspkgs; in pkgs.buildGoApplication {
+              go = pkgs.buildPackages.go_1_20;
               name = "controller";
               src = ./.;
               modules = ./gomod2nix.toml;
@@ -265,16 +256,24 @@
               buildFlags = "-buildmode=pie";
               CGO_ENABLED = 1;
               GOARM = "6";
-              # Strip is not deterministic.
+              # Go programs may break by using strip; use ldflags -w -s instead.
               dontStrip = true;
               # Don't include debug information.
-              ldflags = "-w";
+              ldflags = "-w -s";
+
+              nativeBuildInputs = with pkgs.buildPackages; [
+                nukeReferences
+              ];
 
               fixupPhase = ''
                 patchelf --set-rpath "/lib" \
                   --set-interpreter "/lib/${loader-lib}" \
                   --add-needed "/lib/v4l2-compat.so" \
                   $out/bin/controller
+                nuke-refs $out/bin/controller
+                prefix=${pkgs.stdenv.targetPlatform.config}
+                # Strip the indeterministic Go build id.
+                "$prefix"-objcopy -R .note.go.buildid $out/bin/controller
               '';
 
               allowedReferences = [ ];
@@ -450,7 +449,7 @@
               GOOS=linux \
               GOARCH=arm \
               GOARM=6 \
-              go build -buildmode pie -ldflags=-w -trimpath -tags debug,netgo -o "$PROG" ./cmd/controller
+              go build -buildmode pie -ldflags="-w -s" -trimpath -tags debug,netgo -o "$PROG" ./cmd/controller
               patchelf --set-rpath "/lib" --set-interpreter "/lib/${loader-lib}" "$PROG"
               patchelf --add-needed "/lib/v4l2-compat.so" "$PROG"
 
@@ -508,6 +507,6 @@
             default = self.packages.${system}.image;
           };
         # Build a shell capable of running #reload-fast.
-        devShells.default = (crosspkgsFor system).go;
+        devShells.default = (crosspkgsFor system).go_1_20;
       });
 }
