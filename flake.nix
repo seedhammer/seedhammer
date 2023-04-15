@@ -420,8 +420,6 @@
                   patchShebangs utils/
                 '';
 
-                dontFixup = true;
-                dontStrip = true;
                 dontUseNinjaInstall = true;
                 dontUseMesonConfigure = true;
 
@@ -477,8 +475,6 @@
               name = "camera-driver";
 
               dontUnpack = true;
-              dontStrip = true;
-              dontFixup = true;
 
               nativeBuildInputs = with pkgs.buildPackages; [
                 binutils
