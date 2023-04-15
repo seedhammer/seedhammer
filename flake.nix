@@ -52,16 +52,24 @@
         lib = {
           mkkernel =
             let
-              pkgs = linuxpkgs;
+              pkgs = crosspkgs;
             in
-            debug: pkgs.stdenvNoCC.mkDerivation {
+            debug: pkgs.stdenv.mkDerivation {
               name = "Raspberry Pi Linux kernel";
 
               src = pkgs.fetchFromGitHub {
                 owner = "raspberrypi";
                 repo = "linux";
-                rev = "45d339389bb85588b8045dd40a00c54d01e2e711";
-                sha256 = "Z/0TVDYRPDucCiP1aqc6B2vJLxdg1ecrUhrtPI2037I=";
+                rev = "0afb5e98488aed7017b9bf321b575d0177feb7ed";
+                sha256 = "t+xq0HmT163TaE+5/sb2ZkNWDbBoiwbXk3oi6YEYsIA=";
+                # Remove files that introduce case sensitivity clashes on darwin.
+                postFetch = ''
+                  rm $out/include/uapi/linux/netfilter/xt_*.h
+                  rm $out/include/uapi/linux/netfilter_ipv4/ipt_*.h
+                  rm $out/include/uapi/linux/netfilter_ipv6/ip6t_*.h
+                  rm $out/net/netfilter/xt_*.c
+                  rm $out/tools/memory-model/litmus-tests/Z6.0+poonce*
+                '';
               };
 
               # For reproducible builds.
@@ -73,31 +81,51 @@
 
               makeFlags = [
                 "ARCH=arm"
-                "CROSS_COMPILE=armv6k-unknown-linux-gnueabihf-"
-                "LLVM=1"
+                "CROSS_COMPILE=${pkgs.stdenv.cc.targetPrefix}"
               ];
 
+              depsBuildBuild = [ pkgs.buildPackages.stdenv.cc ];
+
               nativeBuildInputs = with pkgs.buildPackages; [
-                clang_14
-                llvm_14
-                lld_14
+                elf-header
                 bison
                 flex
                 openssl
                 bc
-                ncurses
                 perl
               ];
+
+              patches = [
+                ./patches/kernel_missing_includes.patch
+              ];
+
+              hardeningDisable = [ "bindnow" "format" "fortify" "stackprotector" "pic" "pie" ];
 
               postPatch = ''
                 patchShebangs scripts/config
               '';
 
               configurePhase = ''
-                make $makeFlags -j$NIX_BUILD_CORES bcmrpi_defconfig
+                export HOSTCC=$CC_FOR_BUILD
+                export HOSTCXX=$CXX_FOR_BUILD
+                export HOSTAR=$AR_FOR_BUILD
+                export HOSTLD=$LD_FOR_BUILD
+
+                make $makeFlags -j$NIX_BUILD_CORES \
+                  HOSTCC=$HOSTCC HOSTCXX=$HOSTCXX HOSTAR=$HOSTAR HOSTLD=$HOSTLD \
+                  CC=$CC OBJCOPY=$OBJCOPY OBJDUMP=$OBJDUMP READELF=$READELF \
+                  HOSTCFLAGS="-D_POSIX_C_SOURCE=200809L" \
+                  bcmrpi_defconfig
 
                 # Disable networking (including bluetooth).
                 ./scripts/config --disable NET
+                ./scripts/config --disable INET
+                ./scripts/config --disable NETFILTER
+                ./scripts/config --disable PROC_SYSCTL
+                ./scripts/config --disable FSCACHE
+                # There's no need for security models, and leaving it enabled
+                # leads to build errors because of the files removed in postFetch above.
+                ./scripts/config --disable SECURITY
                 # Disable sound support.
                 ./scripts/config --disable SOUND
                 # Disable features we don't need.
@@ -127,8 +155,6 @@
                 ./scripts/config --enable USB_SERIAL
                 ./scripts/config --enable USB_SERIAL_CONSOLE
                 ./scripts/config --enable USB_SERIAL_FTDI_SIO
-                # Disable BCM2835_FAST_MEMCPY which fails to compile with clang.
-                ./scripts/config --disable BCM2835_FAST_MEMCPY
               '' + (if debug then ''
                 ./scripts/config --disable CONFIG_USB_DWCOTG
                 ./scripts/config --enable CONFIG_USB_DWC2
@@ -138,7 +164,16 @@
               '' else "");
 
               buildPhase = ''
-                make $makeFlags -j$NIX_BUILD_CORES zImage dtbs
+                export HOSTCC=$CC_FOR_BUILD
+                export HOSTCXX=$CXX_FOR_BUILD
+                export HOSTAR=$AR_FOR_BUILD
+                export HOSTLD=$LD_FOR_BUILD
+
+                make $makeFlags -j$NIX_BUILD_CORES \
+                  HOSTCC=$HOSTCC HOSTCXX=$HOSTCXX HOSTAR=$HOSTAR HOSTLD=$HOSTLD \
+                  CC=$CC OBJCOPY=$OBJCOPY OBJDUMP=$OBJDUMP READELF=$READELF \
+                  HOSTCFLAGS="-D_POSIX_C_SOURCE=200809L" \
+                  zImage dtbs
               '';
 
               installPhase = ''
