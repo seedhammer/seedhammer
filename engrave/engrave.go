@@ -705,18 +705,19 @@ func (s *StringCmd) Measure() image.Point {
 }
 
 func (s *StringCmd) engrave(p Program) image.Point {
-	em := float32(s.em)
+	m := s.face.Metrics
+	em := float32(s.em) / m.Height
 	ceil := func(v float32) int {
 		return int(math.Ceil(float64(v)))
 	}
-	pos := image.Pt(0, ceil(s.face.Metrics.Ascent*em))
+	pos := image.Pt(0, ceil(m.Ascent*em))
 	addScale := func(p1 image.Point, p2 f32.Vec2) f32.Vec2 {
 		return f32.Vec2{
 			float32(p1.X) + p2[0]*em,
 			float32(p1.Y) + p2[1]*em,
 		}
 	}
-	height := ceil(s.face.Metrics.Height * em * s.LineHeight)
+	height := ceil(float32(s.em) * s.LineHeight)
 	for _, r := range s.txt {
 		if r == '\n' {
 			pos.X = 0

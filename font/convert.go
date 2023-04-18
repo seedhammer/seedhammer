@@ -83,7 +83,7 @@ func convert(ext string, data []byte) (*sfont.Face, error) {
 }
 
 type MetaData struct {
-	Advance, Height, Baseline, Size float64
+	Advance, Height, Baseline float64
 }
 
 func convertSVG(svg []byte) (*sfont.Face, error) {
@@ -105,15 +105,14 @@ func convertSVG(svg []byte) (*sfont.Face, error) {
 		if err != nil {
 			return nil, err
 		}
-		scale := 1. / meta.Size
-		ascent := meta.Baseline * scale
+		ascent := meta.Baseline
 		face.Metrics.Ascent = float32(ascent)
-		face.Metrics.Height = float32(meta.Height * scale)
-		adv := meta.Advance * scale
+		face.Metrics.Height = float32(meta.Height)
+		adv := meta.Advance
 		face.Index[' '] = sfont.Glyph{
 			Advance: float32(adv),
 		}
-		err = parseChars(&face, d, scale, adv, ascent)
+		err = parseChars(&face, d, adv, ascent)
 		return &face, err
 	}
 }
@@ -143,8 +142,6 @@ func parseMeta(data []byte) (*MetaData, error) {
 			meta.Height = line.Y2 - line.Y1
 		case "baseline":
 			meta.Baseline = line.Y1
-		case "size":
-			meta.Size = line.Y2 - line.Y1
 		}
 	}
 	return &meta, nil
@@ -159,7 +156,7 @@ func findAttr(e xml.StartElement, name string) (string, bool) {
 	return "", false
 }
 
-func parseChars(face *sfont.Face, d *xml.Decoder, scale, adv, ascent float64) error {
+func parseChars(face *sfont.Face, d *xml.Decoder, adv, ascent float64) error {
 	offx := 0.
 	for {
 		t, err := d.Token()
@@ -194,7 +191,7 @@ func parseChars(face *sfont.Face, d *xml.Decoder, scale, adv, ascent float64) er
 			return fmt.Errorf("unknown character id: %q", id)
 		}
 		idxStart := len(face.Segments)
-		if err := parseSegments(face, d, e, scale, offx, -ascent); err != nil {
+		if err := parseSegments(face, d, e, offx, -ascent); err != nil {
 			return err
 		}
 		idxEnd := len(face.Segments)
@@ -208,7 +205,7 @@ func parseChars(face *sfont.Face, d *xml.Decoder, scale, adv, ascent float64) er
 	return nil
 }
 
-func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, scale, offx, offy float64) error {
+func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, offy float64) error {
 	encode := func(op sfont.SegmentOp, args ...f32.Vec2) {
 		face.Segments = append(face.Segments, uint32(op))
 		for _, a := range args {
@@ -224,7 +221,7 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, scale, 
 			}
 			switch t := t.(type) {
 			case xml.StartElement:
-				if err := parseSegments(face, d, t, scale, offx, offy); err != nil {
+				if err := parseSegments(face, d, t, offx, offy); err != nil {
 					return err
 				}
 			case xml.EndElement:
@@ -241,10 +238,10 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, scale, 
 		if err := d.DecodeElement(&line, &e); err != nil {
 			return err
 		}
-		line.X1 = line.X1*scale + offx
-		line.Y1 = line.Y1*scale + offy
-		line.X2 = line.X2*scale + offx
-		line.Y2 = line.Y2*scale + offy
+		line.X1 = line.X1 + offx
+		line.Y1 = line.Y1 + offy
+		line.X2 = line.X2 + offx
+		line.Y2 = line.Y2 + offy
 		encode(sfont.SegmentOpMoveTo, f32.Vec2{float32(line.X1), float32(line.Y1)})
 		encode(sfont.SegmentOpLineTo, f32.Vec2{float32(line.X2), float32(line.Y2)})
 		return nil
@@ -260,8 +257,8 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, scale, 
 			if _, err := fmt.Sscanf(c, "%f,%f", &x, &y); err != nil {
 				return fmt.Errorf("invalid coordinates %q in <polyline>:", c)
 			}
-			x = x*scale + offx
-			y = y*scale + offy
+			x = x + offx
+			y = y + offy
 			op := sfont.SegmentOpLineTo
 			if i == 0 {
 				op = sfont.SegmentOpMoveTo
@@ -309,7 +306,6 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, scale, 
 					break
 				}
 				cmds = cmds[n:]
-				x = x * scale
 				coords = append(coords, x)
 			}
 			rel := unicode.IsLower(op)

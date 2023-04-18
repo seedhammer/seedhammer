@@ -411,15 +411,14 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, ur
 	if !ok {
 		panic("W not in font")
 	}
-	charWidth := int(charWidthf * float32(fontSize))
-	fontHeight := int(fnt.Metrics.Height * float32(fontSize))
+	charWidth := int(charWidthf * float32(fontSize) / fnt.Metrics.Height)
 	margin := scale(outerMargin)
 	innerMargin := scale(innerMargin)
 	if size == LargePlate {
 		margin = innerMargin
 	}
 	holeChars := int(math.Ceil(float64(innerMargin-margin) / float64(charWidth)))
-	holeLines := int(math.Ceil(float64(innerMargin-margin) / float64(fontHeight)))
+	holeLines := int(math.Ceil(float64(innerMargin-margin) / float64(fontSize)))
 	width := plateDims.X - 2*margin
 	charPerLine := int(width / charWidth)
 	offy := scale(outerMargin)
@@ -431,7 +430,7 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, ur
 		qr, qrsz := dims(qrcmd)
 		qrBorder := scale(2)
 		charPerQRLine := (width - 2*qrBorder - qrsz.X) / charWidth
-		qrLines := (qrsz.Y + 2*qrBorder + fontHeight - 1) / fontHeight
+		qrLines := (qrsz.Y + 2*qrBorder + fontSize - 1) / fontSize
 		qrLineStart := holeLines
 		lineno := 0
 		for len(ur) > 0 {
@@ -442,8 +441,8 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, ur
 				n = charPerQRLine
 			}
 			// Avoid screw holes on the smaller plates on the first and last lines.
-			holeLine := offy+lineno*fontHeight < innerMargin ||
-				offy+(lineno+1)*fontHeight > plateDims.Y-innerMargin
+			holeLine := offy+lineno*fontSize < innerMargin ||
+				offy+(lineno+1)*fontSize > plateDims.Y-innerMargin
 			if holeLine {
 				if !isQRLine {
 					// End of line.
@@ -461,13 +460,13 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, ur
 			}
 			s := ur[:n]
 			ur = ur[n:]
-			cmd(engrave.Offset(offx+margin, offy+lineno*fontHeight, str(s)))
+			cmd(engrave.Offset(offx+margin, offy+lineno*fontSize, str(s)))
 			lineno++
 		}
 		qrx := plateDims.X - qrsz.X - margin - qrBorder
-		qry := qrLineStart*fontHeight + (qrLines*fontHeight-qrsz.Y)/2
+		qry := qrLineStart*fontSize + (qrLines*fontSize-qrsz.Y)/2
 		cmd(engrave.Offset(qrx, offy+qry, qr))
-		offy += lineno * fontHeight
+		offy += lineno * fontSize
 		if i != len(urs)-1 {
 			// Space UR sections.
 			offy += scale(1)
