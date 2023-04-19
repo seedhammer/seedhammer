@@ -17,7 +17,7 @@ import (
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
 	"seedhammer.com/engrave"
-	"seedhammer.com/font/sh"
+	"seedhammer.com/font/constant"
 	"seedhammer.com/mjolnir"
 )
 
@@ -228,7 +228,7 @@ func genTestPlate(t *testing.T, desc urtypes.OutputDescriptor, path []uint32, se
 	}
 	return PlateDesc{
 		Title:      "Satoshi Stash",
-		Font:       &sh.Fontsh,
+		Font:       &constant.Font,
 		KeyIdx:     keyIdx,
 		Mnemonic:   mnemonic,
 		Descriptor: desc,

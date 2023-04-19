@@ -29,7 +29,7 @@ import (
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
 	"seedhammer.com/camera"
-	"seedhammer.com/font/sh"
+	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/assets"
 	"seedhammer.com/gui/layout"
 	"seedhammer.com/gui/op"
@@ -959,7 +959,7 @@ func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (
 		Descriptor: desc,
 		Mnemonic:   m,
 		KeyIdx:     keyIdx,
-		Font:       &sh.Fontsh,
+		Font:       &constant.Font,
 	}
 	return backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
 }

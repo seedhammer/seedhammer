@@ -283,9 +283,9 @@ func Recoverable(desc urtypes.OutputDescriptor) bool {
 	return true
 }
 
-const plateFontSize = 5.
-const plateFontSizeUR = 4.1
-const plateSmallFontSize = 3.5
+const plateFontSize = 4.1
+const plateFontSizeUR = 3.8
+const plateSmallFontSize = 3.
 
 func frontSide(scale func(float32) int, strokeWidth int, plate PlateDesc, size PlateSize, plateDims image.Point) (engrave.Command, error) {
 	var cmds engrave.Commands
@@ -309,16 +309,16 @@ func frontSide(scale func(float32) int, strokeWidth int, plate PlateDesc, size P
 	col1, col1b := dims(wordColumn(plate.Font, scale(plateFontSize), plate.Mnemonic, 0, endCol1))
 
 	// Engrave version, mfp and page.
-	const version = "v1"
+	const version = "V1"
 	margin := scale(outerMargin)
 	innerMargin := scale(innerMargin)
 	metaMargin := scale(4)
 	page := fmt.Sprintf("%d/%d", plate.KeyIdx+1, len(plate.Descriptor.Keys))
+	mfp := strings.ToUpper(fmt.Sprintf("%.8x", plate.Descriptor.Keys[plate.KeyIdx].MasterFingerprint))
 	switch size {
 	case SmallPlate:
 		pagec, _ := dims(engrave.String(plate.Font, scale(plateSmallFontSize), page))
 		cmd(engrave.Offset(margin, plateDims.Y-innerMargin, engrave.Rotate(-math.Pi/2, pagec)))
-		mfp := fmt.Sprintf("%.8x", plate.Descriptor.Keys[plate.KeyIdx].MasterFingerprint)
 		mfpc, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), mfp)))
 		cmd(engrave.Offset(margin, (plateDims.Y-sz.Y)/2, mfpc))
 		txt, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), version)))
@@ -327,7 +327,6 @@ func frontSide(scale func(float32) int, strokeWidth int, plate PlateDesc, size P
 		offy := (plateDims.Y-col1b.Y)/2 - metaMargin
 		pagec, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), page))
 		cmd(engrave.Offset(innerMargin, offy-sz.Y, pagec))
-		mfp := fmt.Sprintf("%.8x", plate.Descriptor.Keys[plate.KeyIdx].MasterFingerprint)
 		mfpc, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), mfp))
 		cmd(engrave.Offset((plateDims.X-sz.X)/2, offy-sz.Y, mfpc))
 		txt, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), version))
@@ -360,13 +359,14 @@ func frontSide(scale func(float32) int, strokeWidth int, plate PlateDesc, size P
 	}
 
 	// Engrave title.
+	title := strings.ToUpper(plate.Title)
 	switch size {
 	case SmallPlate:
-		title, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), plate.Title)))
+		title, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), title)))
 		cmd(engrave.Offset(plateDims.X-margin-sz.X, (plateDims.Y-sz.Y)/2, title))
 	default:
 		offy := (plateDims.Y+col1b.Y)/2 + metaMargin
-		title, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), plate.Title))
+		title, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), title))
 		cmd(engrave.Offset((plateDims.X-sz.X)/2, offy, title))
 	}
 	if size == LargePlate {
@@ -380,13 +380,11 @@ func wordColumn(font *font.Face, fontSize int, mnemonic bip39.Mnemonic, start, e
 	var cmds engrave.Commands
 	y := 0
 	for i := start; i < end; i++ {
-		num := engrave.String(font, fontSize, fmt.Sprintf("%2d:", i+1))
-		num.LineHeight = .8
+		num := engrave.String(font, fontSize, fmt.Sprintf("%2d ", i+1))
 		d := num.Measure()
 		w := mnemonic[i]
 		word := strings.ToUpper(bip39.LabelFor(w))
 		txt := engrave.String(font, fontSize, word)
-		txt.LineHeight = .8
 		cmds = append(cmds,
 			engrave.Offset(0, y, num),
 			engrave.Offset(d.X, y, txt),

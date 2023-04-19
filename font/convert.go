@@ -51,7 +51,7 @@ func main() {
 	ext := filepath.Ext(fname)
 	fname = fname[:len(fname)-len(ext)]
 	fmt.Fprintf(&output, "// Code generated DO NOT EDIT.\npackage %s\n", *packageName)
-	fmt.Fprintf(&output, "import \"seedhammer.com/font\"\nvar Font%s = %#v\n", fname, *conv)
+	fmt.Fprintf(&output, "import \"seedhammer.com/font\"\nvar Font = %#v\n", *conv)
 	formatted, err := format.Source(output.Bytes())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to format output: %v\n", err)

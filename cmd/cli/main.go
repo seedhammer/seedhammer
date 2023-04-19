@@ -19,7 +19,7 @@ import (
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
 	"seedhammer.com/engrave"
-	"seedhammer.com/font/sh"
+	"seedhammer.com/font/constant"
 	"seedhammer.com/mjolnir"
 )
 
@@ -103,7 +103,7 @@ func dump(plateDesc backup.PlateDesc, output string) error {
 func genPlate(m0 bip39.Mnemonic) backup.PlateDesc {
 	plate := backup.PlateDesc{
 		Title:  "Satoshis stash",
-		Font:   &sh.Fontsh,
+		Font:   &constant.Font,
 		KeyIdx: 0,
 		Descriptor: urtypes.OutputDescriptor{
 			Threshold: *threshold,

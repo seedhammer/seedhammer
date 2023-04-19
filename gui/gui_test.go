@@ -19,7 +19,7 @@ import (
 	"seedhammer.com/bip39"
 	"seedhammer.com/camera"
 	"seedhammer.com/engrave"
-	"seedhammer.com/font/sh"
+	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/op"
 	"seedhammer.com/input"
 	"seedhammer.com/mjolnir"
@@ -815,7 +815,7 @@ func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, desc urtypes.Out
 		Descriptor: desc,
 		Mnemonic:   mnemonic,
 		KeyIdx:     keyIdx,
-		Font:       &sh.Fontsh,
+		Font:       &constant.Font,
 	}
 	plate, err := backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
 	if err != nil {
