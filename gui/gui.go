@@ -539,7 +539,7 @@ func (s *ScanScreen) close() {
 }
 
 func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, bool) {
-	const cameraFrameScale = 4
+	const cameraFrameScale = 3
 	if s.camera.quit == nil && s.camera.err == nil {
 		frames := make(chan camera.Frame, 1)
 		out := make(chan camera.Frame)

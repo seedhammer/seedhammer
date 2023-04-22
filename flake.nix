@@ -290,7 +290,11 @@
               allowedReferences = [ ];
             };
           mkcontroller = debug:
-            let pkgs = crosspkgs; in pkgs.buildGoApplication {
+            let
+              libcamera = self.packages.${system}.libcamera;
+              pkgs = crosspkgs;
+            in
+            pkgs.buildGoApplication {
               go = pkgs.buildPackages.go_1_20;
               name = "controller";
               src = ./.;
@@ -301,6 +305,8 @@
               buildFlags = "-buildmode=pie";
               CGO_ENABLED = 1;
               GOARM = "6";
+              CGO_CXXFLAGS = "-I${libcamera}/include";
+              CGO_LDFLAGS = "-L${libcamera}/lib";
               # Go programs may break by using strip; use ldflags -w -s instead.
               dontStrip = true;
               # Don't include debug information.
@@ -313,7 +319,6 @@
               fixupPhase = ''
                 patchelf --set-rpath "/lib" \
                   --set-interpreter "/lib/${loader-lib}" \
-                  --add-needed "/lib/v4l2-compat.so" \
                   $out/bin/controller
                 nuke-refs $out/bin/controller
                 prefix=${pkgs.stdenv.targetPlatform.config}
@@ -404,9 +409,6 @@
                   # Open V4L2 devices with O_CLOEXEC so that our debug builds
                   # can reload themselves while using the camera.
                   ./patches/libcamera_cloexec.patch
-
-                  # Minimize number of buffers to reduce latency.
-                  ./patches/libcamera_min_buffers.patch
                 ];
 
                 postPatch = ''
@@ -432,7 +434,7 @@
 
                 configurePhase = ''
                   meson setup build \
-                    -Dv4l2=true \
+                    -Dv4l2=false \
                     -Dqcam=disabled \
                     -Dcam=disabled \
                     -Dgstreamer=disabled \
@@ -449,13 +451,15 @@
                 '';
 
                 installPhase = ''
-                  mkdir -p $out/lib/libcamera $out/share/libcamera/ipa/raspberrypi
-                  cp ./src/libcamera/base/libcamera-base.so.0.0.4 \
+                  mkdir -p $out/lib/libcamera $out/share/libcamera/ipa/raspberrypi $out/include
+                  cp -P ./src/libcamera/base/libcamera-base.so.0.0.4 \
+                    ./src/libcamera/base/libcamera-base.so \
                     ./src/libcamera/libcamera.so.0.0.4 \
-                    ./src/v4l2/v4l2-compat.so \
+                    ./src/libcamera/libcamera.so \
                     $out/lib
                   cp ./src/ipa/raspberrypi/ipa_rpi.so $out/lib/libcamera
                   cp ../src/ipa/raspberrypi/data/*.json $out/share/libcamera/ipa/raspberrypi
+                  cp -a ../include/libcamera include/libcamera $out/include
                   patchelf --set-rpath "/lib" `find $out/lib -type f`
                 '';
 
@@ -524,30 +528,36 @@
               cat "$PROG" > "$USBDEV"
               exec cat "$USBDEV"
             '';
-            reload-fast = let pkgs = localpkgs; in pkgs.writeShellScriptBin "reload" ''
-              set -e
-              USBDEV=$1
-              if [ -z "$USBDEV" ]; then
-                  echo "error: specify USB device"
-                  exit 1
-              fi
-              TMPDIR="$(mktemp -d)"
-              trap 'rm -rf -- "$TMPDIR"' EXIT
+            reload-fast =
+              let
+                libcamera = self.packages.${system}.libcamera;
+                pkgs = localpkgs;
+              in
+              pkgs.writeShellScriptBin "reload" ''
+                set -e
+                USBDEV=$1
+                if [ -z "$USBDEV" ]; then
+                    echo "error: specify USB device"
+                    exit 1
+                fi
+                TMPDIR="$(mktemp -d)"
+                trap 'rm -rf -- "$TMPDIR"' EXIT
 
-              PROG="$TMPDIR/controller"
+                PROG="$TMPDIR/controller"
 
-              CGO_ENABLED=1 \
-              GOOS=linux \
-              GOARCH=arm \
-              GOARM=6 \
-              go build -buildmode pie -ldflags="-w -s" -trimpath -tags debug,netgo -o "$PROG" ./cmd/controller
-              patchelf --set-rpath "/lib" --set-interpreter "/lib/${loader-lib}" "$PROG"
-              patchelf --add-needed "/lib/v4l2-compat.so" "$PROG"
+                CGO_ENABLED=1 \
+                GOOS=linux \
+                GOARCH=arm \
+                GOARM=6 \
+                CGO_CXXFLAGS="-I${libcamera}/include" \
+                CGO_LDFLAGS="-L${libcamera}/lib" \
+                go build -buildmode pie -ldflags="-w -s" -trimpath -tags debug,netgo -o "$PROG" ./cmd/controller
+                patchelf --set-rpath "/lib" --set-interpreter "/lib/${loader-lib}" "$PROG"
 
-              echo "reload $(wc -c < "$PROG")" > "$USBDEV"
-              cat "$PROG" > "$USBDEV"
-              exec cat "$USBDEV"
-            '';
+                echo "reload $(wc -c < "$PROG")" > "$USBDEV"
+                cat "$PROG" > "$USBDEV"
+                exec cat "$USBDEV"
+              '';
             mkrelease = let pkgs = localpkgs; in pkgs.writeShellScriptBin "mkrelease" ''
               set -eu
 
