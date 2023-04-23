@@ -664,7 +664,7 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, bo
 }
 
 // scaleRot is a specialized function for fast scaling and rotation of
-// the camera frames.
+// the camera frames for display.
 func scaleRot(dst, src *image.Gray) {
 	db := dst.Bounds()
 	sb := src.Bounds()
@@ -674,8 +674,9 @@ func scaleRot(dst, src *image.Gray) {
 	scale := sb.Dx() / db.Dx()
 	for y := 0; y < db.Dy(); y++ {
 		for x := 0; x < db.Dx(); x++ {
+			sx, sy := sb.Max.X-1-y*scale, x*scale+sb.Min.Y
 			// Rotate and scale.
-			c := src.GrayAt(sb.Max.Y-1-y*scale, x*scale+sb.Min.X)
+			c := src.GrayAt(sx, sy)
 			dst.SetGray(x+db.Min.X, y+db.Min.Y, c)
 		}
 	}
