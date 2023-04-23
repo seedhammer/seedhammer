@@ -20,16 +20,21 @@ import (
 func Scan(img *image.Gray) ([][]byte, error) {
 	_img := img.Pix
 	sz := img.Bounds().Size()
+	stride := img.Stride
 	// Bounds check.
-	_img = _img[:sz.X*sz.Y]
+	_img = _img[:stride*sz.Y]
+	if len(_img) == 0 {
+		return nil, nil
+	}
 
 	scanner := C.zbar_image_scanner_create()
 	defer C.zbar_image_scanner_destroy(scanner)
 	image := C.zbar_image_create()
 	defer C.zbar_image_destroy(image)
 	C.zbar_image_set_format(image, C.ulong(0x30303859)) // Y800 (grayscale)
-	C.zbar_image_set_size(image, C.uint(sz.X), C.uint(sz.Y))
+	C.zbar_image_set_size(image, C.uint(stride), C.uint(sz.Y))
 	C.zbar_image_set_data(image, unsafe.Pointer(&_img[0]), C.ulong(len(_img)), nil)
+	C.zbar_image_set_crop(image, 0, 0, C.uint(sz.X), C.uint(sz.Y))
 
 	if res := C.zbar_image_scanner_set_config(scanner, 0, C.ZBAR_CFG_ENABLE, 1); res != 0 {
 		return nil, fmt.Errorf("zbar: set_config failed with error code %d", res)
