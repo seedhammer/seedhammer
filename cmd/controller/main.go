@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 
 	"seedhammer.com/gui"
 	"seedhammer.com/lcd"
@@ -21,12 +20,9 @@ func main() {
 
 func run() error {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
-	log.Println("seedhammer: loading...")
+	version := os.Getenv("sh.version")
+	log.Printf("seedhammer: loading %s...\n", version)
 	if err := Init(); err != nil {
-		return err
-	}
-	ver, err := readVersion()
-	if err != nil {
 		return err
 	}
 	lcd, err := lcd.Open()
@@ -34,24 +30,9 @@ func run() error {
 		return err
 	}
 	defer lcd.Close()
-	a := gui.NewApp(newPlatform(), lcd, ver)
+	a := gui.NewApp(newPlatform(), lcd, version)
 	a.Debug = Debug
 	for {
 		a.Frame()
 	}
-}
-
-// readVersion reads the version from the kernel command line.
-func readVersion() (string, error) {
-	cmdline, err := os.ReadFile("/proc/cmdline")
-	if err != nil {
-		return "", err
-	}
-	for _, kv := range strings.Split(string(cmdline), " ") {
-		k, v, ok := strings.Cut(kv, "=")
-		if ok && k == "sh_version" {
-			return v, nil
-		}
-	}
-	return "", nil
 }
