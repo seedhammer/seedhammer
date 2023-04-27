@@ -32,20 +32,20 @@ schema = 3
     version = "v0.8.4"
     hash = "sha256-VKzMTMS9pIB/cwe17xPftCSK9Mf4Y6EuBEJlB4by5mE="
   [mod."golang.org/x/crypto"]
-    version = "v0.4.0"
-    hash = "sha256-PvHIbuooDItiNyQEi8kKgybkc0o95B0aeMd9awVGFCY="
+    version = "v0.7.0"
+    hash = "sha256-Yc4casCQyfOgIr48FV+NI9qhanhBuYnkph5iI7rDyZE="
   [mod."golang.org/x/image"]
-    version = "v0.0.0-20220722155232-062f8c9fd539"
-    hash = "sha256-Rl3kKCUy5h1CqLsA87vyg3fSb05qKjd3tI6QvC1LfkI="
+    version = "v0.6.0"
+    hash = "sha256-fZc2Jfh6EqsjmMBUMaGHn8+bSMetuZ7K4AxU8BRXt94="
   [mod."golang.org/x/sys"]
-    version = "v0.3.0"
-    hash = "sha256-TIHhfYbZ99sCU1ZMikxwomXH5AEtD/lA1VMMW+UAhbU="
+    version = "v0.6.0"
+    hash = "sha256-zAgxiTuL24sGhbXrna9R1UYqLQh46ldztpumOScmduY="
   [mod."golang.org/x/text"]
-    version = "v0.5.0"
-    hash = "sha256-ztH+xQyM/clOcQl+y/UEPcfNKbc3xApMbEPDDZ9up0o="
+    version = "v0.8.0"
+    hash = "sha256-hgWFnT01DRmywBEXKYEVaOee7i6z8Ydz7zGbjcWwOgI="
   [mod."periph.io/x/conn/v3"]
     version = "v3.7.0"
     hash = "sha256-UL6B0d9K8T3XrSYDrHDeaKAdkUh/Wf+NdhPRriE8Bzw="
   [mod."periph.io/x/host/v3"]
-    version = "v3.8.0"
-    hash = "sha256-ZxiY79iCHA9Cs8+teb4TX3N6pzEzgRvdlcvww1qQ9dE="
+    version = "v3.8.2"
+    hash = "sha256-A2WZA2Y4GRXPLuwuSDXXhWkzuKHr/7YsBaBdw3C4QyM="
