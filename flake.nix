@@ -284,6 +284,7 @@
                 initramfs initramfs.cpio.gz followkernel
                 disable_splash=1
                 boot_delay=0
+                force_turbo=1
                 camera_auto_detect=1
                 dtoverlay=mipi-dbi-spi
                 dtparam=width=240
