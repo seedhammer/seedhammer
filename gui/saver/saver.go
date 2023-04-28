@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"seedhammer.com/gui/assets"
-	"seedhammer.com/rgb16"
 )
 
 type State struct {
@@ -114,7 +113,7 @@ outer:
 	}
 }
 
-func clearScreenSaver(s *State, screen *rgb16.Image) {
+func clearScreenSaver(s *State, screen draw.RGBA64Image) {
 	counter := 0
 	for counter < 3 {
 		width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
@@ -146,7 +145,7 @@ func clearScreenSaver(s *State, screen *rgb16.Image) {
 	drawSnake(screen, s)
 }
 
-func Draw(s *State, screen *rgb16.Image) {
+func Draw(s *State, screen draw.RGBA64Image) {
 	if s.delay > 0 {
 		s.delay -= 1
 		return
@@ -156,7 +155,7 @@ func Draw(s *State, screen *rgb16.Image) {
 		return
 	}
 
-	screen.Clear(color.Black)
+	draw.Draw(screen, screen.Bounds(), image.NewUniform(color.Black), image.Point{}, draw.Src)
 
 	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 	head := s.snake[len(s.snake)-1]
