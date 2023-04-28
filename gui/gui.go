@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"io"
 	"log"
@@ -39,7 +40,6 @@ import (
 	"seedhammer.com/input"
 	"seedhammer.com/mjolnir"
 	"seedhammer.com/nonstandard"
-	"seedhammer.com/rgb16"
 	"seedhammer.com/seedqr"
 	"seedhammer.com/zbar"
 )
@@ -2599,21 +2599,20 @@ type Platform interface {
 }
 
 type LCD interface {
-	Dims() image.Point
-	Draw(src *rgb16.Image, sr image.Rectangle) error
+	Framebuffer() draw.RGBA64Image
+	Dirty(sr image.Rectangle) error
 }
 
 type App struct {
 	Debug bool
 
-	root  op.Ops
-	ctx   *Context
-	btns  <-chan input.Event
-	frame *rgb16.Image
-	lcd   LCD
-	err   error
-	scr   MainScreen
-	idle  struct {
+	root op.Ops
+	ctx  *Context
+	btns <-chan input.Event
+	lcd  LCD
+	err  error
+	scr  MainScreen
+	idle struct {
 		eatButton bool
 		timeout   <-chan time.Time
 	}
@@ -2625,13 +2624,11 @@ func NewApp(pl Platform, lcd LCD, version string) *App {
 	btns := make(chan input.Event, 10)
 	ctx := NewContext(pl)
 	ctx.Version = version
-	ld := lcd.Dims()
 	a := &App{
-		ctx:   ctx,
-		err:   pl.Input(btns),
-		btns:  WakeupChan(ctx, btns),
-		lcd:   lcd,
-		frame: rgb16.New(image.Rectangle{Max: ld}),
+		ctx:  ctx,
+		err:  pl.Input(btns),
+		btns: WakeupChan(ctx, btns),
+		lcd:  lcd,
 	}
 	return a
 }
@@ -2679,18 +2676,19 @@ loop:
 		a.idle.timeout = time.NewTimer(idleTimeout).C
 	}
 	ops := a.root.Reset()
-	dims := a.frame.Bounds().Size()
+	frame := a.lcd.Framebuffer()
+	dims := frame.Bounds().Size()
 	a.scr.Layout(a.ctx, ops, dims, a.err)
 	layoutTime := time.Now()
-	dirty := a.root.Draw(a.frame)
+	dirty := a.root.Draw(frame)
 	renderTime := time.Now()
-	a.lcd.Draw(a.frame, dirty)
+	a.lcd.Dirty(dirty)
 	drawTime := time.Now()
 	if a.Debug {
 		if screenshot {
 			a.screenshotCounter++
 			name := fmt.Sprintf("screenshot%d.png", a.screenshotCounter)
-			dumpImage(a.ctx.Platform, name, a.frame)
+			dumpImage(a.ctx.Platform, name, frame)
 		}
 		log.Printf("frame: %v layout: %v render: %v draw: %v %v",
 			drawTime.Sub(start), layoutTime.Sub(start), renderTime.Sub(layoutTime), drawTime.Sub(renderTime), dirty)
@@ -2717,8 +2715,9 @@ func (a *App) saveScreen() {
 		case <-a.ctx.Wakeup:
 			return
 		default:
-			saver.Draw(&s, a.frame)
-			a.lcd.Draw(a.frame, a.frame.Bounds())
+			frame := a.lcd.Framebuffer()
+			saver.Draw(&s, frame)
+			a.lcd.Dirty(frame.Bounds())
 		}
 	}
 }

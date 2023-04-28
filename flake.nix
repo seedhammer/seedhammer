@@ -46,6 +46,7 @@
           mkkernel =
             let
               pkgs = crosspkgs;
+              panel-firmware = self.lib.${system}.panel-firmware;
             in
             debug: pkgs.stdenv.mkDerivation {
               name = "Raspberry Pi Linux kernel";
@@ -110,6 +111,8 @@
                   HOSTCFLAGS="-D_POSIX_C_SOURCE=200809L" \
                   bcmrpi_defconfig
 
+                ./scripts/config --set-str EXTRA_FIRMWARE panel.bin
+                ./scripts/config --set-str EXTRA_FIRMWARE_DIR ${panel-firmware}
                 # Disable networking (including bluetooth).
                 ./scripts/config --disable NET
                 ./scripts/config --disable INET
@@ -143,11 +146,18 @@
                 ./scripts/config --enable VIDEO_OV5647
                 # Enable SPI.
                 ./scripts/config --enable SPI_BCM2835
-                ./scripts/config --enable SPI_SPIDEV
                 # Enable FTDI USB serial driver.
                 ./scripts/config --enable USB_SERIAL
                 ./scripts/config --enable USB_SERIAL_CONSOLE
                 ./scripts/config --enable USB_SERIAL_FTDI_SIO
+                # Disable HDMI framebuffer device.
+                ./scripts/config --disable FB_BCM2708
+                # Enable display driver.
+                ./scripts/config --enable BACKLIGHT_GPIO
+                ./scripts/config --enable DRM
+                ./scripts/config --enable DRM_PANEL_MIPI_DBI
+                ./scripts/config --disable LOGO
+                ./scripts/config --enable FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER
               '' + (if debug then ''
                 ./scripts/config --disable CONFIG_USB_DWCOTG
                 ./scripts/config --enable CONFIG_USB_DWC2
@@ -175,9 +185,52 @@
                 cp arch/arm/boot/dts/*rpi-zero*.dtb $out/
                 cp arch/arm/boot/dts/overlays/dwc2.dtbo $out/overlays/
                 cp arch/arm/boot/dts/overlays/ov5647.dtbo $out/overlays/
+                cp arch/arm/boot/dts/overlays/mipi-dbi-spi.dtbo $out/overlays/
               '';
 
               allowedReferences = [ ];
+            };
+          panel-firmware =
+            let
+              pkgs = localpkgs;
+              # firmware is the commands required to initialize the st7789 panel.
+              firmware = pkgs.writeText "firmware.txt" ''
+                command 0x11 # exit sleep mode
+                delay 120
+
+                command 0x3A 0x05 # set pixel format 16-bit
+                command 0xB2 0x05 0x05 0x00 0x33 0x33 # PORCTRL
+                command 0xB7 0x75 # GCTRL
+                command 0xC2 0x01 0x0FF # VDVVRHEN
+                command 0xC3 0x13 # VHRS
+                command 0xC4 0x20 # VDVS
+                command 0xBB 0x22 # VCOMS
+                command 0xC5 0x20 # VCMOFSET
+                command 0xD0 0xA4 0xA1 # PWRCTRL1
+
+                # gamma
+                command 0xE0 0xD0 0x05 0x0A 0x09 0x08 0x05 0x2E 0x44 0x45 0x0F 0x17 0x16 0x2B 0x33
+                command 0xE1 0xD0 0x05 0x0A 0x09 0x08 0x05 0x2E 0x43 0x45 0x0F 0x16 0x16 0x2B 0x33
+
+                command 0x29 # display on
+                command 0x21 # invert mode
+
+                command 0x36 0x60 # set address mode
+              '';
+              firmware-converter = pkgs.fetchurl {
+                url = "https://raw.githubusercontent.com/notro/panel-mipi-dbi/374b15f78611c619c381c643c5b3a8b5d23f479b/mipi-dbi-cmd";
+                hash = "sha256-ZOx6l84IFpyooPFdgumCL2WUBqCKi0G36X6H8QjyNEc=";
+              };
+            in
+            pkgs.stdenvNoCC.mkDerivation {
+              name = "panel-firmware";
+
+              dontUnpack = true;
+
+              installPhase = ''
+                mkdir $out
+                ${pkgs.python3}/bin/python3 ${firmware-converter} $out/panel.bin ${firmware}
+              '';
             };
           mkinitramfs = debug:
             let
@@ -226,13 +279,22 @@
 
               initramfs = self.lib.${system}.mkinitramfs debug;
               img-name = if debug then "seedhammer-debug.img" else "seedhammer.img";
-              cmdlinetxt = pkgs.writeText "cmdline.txt" "console=tty1 rdinit=/controller oops=panic";
+              cmdlinetxt = pkgs.writeText "cmdline.txt" "console=tty1 rdinit=/controller oops=panic quiet";
               configtxt = pkgs.writeText "config.txt" (''
                 initramfs initramfs.cpio.gz followkernel
                 disable_splash=1
-                dtparam=spi=on
                 boot_delay=0
                 camera_auto_detect=1
+                dtoverlay=mipi-dbi-spi
+                dtparam=width=240
+                dtparam=height=240
+                dtparam=width-mm=23
+                dtparam=height-mm=23
+                dtparam=reset-gpio=27
+                dtparam=dc-gpio=25
+                dtparam=backlight-gpio=24
+                dtparam=write-only
+                dtparam=speed=40000000
               '' + (if debug then "dtoverlay=dwc2" else ""));
               util-linux = self.packages.${system}.util-linux;
             in

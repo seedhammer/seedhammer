@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/draw"
 	"io"
 	"reflect"
 	"strings"
@@ -695,11 +696,11 @@ func newRunner(t *testing.T) *runner {
 	return r
 }
 
-func (r *runner) Dims() image.Point {
-	return image.Point{}
+func (r *runner) Framebuffer() draw.RGBA64Image {
+	return rgb16.New(image.Rect(0, 0, 0, 0))
 }
 
-func (r *runner) Draw(src *rgb16.Image, sr image.Rectangle) error {
+func (r *runner) Dirty(sr image.Rectangle) error {
 	return nil
 }
 
