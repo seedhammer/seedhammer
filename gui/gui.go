@@ -335,6 +335,7 @@ func singlesigDescriptor(m bip39.Mnemonic, pass string) (urtypes.OutputDescripto
 	desc := urtypes.OutputDescriptor{
 		Threshold: 1,
 		Script:    urtypes.UnknownScript,
+		Type:      urtypes.Singlesig,
 		Keys: []urtypes.KeyDescriptor{
 			{
 				DerivationPath:    path,

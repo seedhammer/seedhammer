@@ -20,7 +20,7 @@ import (
 type OutputDescriptor struct {
 	Script    Script
 	Threshold int
-	Sorted    bool
+	Type      MultisigType
 	Keys      []KeyDescriptor
 }
 
@@ -85,6 +85,14 @@ func (s Script) String() string {
 	}
 }
 
+type MultisigType int
+
+const (
+	Singlesig MultisigType = iota
+	Multi
+	SortedMulti
+)
+
 // DerivationPath returns the standard derivation path
 // for descriptor. It returns nil if the path is unknown.
 func (o OutputDescriptor) DerivationPath() Path {
@@ -141,7 +149,8 @@ func (o OutputDescriptor) DerivationPath() Path {
 // [BCR-2020-010]: https://github.com/BlockchainCommons/Research/blob/master/papers/bcr-2020-010-output-desc.md
 func (o OutputDescriptor) Encode() []byte {
 	var v any
-	if len(o.Keys) > 1 {
+	switch o.Type {
+	case Multi, SortedMulti:
 		m := struct {
 			Threshold int        `cbor:"1,keyasint,omitempty"`
 			Keys      []cbor.Tag `cbor:"2,keyasint"`
@@ -155,18 +164,20 @@ func (o OutputDescriptor) Encode() []byte {
 			})
 		}
 		tag := tagMulti
-		if o.Sorted {
+		if o.Type == SortedMulti {
 			tag = tagSortedMulti
 		}
 		v = cbor.Tag{
 			Number:  uint64(tag),
 			Content: m,
 		}
-	} else {
+	case Singlesig:
 		v = cbor.Tag{
 			Number:  tagHDKey,
 			Content: o.Keys[0].toCBOR(),
 		}
+	default:
+		panic("invalid type")
 	}
 	var tags []uint64
 	switch o.Script {
@@ -477,16 +488,18 @@ func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (OutputDescriptor, err
 	}
 	switch funcNumber {
 	case tagHDKey: // singlesig
+		desc.Type = Singlesig
 		k, err := parseHDKey(enc)
 		if err != nil {
 			return OutputDescriptor{}, err
 		}
 		desc.Threshold = 1
 		desc.Keys = append(desc.Keys, k)
-	case tagSortedMulti:
-		desc.Sorted = true
-		fallthrough
-	case tagMulti:
+	case tagMulti, tagSortedMulti:
+		desc.Type = Multi
+		if funcNumber == tagSortedMulti {
+			desc.Type = SortedMulti
+		}
 		var m multi
 		if err := mode.Unmarshal(enc, &m); err != nil {
 			return OutputDescriptor{}, err

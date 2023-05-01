@@ -107,8 +107,12 @@ func genPlate(m0 bip39.Mnemonic) backup.PlateDesc {
 		KeyIdx: 0,
 		Descriptor: urtypes.OutputDescriptor{
 			Threshold: *threshold,
+			Type:      urtypes.Singlesig,
 			Script:    urtypes.P2WSH,
 		},
+	}
+	if *threshold > 1 {
+		plate.Descriptor.Type = urtypes.SortedMulti
 	}
 	if *seedonly {
 		plate.Descriptor.Script = urtypes.UnknownScript

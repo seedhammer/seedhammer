@@ -39,7 +39,7 @@ func TestOutputDescriptor(t *testing.T) {
 	twoOfThree := OutputDescriptor{
 		Script:    P2WSH,
 		Threshold: 2,
-		Sorted:    true,
+		Type:      SortedMulti,
 		Keys: []KeyDescriptor{
 			{
 				MasterFingerprint: 0xdd4fadee,
@@ -72,6 +72,7 @@ func TestOutputDescriptor(t *testing.T) {
 			OutputDescriptor{
 				Script:    P2WSH,
 				Threshold: 1,
+				Type:      Multi,
 				Keys: []KeyDescriptor{
 					{
 						Children: []Derivation{
