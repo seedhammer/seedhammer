@@ -950,7 +950,7 @@ func validateDescriptor(desc urtypes.OutputDescriptor) error {
 	// descriptor. Note that this is impossible by construction and by exhaustive
 	// tests, but it's good to be paranoid.
 	if !backup.Recoverable(desc) {
-		return errors.New("Descriptor is not recoverable. That is a bug in the program; please report it.")
+		return errors.New("Descriptor is not recoverable. This is a bug in the program; please report it.")
 	}
 	return nil
 }

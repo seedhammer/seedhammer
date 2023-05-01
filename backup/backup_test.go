@@ -69,9 +69,9 @@ func TestEngrave(t *testing.T) {
 		seedLen   int
 	}{
 		// Seed only variants.
-		{1, 1, 0, urtypes.UnknownScript, 12},
-		{1, 1, 0, urtypes.UnknownScript, 24},
-		{1, 1, 1, urtypes.UnknownScript, 24},
+		{1, 1, 0, urtypes.P2SH, 12},
+		{1, 1, 0, urtypes.P2TR, 24},
+		{1, 1, 1, urtypes.P2WPKH, 24},
 
 		{1, 1, 0, urtypes.P2WSH, 12},
 		{1, 1, 0, urtypes.P2WSH, 24},
@@ -97,7 +97,11 @@ func TestEngrave(t *testing.T) {
 				Threshold: test.threshold,
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
-			plateDesc := genTestPlate(t, desc, desc.DerivationPath(), test.seedLen, 0)
+			path := desc.DerivationPath()
+			if path == nil {
+				t.Fatal("no derivation path for descriptor")
+			}
+			plateDesc := genTestPlate(t, desc, path, test.seedLen, 0)
 			const ppmm = 4
 			plate, err := Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
 			if err != nil {

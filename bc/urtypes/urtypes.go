@@ -88,44 +88,43 @@ func (s Script) String() string {
 // DerivationPath returns the standard derivation path
 // for descriptor. It returns nil if the path is unknown.
 func (o OutputDescriptor) DerivationPath() Path {
-	multisig := len(o.Keys) > 1
 	switch {
-	case o.Type == P2WPKH && !multisig:
+	case o.Type == P2WPKH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 84,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Type == P2PKH && !multisig:
+	case o.Type == P2PKH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 44,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Type == P2SH_P2WPKH && !multisig:
+	case o.Type == P2SH_P2WPKH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 49,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Type == P2TR && !multisig:
+	case o.Type == P2TR:
 		return Path{
 			hdkeychain.HardenedKeyStart + 86,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Type == P2SH && multisig:
+	case o.Type == P2SH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 45,
 		}
-	case o.Type == P2SH_P2WSH && multisig:
+	case o.Type == P2SH_P2WSH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 48,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 1,
 		}
-	case o.Type == P2WSH && multisig:
+	case o.Type == P2WSH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 48,
 			hdkeychain.HardenedKeyStart + 0,
