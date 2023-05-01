@@ -82,11 +82,11 @@ func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 		case "Format":
 			switch val {
 			case "P2WSH":
-				desc.Type = urtypes.P2WSH
+				desc.Script = urtypes.P2WSH
 			case "P2SH":
-				desc.Type = urtypes.P2SH
+				desc.Script = urtypes.P2SH
 			case "P2WSH-P2SH":
-				desc.Type = urtypes.P2SH_P2WSH
+				desc.Script = urtypes.P2SH_P2WSH
 			default:
 				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: unknown format %q", val)
 			}

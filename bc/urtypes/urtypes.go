@@ -18,7 +18,7 @@ import (
 )
 
 type OutputDescriptor struct {
-	Type      Script
+	Script    Script
 	Threshold int
 	Sorted    bool
 	Keys      []KeyDescriptor
@@ -89,42 +89,42 @@ func (s Script) String() string {
 // for descriptor. It returns nil if the path is unknown.
 func (o OutputDescriptor) DerivationPath() Path {
 	switch {
-	case o.Type == P2WPKH:
+	case o.Script == P2WPKH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 84,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Type == P2PKH:
+	case o.Script == P2PKH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 44,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Type == P2SH_P2WPKH:
+	case o.Script == P2SH_P2WPKH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 49,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Type == P2TR:
+	case o.Script == P2TR:
 		return Path{
 			hdkeychain.HardenedKeyStart + 86,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Type == P2SH:
+	case o.Script == P2SH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 45,
 		}
-	case o.Type == P2SH_P2WSH:
+	case o.Script == P2SH_P2WSH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 48,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 1,
 		}
-	case o.Type == P2WSH:
+	case o.Script == P2WSH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 48,
 			hdkeychain.HardenedKeyStart + 0,
@@ -169,7 +169,7 @@ func (o OutputDescriptor) Encode() []byte {
 		}
 	}
 	var tags []uint64
-	switch o.Type {
+	switch o.Script {
 	case P2SH:
 		tags = []uint64{tagSH}
 	case P2SH_P2WSH:
@@ -444,26 +444,26 @@ func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (OutputDescriptor, err
 	tags = tags[1:]
 	switch first {
 	case tagSH:
-		desc.Type = P2SH
+		desc.Script = P2SH
 		if len(tags) == 0 {
 			break
 		}
 		switch tags[0] {
 		case tagWSH:
-			desc.Type = P2SH_P2WSH
+			desc.Script = P2SH_P2WSH
 			tags = tags[1:]
 		case tagWPKH:
-			desc.Type = P2SH_P2WPKH
+			desc.Script = P2SH_P2WPKH
 			tags = tags[1:]
 		}
 	case tagP2PKH:
-		desc.Type = P2PKH
+		desc.Script = P2PKH
 	case tagTR:
-		desc.Type = P2TR
+		desc.Script = P2TR
 	case tagWSH:
-		desc.Type = P2WSH
+		desc.Script = P2WSH
 	case tagWPKH:
-		desc.Type = P2WPKH
+		desc.Script = P2WPKH
 	default:
 		return OutputDescriptor{}, fmt.Errorf("unknown script type tag: %d", first)
 	}

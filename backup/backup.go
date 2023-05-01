@@ -87,7 +87,7 @@ func Engrave(scale, strokeWidth float32, plate PlateDesc) (Plate, error) {
 	constant := engrave.NewConstantStringer(plate.Font, scalef(plateFontSize), bip39.Shortest, bip39.Longest)
 	for _, sz := range []PlateSize{SmallPlate, SquarePlate, LargePlate} {
 		p := Plate{Size: sz}
-		seedOnly := plate.Descriptor.Type == urtypes.UnknownScript
+		seedOnly := plate.Descriptor.Script == urtypes.UnknownScript
 		b := p.Size.Bounds()
 		b = image.Rect(
 			scalef(float32(b.Min.X)), scalef(float32(b.Min.Y)),
@@ -256,7 +256,7 @@ func frontSide(scale func(float32) int, constant *engrave.ConstantStringer, stro
 
 	maxCol1 := 16
 	maxCol2 := 4
-	seedOnly := plate.Descriptor.Type == urtypes.UnknownScript
+	seedOnly := plate.Descriptor.Script == urtypes.UnknownScript
 	switch {
 	case seedOnly && size == SmallPlate:
 		// 12 words on this side, the rest on the other.

@@ -37,7 +37,7 @@ func TestDecode(t *testing.T) {
 
 func TestOutputDescriptor(t *testing.T) {
 	twoOfThree := OutputDescriptor{
-		Type:      P2WSH,
+		Script:    P2WSH,
 		Threshold: 2,
 		Sorted:    true,
 		Keys: []KeyDescriptor{
@@ -70,7 +70,7 @@ func TestOutputDescriptor(t *testing.T) {
 	}{
 		{
 			OutputDescriptor{
-				Type:      P2WSH,
+				Script:    P2WSH,
 				Threshold: 1,
 				Keys: []KeyDescriptor{
 					{
@@ -105,7 +105,7 @@ func TestOutputDescriptor(t *testing.T) {
 		},
 		{
 			OutputDescriptor{
-				Type: P2WPKH, Threshold: 1, Keys: []KeyDescriptor{
+				Script: P2WPKH, Threshold: 1, Keys: []KeyDescriptor{
 					{
 						MasterFingerprint: 0x9c43e6c2,
 						DerivationPath:    Path{hdkeychain.HardenedKeyStart + 84, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart},
@@ -119,7 +119,7 @@ func TestOutputDescriptor(t *testing.T) {
 		},
 		{
 			OutputDescriptor{
-				Type: P2SH_P2WPKH, Threshold: 1, Keys: []KeyDescriptor{
+				Script: P2SH_P2WPKH, Threshold: 1, Keys: []KeyDescriptor{
 					{
 						MasterFingerprint: 0x9866232b,
 						DerivationPath:    Path{hdkeychain.HardenedKeyStart + 49, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart},
@@ -133,7 +133,7 @@ func TestOutputDescriptor(t *testing.T) {
 		},
 		{
 			OutputDescriptor{
-				Type: P2PKH, Threshold: 1, Keys: []KeyDescriptor{
+				Script: P2PKH, Threshold: 1, Keys: []KeyDescriptor{
 					{
 						MasterFingerprint: 0x9866232b,
 						DerivationPath:    Path{hdkeychain.HardenedKeyStart + 44, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart},
@@ -147,7 +147,7 @@ func TestOutputDescriptor(t *testing.T) {
 		},
 		{
 			OutputDescriptor{
-				Type: P2TR, Threshold: 1, Keys: []KeyDescriptor{
+				Script: P2TR, Threshold: 1, Keys: []KeyDescriptor{
 					{
 						MasterFingerprint: 0x9866232b,
 						DerivationPath:    Path{hdkeychain.HardenedKeyStart + 86, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart},

@@ -43,7 +43,7 @@ func TestEngraveErrors(t *testing.T) {
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("error-%d", i), func(t *testing.T) {
 			desc := urtypes.OutputDescriptor{
-				Type:      urtypes.P2WSH,
+				Script:    urtypes.P2WSH,
 				Threshold: test.threshold,
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
@@ -93,7 +93,7 @@ func TestEngrave(t *testing.T) {
 		name := fmt.Sprintf("%d-%d-of-%d-%d-words", i, test.threshold, test.keys, test.seedLen)
 		t.Run(name, func(t *testing.T) {
 			desc := urtypes.OutputDescriptor{
-				Type:      test.script,
+				Script:    test.script,
 				Threshold: test.threshold,
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
@@ -182,7 +182,7 @@ func TestSplitUR(t *testing.T) {
 	for n := 1; n <= maxShares; n++ {
 		for m := 1; m <= n; m++ {
 			desc := urtypes.OutputDescriptor{
-				Type:      urtypes.P2WSH,
+				Script:    urtypes.P2WSH,
 				Threshold: m,
 				Keys:      make([]urtypes.KeyDescriptor, n),
 			}

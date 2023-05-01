@@ -29,7 +29,7 @@ DD4FADEE: xpub6DnediUuY8Pcc6Fej8Yt2ZntPCyFdpbHBkNV7EawesRMbc6i9MKKMhKEv4JMMzwDJc
 		t.Fatal(err)
 	}
 	want := urtypes.OutputDescriptor{
-		Type:      urtypes.P2WSH,
+		Script:    urtypes.P2WSH,
 		Threshold: 2,
 		Keys: []urtypes.KeyDescriptor{
 			{

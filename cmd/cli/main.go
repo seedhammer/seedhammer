@@ -107,11 +107,11 @@ func genPlate(m0 bip39.Mnemonic) backup.PlateDesc {
 		KeyIdx: 0,
 		Descriptor: urtypes.OutputDescriptor{
 			Threshold: *threshold,
-			Type:      urtypes.P2WSH,
+			Script:    urtypes.P2WSH,
 		},
 	}
 	if *seedonly {
-		plate.Descriptor.Type = urtypes.UnknownScript
+		plate.Descriptor.Script = urtypes.UnknownScript
 	}
 	for i := 0; i < *shares; i++ {
 		var m bip39.Mnemonic

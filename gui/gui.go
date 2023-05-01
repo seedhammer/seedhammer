@@ -334,7 +334,7 @@ func singlesigDescriptor(m bip39.Mnemonic, pass string) (urtypes.OutputDescripto
 	}
 	desc := urtypes.OutputDescriptor{
 		Threshold: 1,
-		Type:      urtypes.UnknownScript,
+		Script:    urtypes.UnknownScript,
 		Keys: []urtypes.KeyDescriptor{
 			{
 				DerivationPath:    path,
@@ -486,7 +486,7 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 	}
 	bodytxt.Y += infoSpacing
 	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Script")
-	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Type.String())
+	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Script.String())
 
 	ops.Begin()
 	for _, l := range bodytxt.Lines {

@@ -30,14 +30,14 @@ import (
 func TestDescriptorScreenError(t *testing.T) {
 	ctx := NewContext(newPlatform())
 	dupDesc := urtypes.OutputDescriptor{
-		Type:      urtypes.P2WSH,
+		Script:    urtypes.P2WSH,
 		Threshold: 2,
 		Keys:      make([]urtypes.KeyDescriptor, 2),
 	}
 	fillDescriptor(t, dupDesc, dupDesc.DerivationPath(), 12, 0)
 	dupDesc.Keys[1] = dupDesc.Keys[0]
 	smallDesc := urtypes.OutputDescriptor{
-		Type:      urtypes.P2WSH,
+		Script:    urtypes.P2WSH,
 		Threshold: 2,
 		Keys:      make([]urtypes.KeyDescriptor, 5),
 	}
@@ -66,7 +66,7 @@ func TestDescriptorScreenError(t *testing.T) {
 func TestValidateDescriptor(t *testing.T) {
 	// Duplicate key.
 	dup := urtypes.OutputDescriptor{
-		Type:      urtypes.P2WSH,
+		Script:    urtypes.P2WSH,
 		Threshold: 1,
 		Keys:      make([]urtypes.KeyDescriptor, 2),
 	}
@@ -75,7 +75,7 @@ func TestValidateDescriptor(t *testing.T) {
 
 	// Threshold too small.
 	smallDesc := urtypes.OutputDescriptor{
-		Type:      urtypes.P2WSH,
+		Script:    urtypes.P2WSH,
 		Threshold: 2,
 		Keys:      make([]urtypes.KeyDescriptor, 5),
 	}
@@ -83,7 +83,7 @@ func TestValidateDescriptor(t *testing.T) {
 
 	// Non-standard derivation path.
 	nonStandard := urtypes.OutputDescriptor{
-		Type:      urtypes.P2WSH,
+		Script:    urtypes.P2WSH,
 		Threshold: 2,
 		Keys:      make([]urtypes.KeyDescriptor, 2),
 	}
@@ -212,7 +212,7 @@ func TestEngraveScreenError(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := NewContext(newPlatform())
 			desc := urtypes.OutputDescriptor{
-				Type:      urtypes.P2WSH,
+				Script:    urtypes.P2WSH,
 				Threshold: test.threshold,
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
@@ -888,7 +888,7 @@ var twoOfThree = struct {
 }{
 	Mnemonic: mnemonicFor("flip begin artist fringe online release swift genre wool general transfer arm"),
 	Descriptor: urtypes.OutputDescriptor{
-		Type:      urtypes.P2WSH,
+		Script:    urtypes.P2WSH,
 		Threshold: 2,
 		Sorted:    true,
 		Keys: []urtypes.KeyDescriptor{
