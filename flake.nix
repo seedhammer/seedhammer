@@ -441,37 +441,32 @@
             libcamera =
               let
                 pkgs = crosspkgs;
+                cpu = pkgs.targetPlatform.parsed.cpu;
                 cross-file = pkgs.writeText "cross-file.conf" ''
                   [properties]
                   needs_exe_wrapper = true
 
                   [host_machine]
                   system = 'linux'
-                  cpu_family = 'arm'
-                  cpu = 'armv6l'
+                  cpu_family = '${cpu.family}'
+                  cpu = '${cpu.name}'
                   endian = 'little'
-
-                  [binaries]
-                  llvm-config = 'llvm-config-native'
                 '';
               in
-              pkgs.stdenv.mkDerivation {
-                name = "libcamera";
+              pkgs.stdenv.mkDerivation rec {
+                pname = "libcamera";
+                version = "0.0.5";
 
                 src = pkgs.fetchgit {
                   url = "https://git.libcamera.org/libcamera/libcamera.git";
-                  rev = "v0.0.4";
-                  hash = "sha256-MFf/qH7QBZfZ0v3AmYEGMKEHnB0/Qf6WYFYvHAIV6Cw=";
+                  rev = "v${version}";
+                  hash = "sha256-rd1YIEosg4+H/FJBYCoxdQlV9F0evU5fckHJrSdVPOE";
                 };
 
                 patches = [
                   # Disable IPA signature validation: we don't need it and it depends
                   # on openssl which is fiddly to build reproducibly.
                   ./patches/libcamera_disable_signature.patch
-
-                  # Open V4L2 devices with O_CLOEXEC so that our debug builds
-                  # can reload themselves while using the camera.
-                  ./patches/libcamera_cloexec.patch
                 ];
 
                 postPatch = ''
@@ -505,7 +500,6 @@
                     -Dpipelines=raspberrypi \
                     -Ddocumentation=disabled \
                     -Dlc-compliance=disabled \
-                    -Dwerror=false \
                     --cross-file=${cross-file} \
                     --buildtype=plain \
                     --prefix=/ \
@@ -515,9 +509,9 @@
 
                 installPhase = ''
                   mkdir -p $out/lib/libcamera $out/share/libcamera/ipa/raspberrypi $out/include
-                  cp -P ./src/libcamera/base/libcamera-base.so.0.0.4 \
+                  cp -P ./src/libcamera/base/libcamera-base.so.${version} \
                     ./src/libcamera/base/libcamera-base.so \
-                    ./src/libcamera/libcamera.so.0.0.4 \
+                    ./src/libcamera/libcamera.so.${version} \
                     ./src/libcamera/libcamera.so \
                     $out/lib
                   cp ./src/ipa/raspberrypi/ipa_rpi.so $out/lib/libcamera
