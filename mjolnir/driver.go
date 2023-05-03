@@ -37,7 +37,7 @@ const (
 const (
 	cmdSize = 10
 
-	defaultMoveSpeed  = .75
+	defaultMoveSpeed  = .5
 	defaultPrintSpeed = .1
 )
 
