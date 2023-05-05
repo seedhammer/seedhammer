@@ -91,8 +91,11 @@ func TestEngrave(t *testing.T) {
 		{9, 10, 0, urtypes.P2SH_P2WSH, 12},
 	}
 	for i, test := range tests {
+		i, test := i, test
 		name := fmt.Sprintf("%d-%d-of-%d-%d-words", i, test.threshold, test.keys, test.seedLen)
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			desc := urtypes.OutputDescriptor{
 				Script:    test.script,
 				Threshold: test.threshold,
@@ -180,26 +183,33 @@ func TestEngrave(t *testing.T) {
 }
 
 func TestSplitUR(t *testing.T) {
+	t.Parallel()
+
 	maxShares := 15
 	if testing.Short() {
 		maxShares = 10
 	}
 	for n := 1; n <= maxShares; n++ {
-		for m := 1; m <= n; m++ {
-			desc := urtypes.OutputDescriptor{
-				Script:    urtypes.P2WSH,
-				Threshold: m,
-				Type:      urtypes.Singlesig,
-				Keys:      make([]urtypes.KeyDescriptor, n),
+		n := n
+		name := fmt.Sprintf("%d-shares", n)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for m := 1; m <= n; m++ {
+				desc := urtypes.OutputDescriptor{
+					Script:    urtypes.P2WSH,
+					Threshold: m,
+					Type:      urtypes.Singlesig,
+					Keys:      make([]urtypes.KeyDescriptor, n),
+				}
+				if len(desc.Keys) > 1 {
+					desc.Type = urtypes.Multi
+				}
+				genTestPlate(t, desc, desc.DerivationPath(), 12, 0)
+				if !Recoverable(desc) {
+					t.Errorf("%d-of-%d: failed to recover", m, n)
+				}
 			}
-			if len(desc.Keys) > 1 {
-				desc.Type = urtypes.Multi
-			}
-			genTestPlate(t, desc, desc.DerivationPath(), 12, 0)
-			if !Recoverable(desc) {
-				t.Errorf("%d-of-%d: failed to recover", m, n)
-			}
-		}
+		})
 	}
 }
 
