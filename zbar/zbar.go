@@ -42,6 +42,9 @@ func Scan(img *image.Gray) ([][]byte, error) {
 	if res := C.zbar_image_scanner_set_config(scanner, C.ZBAR_QRCODE, C.ZBAR_CFG_BINARY, 1); res != 0 {
 		return nil, fmt.Errorf("zbar: set_config(CFG_BINARY) failed with error code %d", res)
 	}
+	if res := C.zbar_image_scanner_set_config(scanner, 0, C.ZBAR_CFG_TEST_INVERTED, 1); res != 0 {
+		return nil, fmt.Errorf("zbar: set_config(ZBAR_CFG_TEST_INVERTED) failed with error code %d", res)
+	}
 
 	var results [][]byte
 	switch status := C.zbar_scan_image(scanner, image); status {
