@@ -1,4 +1,4 @@
-// package mjolnir implements a driver for the MarkgWay engraving
+// package mjolnir implements a driver for the MarkingWay engraving
 // machine.
 package mjolnir
 
@@ -302,7 +302,9 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	}
 
 	moveTo := func(p image.Point) {
-		move := new(Program)
+		move := &Program{
+			DryRun: prog.DryRun,
+		}
 		f := func() {
 			move.Move(p)
 		}
@@ -313,12 +315,32 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	}
 
 	setSpeeds(300, 300, 0xe6)
-	// Move to origin.
+
+	// Prepare the machine: (1) reset the origin and
+	// (2) exercise the needle. The first is necessary because
+	// the absolute position of the needle is not known at startup.
+	// The second is because some machine needles are stuck for
+	// the first few engravings.
 	origin()
-	// Avoid false origin.
-	off := int(math.Round(10 * Millimeter))
-	moveTo(image.Pt(off, off))
+	reset := &Program{
+		DryRun: prog.DryRun,
+	}
+	runReset := func() {
+		off := int(math.Round(10 * Millimeter))
+		const steps = 3
+		for i := 0; i < steps; i++ {
+			coord0 := off * (i + 0) / steps
+			reset.Line(image.Pt(coord0, coord0))
+			coord1 := off * (i + 1) / steps
+			reset.Move(image.Pt(coord1, coord1))
+		}
+	}
+	runReset()
+	reset.Prepare()
+	go runReset()
+	runProgram(reset, nil)
 	origin()
+
 	// 0 lowest, 1 highest.
 	moveSpeed := prog.MoveSpeed
 	printSpeed := prog.PrintSpeed
