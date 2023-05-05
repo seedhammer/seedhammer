@@ -1,3 +1,5 @@
+//go:build arm
+
 // package camera implements an interface to the libcamera2
 // camera driver.
 package camera
