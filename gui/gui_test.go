@@ -183,13 +183,13 @@ func TestEngraveScreenCancel(t *testing.T) {
 	ctxButton(ctx, input.Button1)
 	// Hold confirm.
 	ctxPress(ctx, input.Button3)
-	done := scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if done {
+	res := scr.Layout(ctx, op.Ctx{}, image.Point{})
+	if res != ResultNone {
 		t.Error("exited screen without confirmation")
 	}
 	p.timeOffset += confirmDelay
-	done = scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if !done {
+	res = scr.Layout(ctx, op.Ctx{}, image.Point{})
+	if res != ResultCancelled {
 		t.Error("failed to exit screen")
 	}
 }
@@ -247,7 +247,7 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	}
 	// Hold connect.
 	ctxPress(ctx, input.Button3)
-	if done := scr.Layout(ctx, op.Ctx{}, image.Point{}); done {
+	if res := scr.Layout(ctx, op.Ctx{}, image.Point{}); res != ResultNone {
 		t.Error("exited screen without confirmation")
 	}
 	p.timeOffset += confirmDelay
@@ -262,7 +262,7 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	p.engrave.ioErr = errors.New("error during engraving")
 	// Hold connect.
 	ctxPress(ctx, input.Button3)
-	if done := scr.Layout(ctx, op.Ctx{}, image.Point{}); done {
+	if res := scr.Layout(ctx, op.Ctx{}, image.Point{}); res != ResultNone {
 		t.Error("exited screen without confirmation")
 	}
 	p.timeOffset += confirmDelay
@@ -275,8 +275,8 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	}
 	// Dismiss error and verify screen exits.
 	ctxButton(ctx, input.Button3)
-	done := scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if !done {
+	res := scr.Layout(ctx, op.Ctx{}, image.Point{})
+	if res != ResultCancelled {
 		t.Fatal("screen didn't exit after fatal engraver error")
 	}
 	// Verify device was closed.

@@ -382,6 +382,10 @@ func deriveMasterKey(m bip39.Mnemonic, pass string) (*hdkeychain.ExtendedKey, bo
 
 const infoSpacing = 8
 
+func (s *DescriptorScreen) inputSeed(ctx *Context) {
+	s.seed = NewEmptySeedScreen(ctx, "Input Share")
+}
+
 func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bool {
 	th := &descriptorTheme
 	for {
@@ -415,14 +419,17 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 			s.engrave = eng
 			continue
 		case s.engrave != nil:
-			done := s.engrave.Layout(ctx, ops.Begin(), dims)
+			res := s.engrave.Layout(ctx, ops.Begin(), dims)
 			dialog := ops.End()
-			if !done {
+			switch res {
+			case ResultNone:
 				dialog.Add(ops)
 				return false
+			case ResultCancelled:
+				s.seed = NewSeedScreen(ctx, s.mnemonic)
+			case ResultComplete:
+				s.inputSeed(ctx)
 			}
-
-			s.seed = NewSeedScreen(ctx, s.mnemonic)
 			s.engrave = nil
 			continue
 		case s.warning != nil:
@@ -456,7 +463,7 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 				s.warning = NewErrorScreen(err)
 				continue
 			}
-			s.seed = NewEmptySeedScreen(ctx, "Input Share")
+			s.inputSeed(ctx)
 		}
 	}
 
@@ -1086,7 +1093,15 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 	return false
 }
 
-func (s *EngraveScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bool {
+type Result int
+
+const (
+	ResultNone Result = iota
+	ResultCancelled
+	ResultComplete
+)
+
+func (s *EngraveScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) Result {
 loop:
 	for {
 		select {
@@ -1111,7 +1126,7 @@ loop:
 			ctx.Calibrated = true
 			s.step++
 			if s.step == len(s.instructions) {
-				return true
+				return ResultComplete
 			}
 		default:
 			break loop
@@ -1147,7 +1162,7 @@ loop:
 			switch result {
 			case ConfirmYes:
 				s.close()
-				return true
+				return ResultCancelled
 			case ConfirmNo:
 				s.cancel = nil
 				continue
@@ -1160,7 +1175,7 @@ loop:
 				s.engrave.warning = nil
 				if s.engrave.fatal {
 					s.close()
-					return true
+					return ResultCancelled
 				}
 				continue
 			}
@@ -1204,7 +1219,7 @@ loop:
 				break
 			}
 			if s.moveStep(ctx) {
-				return true
+				return ResultComplete
 			}
 		}
 	}
@@ -1278,7 +1293,7 @@ loop:
 			layoutNavigation(ctx, ops, th, dims, NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconRight})
 		}
 	}
-	return false
+	return ResultNone
 }
 
 func plateImage(p backup.PlateSize) image.RGBA64Image {
@@ -1423,7 +1438,7 @@ var (
 
 	EngraveSuccess = []Instruction{
 		{
-			Body: "Completed successfully.\nClick continue to return to the seed.",
+			Body: "Engraving completed successfully.",
 		},
 	}
 )
@@ -2317,8 +2332,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			if m == nil {
 				break
 			}
-			s.mnemonic = m
-			desc, ok := singlesigDescriptor(s.mnemonic, passphrase)
+			desc, ok := singlesigDescriptor(m, passphrase)
 			if !ok {
 				s.warning = &ErrorScreen{
 					Title: "Invalid Seed",
@@ -2326,6 +2340,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				}
 				continue
 			}
+			s.mnemonic = m
 			s.seed = nil
 			eng, err := NewEngraveScreen(ctx, desc, s.mnemonic, passphrase)
 			if err != nil {
@@ -2361,13 +2376,15 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			}
 			continue
 		case s.engrave != nil:
-			done := s.engrave.Layout(ctx, ops.Begin(), dims)
+			res := s.engrave.Layout(ctx, ops.Begin(), dims)
 			dialog := ops.End()
-			if !done {
+			switch res {
+			case ResultNone:
 				dialog.Add(ops)
 				return
+			case ResultCancelled:
+				s.seed = NewSeedScreen(ctx, s.mnemonic)
 			}
-			s.seed = NewSeedScreen(ctx, s.mnemonic)
 			s.engrave = nil
 			continue
 		case s.desc != nil:
