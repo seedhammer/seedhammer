@@ -1517,12 +1517,18 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 					res = sqr
 				} else if sqr, err := bip39.ParseMnemonic(strings.ToLower(string(b))); err == nil {
 					res = sqr
+				} else if nonstandard.ElectrumSeed(string(b)) {
+					s.warning = &ErrorScreen{
+						Title: "Invalid Seed",
+						Body:  "Electrum seeds are not supported.",
+					}
+					continue
 				}
 			}
 			seed, ok := res.(bip39.Mnemonic)
 			if !ok {
 				s.warning = &ErrorScreen{
-					Title: "Error",
+					Title: "Invalid Seed",
 					Body:  "The scanned data does not represent a seed.",
 				}
 				continue
@@ -1628,7 +1634,15 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			if !s.Mnemonic.Valid() {
 				s.warning = &ErrorScreen{
 					Title: "Invalid Seed",
-					Body:  "The seed phrase is invalid.\nCheck the words and try again.",
+				}
+				var words []string
+				for _, w := range s.Mnemonic {
+					words = append(words, bip39.LabelFor(w))
+				}
+				if nonstandard.ElectrumSeed(strings.Join(words, " ")) {
+					s.warning.Body = "Electrum seeds are not supported."
+				} else {
+					s.warning.Body = "The seed phrase is invalid.\nCheck the words and try again."
 				}
 				break
 			}

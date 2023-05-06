@@ -59,3 +59,10 @@ DD4FADEE: xpub6DnediUuY8Pcc6Fej8Yt2ZntPCyFdpbHBkNV7EawesRMbc6i9MKKMhKEv4JMMzwDJc
 		t.Errorf("%q\ndecoded to\n%#v\nexpected\n%#v\n", bwdesc, got, want)
 	}
 }
+
+func TestElectrumSeed(t *testing.T) {
+	phrase := "head orient raw shoulder size fancy front cycle lamp giant camera jacket"
+	if !ElectrumSeed(phrase) {
+		t.Fatal("failed to detect Electrum seed")
+	}
+}
