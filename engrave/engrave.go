@@ -232,7 +232,7 @@ func bitmapForQRStatic(ver, dim int) ([]image.Point, []image.Point, bitmap) {
 		{0, dim - 7},
 	}
 	for _, p := range posMarkers {
-		fillPositionMarker(engraved, p)
+		fillMarker(engraved, p, positionMarker)
 	}
 	// Ignore aligment markers.
 	var alignMarkers []image.Point
@@ -243,7 +243,7 @@ func bitmapForQRStatic(ver, dim int) ([]image.Point, []image.Point, bitmap) {
 		alignMarkers = append(alignMarkers, image.Pt(20, 20))
 	}
 	for _, p := range alignMarkers {
-		fillAlignmentMarker(engraved, p)
+		fillMarker(engraved, p, alignmentMarker)
 	}
 	return posMarkers, alignMarkers, engraved
 }
@@ -366,72 +366,68 @@ func padQRModules(n int, content []byte, modules []image.Point) []image.Point {
 	return paddedModules
 }
 
-func fillAlignmentMarker(qr bitmap, off image.Point) {
-	fillMarker(qr, off, []image.Point{
-		{X: 0, Y: 0},
-		{X: 1, Y: 0},
-		{X: 2, Y: 0},
-		{X: 3, Y: 0},
-		{X: 4, Y: 0},
+var alignmentMarker = []image.Point{
+	{X: 0, Y: 0},
+	{X: 1, Y: 0},
+	{X: 2, Y: 0},
+	{X: 3, Y: 0},
+	{X: 4, Y: 0},
 
-		{X: 0, Y: 1},
-		{X: 0, Y: 2},
-		{X: 0, Y: 3},
+	{X: 4, Y: 1},
+	{X: 4, Y: 2},
+	{X: 4, Y: 3},
 
-		{X: 2, Y: 2},
+	{X: 4, Y: 4},
+	{X: 3, Y: 4},
+	{X: 2, Y: 4},
+	{X: 1, Y: 4},
+	{X: 0, Y: 4},
 
-		{X: 4, Y: 1},
-		{X: 4, Y: 2},
-		{X: 4, Y: 3},
+	{X: 0, Y: 3},
+	{X: 0, Y: 2},
+	{X: 0, Y: 1},
 
-		{X: 0, Y: 4},
-		{X: 1, Y: 4},
-		{X: 2, Y: 4},
-		{X: 3, Y: 4},
-		{X: 4, Y: 4},
-	})
+	{X: 2, Y: 2},
 }
 
-func fillPositionMarker(qr bitmap, off image.Point) {
-	fillMarker(qr, off, []image.Point{
-		{X: 0, Y: 0},
-		{X: 1, Y: 0},
-		{X: 2, Y: 0},
-		{X: 3, Y: 0},
-		{X: 4, Y: 0},
-		{X: 5, Y: 0},
-		{X: 6, Y: 0},
+var positionMarker = []image.Point{
+	{X: 0, Y: 0},
+	{X: 1, Y: 0},
+	{X: 2, Y: 0},
+	{X: 3, Y: 0},
+	{X: 4, Y: 0},
+	{X: 5, Y: 0},
+	{X: 6, Y: 0},
 
-		{X: 0, Y: 1},
-		{X: 0, Y: 2},
-		{X: 0, Y: 3},
-		{X: 0, Y: 4},
-		{X: 0, Y: 5},
+	{X: 6, Y: 1},
+	{X: 6, Y: 2},
+	{X: 6, Y: 3},
+	{X: 6, Y: 4},
+	{X: 6, Y: 5},
 
-		{X: 6, Y: 1},
-		{X: 6, Y: 2},
-		{X: 6, Y: 3},
-		{X: 6, Y: 4},
-		{X: 6, Y: 5},
+	{X: 6, Y: 6},
+	{X: 5, Y: 6},
+	{X: 4, Y: 6},
+	{X: 3, Y: 6},
+	{X: 2, Y: 6},
+	{X: 1, Y: 6},
+	{X: 0, Y: 6},
 
-		{X: 2, Y: 2},
-		{X: 3, Y: 2},
-		{X: 4, Y: 2},
-		{X: 2, Y: 3},
-		{X: 3, Y: 3},
-		{X: 4, Y: 3},
-		{X: 2, Y: 4},
-		{X: 3, Y: 4},
-		{X: 4, Y: 4},
+	{X: 0, Y: 5},
+	{X: 0, Y: 4},
+	{X: 0, Y: 3},
+	{X: 0, Y: 2},
+	{X: 0, Y: 1},
 
-		{X: 0, Y: 6},
-		{X: 1, Y: 6},
-		{X: 2, Y: 6},
-		{X: 3, Y: 6},
-		{X: 4, Y: 6},
-		{X: 5, Y: 6},
-		{X: 6, Y: 6},
-	})
+	{X: 2, Y: 2},
+	{X: 3, Y: 2},
+	{X: 4, Y: 2},
+	{X: 2, Y: 3},
+	{X: 3, Y: 3},
+	{X: 4, Y: 3},
+	{X: 2, Y: 4},
+	{X: 3, Y: 4},
+	{X: 4, Y: 4},
 }
 
 func fillMarker(engraved bitmap, off image.Point, points []image.Point) {
@@ -485,72 +481,18 @@ type constantQRCmd struct {
 }
 
 func (q constantQRCmd) engraveAlignMarker(p Program, off image.Point) {
-	q.engraveBorder(p, 5, 5, off)
-	q.engraveBlock(p, 1, 1, off.Add(image.Pt(2, 2)))
-}
-
-func (q constantQRCmd) engraveBorder(p Program, width, height int, off image.Point) {
-	sw := q.strokeWidth
-	radius := sw / 2
-	corner := image.Pt(radius, radius).Add(off.Mul(q.scale * sw))
-	line := func(pos image.Point) {
-		p.Line(corner.Add(pos.Mul(sw)))
-	}
-	move := func(pos image.Point) {
-		p.Move(corner.Add(pos.Mul(sw)))
-	}
-
-	q.engraveBlock(p, width, 1, off)
-	switch q.scale {
-	case 3:
-		w := (width*q.scale - 1)
-		h := ((height-1)*q.scale - 1)
-		// Right side.
-		line(image.Pt(w, 3+h))
-		move(image.Pt(w-1, 3+h))
-		line(image.Pt(w-1, 3))
-		move(image.Pt(w-2, 3))
-		line(image.Pt(w-2, 3+h))
-
-		// Bottom.
-		line(image.Pt(0, 3+h))
-		move(image.Pt(0, 2+h))
-		line(image.Pt(w-3, 2+h))
-		move(image.Pt(w-3, 1+h))
-		line(image.Pt(0, 1+h))
-
-		// Left side.
-		line(image.Pt(0, 3))
-		move(image.Pt(1, 3))
-		line(image.Pt(1, h))
-		move(image.Pt(2, h))
-		line(image.Pt(2, 3))
-	case 4:
-		// Left side.
-		q.engraveBlock(p, 1, height-2, off.Add(image.Pt(0, 1)))
-		// Bottom.
-		q.engraveBlock(p, width, 1, off.Add(image.Pt(0, height-1)))
-		// Right side.
-		q.engraveBlock(p, 1, height-2, off.Add(image.Pt(width-1, 1)))
+	for _, m := range alignmentMarker {
+		center := q.centerOf(m.Add(off))
+		p.Move(center)
+		q.engraveModule(p, center)
 	}
 }
 
 func (q constantQRCmd) engravePositionMarker(p Program, off image.Point) {
-	q.engraveBorder(p, 7, 7, off)
-	q.engraveBlock(p, 3, 3, off.Add(image.Pt(2, 2)))
-}
-
-func (q constantQRCmd) engraveBlock(p Program, width, height int, off image.Point) {
-	sw := q.strokeWidth
-	radius := sw / 2
-	corner := image.Pt(radius, radius).Add(off.Mul(q.scale * sw))
-	w := (width*q.scale - 1) * sw
-	x, y := 0, 0
-	for i := 0; i < height*q.scale; i++ {
-		p.Move(corner.Add(image.Pt(x, y)))
-		x = w - x
-		p.Line(corner.Add(image.Pt(x, y)))
-		y += sw
+	for _, m := range positionMarker {
+		center := q.centerOf(m.Add(off))
+		p.Move(center)
+		q.engraveModule(p, center)
 	}
 }
 
@@ -578,27 +520,32 @@ func (q constantQRCmd) Engrave(p Program) {
 		center := q.centerOf(m)
 		constantMove(p, center, prev, moveDist)
 		prev = center
-		switch q.scale {
-		case 3:
-			p.Line(center.Add(image.Pt(sw, 0)))
-			p.Line(center.Add(image.Pt(sw, sw)))
-			p.Line(center.Add(image.Pt(-sw, sw)))
-			p.Line(center.Add(image.Pt(-sw, -sw)))
-			p.Line(center.Add(image.Pt(sw, -sw)))
-		case 4:
-			p.Line(center.Add(image.Pt(-sw, 0)))
-			p.Line(center.Add(image.Pt(-sw, -sw)))
-			p.Line(center.Add(image.Pt(2*sw, -sw)))
-			p.Line(center.Add(image.Pt(2*sw, 2*sw)))
-			p.Line(center.Add(image.Pt(-sw, 2*sw)))
-			p.Line(center.Add(image.Pt(-sw, sw)))
-			p.Line(center.Add(image.Pt(sw, sw)))
-			p.Line(center.Add(image.Pt(sw, 0)))
-		}
+		q.engraveModule(p, center)
 		p.Line(center)
 	}
 	end := q.centerOf(q.end)
 	constantMove(p, end, prev, moveDist)
+}
+
+func (q constantQRCmd) engraveModule(p Program, center image.Point) {
+	sw := q.strokeWidth
+	switch q.scale {
+	case 3:
+		p.Line(center.Add(image.Pt(sw, 0)))
+		p.Line(center.Add(image.Pt(sw, sw)))
+		p.Line(center.Add(image.Pt(-sw, sw)))
+		p.Line(center.Add(image.Pt(-sw, -sw)))
+		p.Line(center.Add(image.Pt(sw, -sw)))
+	case 4:
+		p.Line(center.Add(image.Pt(-sw, 0)))
+		p.Line(center.Add(image.Pt(-sw, -sw)))
+		p.Line(center.Add(image.Pt(2*sw, -sw)))
+		p.Line(center.Add(image.Pt(2*sw, 2*sw)))
+		p.Line(center.Add(image.Pt(-sw, 2*sw)))
+		p.Line(center.Add(image.Pt(-sw, sw)))
+		p.Line(center.Add(image.Pt(sw, sw)))
+		p.Line(center.Add(image.Pt(sw, 0)))
+	}
 }
 
 func manhattanDist(p1, p2 image.Point) int {
