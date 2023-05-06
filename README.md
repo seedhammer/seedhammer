@@ -103,7 +103,7 @@ sends one or more button events to the device. Available buttons are: `up`, `dow
 $ echo "runes ACCIDENT" > $USBDEV
 ```
 
-sends text to the device, ending with an implicit `input b3`. Useful for scripting the input of seeds.
+sends text to the device, where every space and the newline sends an implicit `input b2`. Useful for scripting the input of seeds.
 
 ```
 $ echo "screenshot" > $USBDEV

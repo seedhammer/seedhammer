@@ -32,25 +32,33 @@ func newPlatform() *Platform {
 	return new(Platform)
 }
 
+func click(btn input.Button) {
+	inputCh <- input.Event{
+		Button:  btn,
+		Pressed: true,
+	}
+	inputCh <- input.Event{
+		Button:  btn,
+		Pressed: false,
+	}
+}
+
 func debugCommand(cmd string) error {
 	switch {
 	case strings.HasPrefix(cmd, "runes "):
-		cmd = cmd[len("input "):]
+		cmd = strings.ToUpper(cmd[len("runes "):])
 		for _, r := range cmd {
+			if r == ' ' {
+				click(input.Button2)
+				continue
+			}
 			inputCh <- input.Event{
 				Button:  input.Rune,
 				Rune:    r,
 				Pressed: true,
 			}
 		}
-		inputCh <- input.Event{
-			Button:  input.Button2,
-			Pressed: true,
-		}
-		inputCh <- input.Event{
-			Button:  input.Button2,
-			Pressed: false,
-		}
+		click(input.Button2)
 	case strings.HasPrefix(cmd, "input "):
 		cmd = cmd[len("input "):]
 		for _, name := range strings.Split(cmd, " ") {
@@ -77,14 +85,7 @@ func debugCommand(cmd string) error {
 				log.Printf("debug: unknown button: %s", name)
 				continue
 			}
-			inputCh <- input.Event{
-				Button:  btn,
-				Pressed: true,
-			}
-			inputCh <- input.Event{
-				Button:  btn,
-				Pressed: false,
-			}
+			click(btn)
 		}
 	case cmd == "goroutines":
 		pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
