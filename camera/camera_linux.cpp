@@ -176,7 +176,14 @@ int start_camera(unsigned int width, unsigned int height) {
   crop.width = width;
   crop.height = height;
   auto controls = std::make_unique<ControlList>();
-  controls.get()->set(libcamera::controls::ScalerCrop, crop);
+  controls.get()->set(controls::ScalerCrop, crop);
+  // Don't over-expose higlights. In our case a dark QR code on a
+  // white screen in a dark environment.
+  controls.get()->set(controls::AeConstraintMode,
+                      controls::ConstraintHighlight);
+  // Determine exposure from the center of the image.
+  controls.get()->set(controls::AeMeteringMode,
+                      controls::MeteringCentreWeighted);
   auto ret = camera->start(controls.get());
   if (ret != 0) {
     return ret;
