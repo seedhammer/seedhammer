@@ -114,7 +114,6 @@
                 ./scripts/config --disable EXT4_FS
                 ./scripts/config --disable F2FS_FS
                 ./scripts/config --disable PSTORE
-                ./scripts/config --disable NLS_CODEPAGE_437
                 ./scripts/config --disable INPUT_TOUCHSCREEN
                 ./scripts/config --disable RC_MAP
                 # Enable v4l2
@@ -147,8 +146,6 @@
                 ./scripts/config --disable CONFIG_USB_DWCOTG
                 ./scripts/config --enable CONFIG_USB_DWC2
                 ./scripts/config --enable CONFIG_USB_G_SERIAL
-                # For mounting the SD card.
-                ./scripts/config --enable NLS_CODEPAGE_437
               '' else "");
 
               buildPhase = ''
