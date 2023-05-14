@@ -116,6 +116,8 @@
                 ./scripts/config --disable PSTORE
                 ./scripts/config --disable INPUT_TOUCHSCREEN
                 ./scripts/config --disable RC_MAP
+                ./scripts/config --disable NAMESPACES
+                ./scripts/config --disable INPUT
                 # Enable v4l2
                 ./scripts/config --enable MEDIA_SUPPORT
                 ./scripts/config --enable VIDEO_V4L2
