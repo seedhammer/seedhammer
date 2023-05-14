@@ -142,9 +142,10 @@
                 ./scripts/config --enable DRM_PANEL_MIPI_DBI
                 ./scripts/config --disable LOGO
                 ./scripts/config --enable FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER
-              '' + (if debug then ''
+                # Enable slower but better supported USB driver.
                 ./scripts/config --disable CONFIG_USB_DWCOTG
                 ./scripts/config --enable CONFIG_USB_DWC2
+              '' + (if debug then ''
                 ./scripts/config --enable CONFIG_USB_G_SERIAL
               '' else "");
 
@@ -262,7 +263,7 @@
               initramfs = self.lib.${system}.mkinitramfs debug;
               img-name = if debug then "seedhammer-debug.img" else "seedhammer.img";
               cmdlinetxt = pkgs.writeText "cmdline.txt" "console=tty1 rdinit=/controller oops=panic quiet";
-              configtxt = pkgs.writeText "config.txt" (''
+              configtxt = pkgs.writeText "config.txt" ''
                 initramfs initramfs.cpio.gz followkernel
                 disable_splash=1
                 boot_delay=0
@@ -278,7 +279,8 @@
                 dtparam=backlight-gpio=24
                 dtparam=write-only
                 dtparam=speed=40000000
-              '' + (if debug then "dtoverlay=dwc2" else ""));
+                dtoverlay=dwc2
+              '';
               util-linux = self.packages.${system}.util-linux;
             in
             pkgs.stdenvNoCC.mkDerivation {
