@@ -436,7 +436,6 @@ int qr_code_data_list_extract_text(const qr_code_data_list *_qrlist,
 		    } break;
 		    /* DONE: This handles a multi-byte sequence split between
              multiple data blocks. */
-		    case QR_MODE_ECI:
 		    case QR_MODE_BYTE:
 		    case QR_MODE_KANJI: {
 			// copy byte to bytebuf
@@ -447,7 +446,7 @@ int qr_code_data_list_extract_text(const qr_code_data_list *_qrlist,
 			bytebuf_ntext += inleft;
 		    } break;
 		    /*Check to see if a character set was specified.*/
-		 //    case QR_MODE_ECI: {
+		   case QR_MODE_ECI: {
 			// const char *enc;
 			// char buf[16];
 			// // unsigned cur_eci;
@@ -473,7 +472,7 @@ int qr_code_data_list_extract_text(const qr_code_data_list *_qrlist,
 			//     continue;
 			// eci    = cur_eci;
 			// eci_cd = iconv_open("UTF-8", enc);
-		 //    } break;
+	     } break;
 		    /*Silence stupid compiler warnings.*/
 		    default:
 			break;
