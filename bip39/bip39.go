@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -178,9 +179,12 @@ func ParseMnemonic(mnemonic string) (Mnemonic, error) {
 	for i, w := range words {
 		closest, valid := ClosestWord(w)
 		if !valid || Wordlist[closest] != w {
-			return nil, fmt.Errorf("unknown word: %q", w)
+			return nil, fmt.Errorf("bip39: unknown word: %q", w)
 		}
 		bip39s[i] = closest
+	}
+	if !bip39s.Valid() {
+		return nil, errors.New("bip39: invalid checksum")
 	}
 	return bip39s, nil
 }

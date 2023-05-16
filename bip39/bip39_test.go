@@ -30,6 +30,18 @@ func TestVectors(t *testing.T) {
 	}
 }
 
+func TestInvalidSeeds(t *testing.T) {
+	tests := []string{
+		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon",
+	}
+	for _, test := range tests {
+		_, err := ParseMnemonic(test)
+		if err == nil {
+			t.Errorf("successfully parsed invalid seed %q", test)
+		}
+	}
+}
+
 func TestChecksumWord(t *testing.T) {
 	mnemonic := make(Mnemonic, 12)
 	for i := 0; i < 1e4; i++ {
