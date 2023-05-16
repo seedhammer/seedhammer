@@ -148,10 +148,8 @@ func TestDescriptorScreen(t *testing.T) {
 
 	// Accept seed, select 12 words.
 	ctxButton(ctx, input.Button3, input.Button3)
-	if ctx.EnableSeedScan {
-		// Select keyboard input.
-		ctxButton(ctx, input.Button3)
-	}
+	// Select keyboard input.
+	ctxButton(ctx, input.Button3)
 
 	// Enter seed not part of the descriptor.
 	mnemonic := make(bip39.Mnemonic, 12)
@@ -428,10 +426,8 @@ func TestMulti(t *testing.T) {
 	}
 	// Accept descriptor, select 12 words.
 	r.Button(t, input.Button3, input.Button3)
-	if r.app.ctx.EnableSeedScan {
-		// Select keyboard input.
-		r.Button(t, input.Button3)
-	}
+	// Select keyboard input.
+	r.Button(t, input.Button3)
 	for r.app.scr.desc.seed == nil {
 		r.Frame(t)
 	}
@@ -461,10 +457,8 @@ func TestSingle(t *testing.T) {
 
 	// Single sig, 12 words.
 	r.Button(t, input.Button3, input.Button3)
-	if r.app.ctx.EnableSeedScan {
-		// Select keyboard input.
-		r.Button(t, input.Button3)
-	}
+	// Select keyboard input.
+	r.Button(t, input.Button3)
 	for r.app.scr.seed == nil {
 		r.Frame(t)
 	}

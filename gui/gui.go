@@ -47,14 +47,13 @@ import (
 const nbuttons = 8
 
 type Context struct {
-	Buttons        [nbuttons]bool
-	Repeats        [nbuttons]time.Time
-	Platform       Platform
-	Styles         Styles
-	Calibrated     bool
-	EnableSeedScan bool
-	NoSDCard       bool
-	Version        string
+	Buttons    [nbuttons]bool
+	Repeats    [nbuttons]time.Time
+	Platform   Platform
+	Styles     Styles
+	Calibrated bool
+	NoSDCard   bool
+	Version    string
 
 	Wakeup chan struct{}
 	events []Event
@@ -67,10 +66,9 @@ type Event struct {
 
 func NewContext(pl Platform) *Context {
 	c := &Context{
-		Platform:       pl,
-		Wakeup:         make(chan struct{}, 1),
-		Styles:         NewStyles(),
-		EnableSeedScan: true,
+		Platform: pl,
+		Wakeup:   make(chan struct{}, 1),
+		Styles:   NewStyles(),
 	}
 	// Wake up initially.
 	c.Wakeup <- struct{}{}
@@ -1445,18 +1443,10 @@ var (
 
 func NewEmptySeedScreen(ctx *Context, title string) *SeedScreen {
 	s := &SeedScreen{}
-	if ctx.EnableSeedScan {
-		s.method = &ChoiceScreen{
-			Title:   title,
-			Lead:    "Choose input method",
-			Choices: []string{"KEYBOARD", "CAMERA"},
-		}
-	} else {
-		s.seedlen = &ChoiceScreen{
-			Title:   title,
-			Lead:    "Choose number of words",
-			Choices: []string{"12 WORDS", "24 WORDS"},
-		}
+	s.method = &ChoiceScreen{
+		Title:   title,
+		Lead:    "Choose input method",
+		Choices: []string{"KEYBOARD", "CAMERA"},
 	}
 	return s
 }
