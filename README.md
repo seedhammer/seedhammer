@@ -9,15 +9,15 @@ sensor.
 
 ## Installation
 
-Write `seedhammer-vX.Y.X.img.xz` to an SD-card and insert that into the SD-card
+Write `seedhammer-vX.Y.X.img` to an SD-card and insert that into the SD-card
 slot on the Raspberry Pi.
 
 ### Linux
 
-This command decompresses and writes the image to the block device `/dev/sdX`:
+The `dd` command writes the image to the block device `/dev/sdX`:
 
 ```sh
-$ xzcat result/seedhammer-vX.Y.Z.img.xz | dd of=/dev/sdX bs=1M
+$ dd if=result/seedhammer-vX.Y.Z.img of=/dev/sdX bs=1M
 ```
 
 ### macOS
