@@ -654,7 +654,6 @@
               dst="seedhammer-$VERSION.img"
 
               # Append the version string to the kernel cmdline, to be read by the controller binary.
-              # the image packages stores the partition offset for us.
               START=$(${self.packages.${system}.util-linux}/bin/fdisk -l -o Start $src|tail -n 1)
               OFFSET=$(( $START*512 ))
               ${pkgs.mtools}/bin/mcopy -bpm -i "$src@@$OFFSET" ::cmdline.txt "$TMPDIR/"
