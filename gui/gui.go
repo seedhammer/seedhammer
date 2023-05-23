@@ -2350,10 +2350,13 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			if res == nil {
 				continue
 			}
-			if b, ok := res.([]byte); ok {
-				res, _ = nonstandard.OutputDescriptor(b)
-			}
 			desc, ok := res.(urtypes.OutputDescriptor)
+			if !ok {
+				if b, isbytes := res.([]byte); isbytes {
+					d, err := nonstandard.OutputDescriptor(b)
+					desc, ok = d, err == nil
+				}
+			}
 			if !ok {
 				s.warning = &ErrorScreen{
 					Title: "Error",
