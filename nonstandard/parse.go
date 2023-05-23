@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -33,40 +32,43 @@ func ElectrumSeed(phrase string) bool {
 	return false
 }
 
-func OutputDescriptor(enc []byte) (any, error) {
+func OutputDescriptor(enc []byte) (urtypes.OutputDescriptor, error) {
+	header, _, _ := bytes.Cut(enc, []byte("\n"))
 	switch {
-	case bytes.HasPrefix(enc, []byte("# BlueWallet Multisig setup file")):
+	case bytes.HasPrefix(header, []byte("# ")) &&
+		(bytes.Contains(header, []byte("Multisig setup file")) || bytes.Contains(header, []byte("Exported from Nunchuk"))):
 		return parseBlueWalletDescriptor(string(enc))
 	default:
-		return nil, errors.New("ur: unrecognized bytes format")
+		return urtypes.OutputDescriptor{}, errors.New("nonstandard: unrecognized output descriptor format")
 	}
 }
 
 func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 	lines := strings.Split(txt, "\n")
-	var desc urtypes.OutputDescriptor
+	desc := urtypes.OutputDescriptor{
+		Type: urtypes.SortedMulti,
+	}
 	var nkeys int
 	var path []uint32
-	seenKeys := make(map[string]bool)
-	// Parse header.
+	seenKeys := make(map[string]string)
 	for len(lines) > 0 {
-		l := lines[0]
+		l := strings.TrimSpace(lines[0])
 		lines = lines[1:]
-		if strings.HasPrefix(l, "#") {
+		if l == "" || strings.HasPrefix(l, "#") {
 			continue
-		}
-		if l == "" {
-			break
 		}
 		header := strings.SplitN(l, ": ", 2)
 		if len(header) != 2 {
 			return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid header: %q", l)
 		}
 		key, val := header[0], header[1]
-		if seenKeys[key] {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: duplicate header %q", key)
+		if old, seen := seenKeys[key]; seen {
+			if old != val {
+				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: inconsistent header value %q", key)
+			}
+			continue
 		}
-		seenKeys[key] = true
+		seenKeys[key] = val
 		switch key {
 		case "Name":
 		case "Policy":
@@ -107,56 +109,33 @@ func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 			default:
 				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: unknown format %q", val)
 			}
+		default:
+			xpub, err := hdkeychain.NewKeyFromString(val)
+			if err != nil {
+				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid xpub: %q", val)
+			}
+			pub, err := xpub.ECPubKey()
+			if err != nil {
+				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid xpub: %q: %v", xpub, err)
+			}
+			fp, err := hex.DecodeString(key)
+			if err != nil {
+				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid fingerprint: %q", key)
+			}
+			if len(fp) > 4 {
+				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid fingerprint: %q", key)
+			}
+			desc.Keys = append(desc.Keys, urtypes.KeyDescriptor{
+				MasterFingerprint: binary.BigEndian.Uint32(fp),
+				DerivationPath:    path,
+				KeyData:           pub.SerializeCompressed(),
+				ChainCode:         xpub.ChainCode(),
+				ParentFingerprint: xpub.ParentFingerprint(),
+			})
 		}
-	}
-	// Parse keys.
-	for len(lines) > 0 {
-		l := lines[0]
-		lines = lines[1:]
-		if strings.HasPrefix(l, "#") {
-			continue
-		}
-		if l == "" {
-			continue
-		}
-		fpAndxpub := strings.SplitN(l, ": ", 2)
-		if len(fpAndxpub) != 2 {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid xpub: %q", l)
-		}
-		fpHex, xpub := fpAndxpub[0], fpAndxpub[1]
-		key, err := hdkeychain.NewKeyFromString(xpub)
-		if err != nil {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid xpub: %q", xpub)
-		}
-		pub, err := key.ECPubKey()
-		if err != nil {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid xpub: %q: %v", xpub, err)
-		}
-		fp, err := hex.DecodeString(fpHex)
-		if err != nil {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid fingerprint: %q", fpHex)
-		}
-		if len(fp) > 4 {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid fingerprint: %q", fpHex)
-		}
-		desc.Keys = append(desc.Keys, urtypes.KeyDescriptor{
-			MasterFingerprint: binary.BigEndian.Uint32(fp),
-			DerivationPath:    path,
-			KeyData:           pub.SerializeCompressed(),
-			ChainCode:         key.ChainCode(),
-			ParentFingerprint: key.ParentFingerprint(),
-		})
 	}
 	if nkeys != len(desc.Keys) {
 		return urtypes.OutputDescriptor{}, fmt.Errorf("ur: expected %d keys, but got %d", nkeys, len(desc.Keys))
 	}
-	sortKeys(desc.Keys)
 	return desc, nil
-}
-
-// sortKeys lexicographically as specified in BIP 383.
-func sortKeys(keys []urtypes.KeyDescriptor) {
-	sort.Slice(keys, func(i, j int) bool {
-		return bytes.Compare(keys[i].KeyData, keys[j].KeyData) == -1
-	})
 }
