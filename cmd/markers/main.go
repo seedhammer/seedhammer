@@ -20,9 +20,7 @@ var (
 	serialDev = flag.String("device", "", "serial device")
 	dryrun    = flag.Bool("n", false, "dry run")
 	coords    = flag.String("coords", "0,0, 100,3, 179,3, 179,52, 179,131, 100,131, 100,52, 0,0", "coordinates to mark")
-	//repeat    = flag.Int("repeat", 10, "number of repetitions")
-	repeat = flag.Int("repeat", 1, "number of repetitions")
-	//coords = flag.String("coords", "0,0", "coordinates to mark")
+	repeat    = flag.Int("repeat", 1, "number of repetitions")
 )
 
 func main() {
@@ -63,10 +61,10 @@ func engrave(dev string, coords []image.Point) error {
 	defer s.Close()
 
 	prog := &mjolnir.Program{
-		DryRun: *dryrun,
-		//MoveSpeed:  .75, Use default from mjolnir/driver.go
-		//PrintSpeed: 0, Use default from mjolnir/driver.go
-		End: coords[len(coords)-1],
+		DryRun:     *dryrun,
+		MoveSpeed:  0.9, // If commented out, use default from mjolnir/driver.go
+		PrintSpeed: 0,   // If commented out, use default from mjolnir/driver.go
+		End:        coords[len(coords)-1],
 	}
 	design := func() {
 		for i := 0; i < *repeat; i++ {

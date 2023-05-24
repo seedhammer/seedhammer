@@ -68,7 +68,7 @@ func main() {
 }
 
 func dump(plateDesc backup.PlateDesc, output string) error {
-	const ppmm = 10
+	const ppmm = 24
 	for i := range plateDesc.Descriptor.Keys {
 		desc := plateDesc
 		desc.KeyIdx = i
