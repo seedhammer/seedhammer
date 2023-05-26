@@ -41,7 +41,7 @@
                 owner = "raspberrypi";
                 repo = "linux";
                 rev = "0afb5e98488aed7017b9bf321b575d0177feb7ed";
-                sha256 = "t+xq0HmT163TaE+5/sb2ZkNWDbBoiwbXk3oi6YEYsIA=";
+                hash = "sha256-t+xq0HmT163TaE+5/sb2ZkNWDbBoiwbXk3oi6YEYsIA=";
                 # Remove files that introduce case sensitivity clashes on darwin.
                 postFetch = ''
                   rm $out/include/uapi/linux/netfilter/xt_*.h
@@ -423,7 +423,7 @@
                   owner = "util-linux";
                   repo = "util-linux";
                   rev = "v2.39";
-                  sha256 = "udzFsLVSsNsoGkMFvJQRoD4na4U+qoSSaenoXZ4gql4=";
+                  hash = "sha256-udzFsLVSsNsoGkMFvJQRoD4na4U+qoSSaenoXZ4gql4=";
                 };
 
                 nativeBuildInputs = with pkgs.buildPackages; [
@@ -580,7 +580,7 @@
               repo = "firmware";
               rev = "0d6514f32722e4acf091ab2af9715793ffd6b727";
               sparseCheckout = [ "boot" ];
-              sha256 = "sha256-lX33EMZas1cdCFb/UZc6yjIWZ/4Rj2/yI07GZjnL7fs=";
+              hash = "sha256-lX33EMZas1cdCFb/UZc6yjIWZ/4Rj2/yI07GZjnL7fs=";
             };
             initramfs = self.lib.${system}.mkinitramfs false;
             initramfs-debug = self.lib.${system}.mkinitramfs true;
