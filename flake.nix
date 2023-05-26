@@ -145,10 +145,10 @@
                 ./scripts/config --disable LOGO
                 ./scripts/config --enable FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER
                 # Enable slower but better supported USB driver.
-                ./scripts/config --disable CONFIG_USB_DWCOTG
-                ./scripts/config --enable CONFIG_USB_DWC2
+                ./scripts/config --disable USB_DWCOTG
+                ./scripts/config --enable USB_DWC2
               '' + (if debug then ''
-                ./scripts/config --enable CONFIG_USB_G_SERIAL
+                ./scripts/config --enable USB_G_SERIAL
               '' else "");
 
               buildPhase = ''
