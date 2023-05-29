@@ -47,13 +47,14 @@ import (
 const nbuttons = 8
 
 type Context struct {
-	Buttons    [nbuttons]bool
-	Repeats    [nbuttons]time.Time
-	Platform   Platform
-	Styles     Styles
-	Calibrated bool
-	NoSDCard   bool
-	Version    string
+	Buttons      [nbuttons]bool
+	Repeats      [nbuttons]time.Time
+	Platform     Platform
+	Styles       Styles
+	Version      string
+	Calibrated   bool
+	NoSDCard     bool
+	RotateCamera bool
 
 	Wakeup chan struct{}
 	events []Event
@@ -575,13 +576,15 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, bo
 		if !ok {
 			break
 		}
+		if !e.Click {
+			continue
+		}
 		switch e.Button {
 		case input.Button1:
-			if !e.Click {
-				continue
-			}
 			s.close()
 			return nil, true
+		case input.Button2:
+			ctx.RotateCamera = !ctx.RotateCamera
 		}
 	}
 
@@ -602,7 +605,7 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, bo
 		ycbcr := frame.Image.(*image.YCbCr)
 		gray := &image.Gray{Pix: ycbcr.Y, Stride: ycbcr.YStride, Rect: ycbcr.Bounds()}
 
-		scaleRot(s.feed, gray)
+		scaleRot(s.feed, gray, ctx.RotateCamera)
 		// Re-create image (but not backing store) to ensure redraw.
 		copy := *s.feed
 		s.feed = &copy
@@ -663,15 +666,21 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, bo
 		background(ops, ops.End(), image.Rectangle{Min: pos, Max: pos.Add(sz)}, pos)
 	}
 
-	nav := layoutNavigation(ctx, ops.Begin(), th, dims, NavButton{Button: input.Button1, Style: StyleSecondary, Icon: assets.IconBack})
-	nav = image.Rectangle(layout.Rectangle(nav).Shrink(underlay.Padding()).Shrink(-2, -4, -2, -2))
-	background(ops, ops.End(), nav, image.Point{})
+	nav := func(btn input.Button, icn image.RGBA64Image) {
+		nav := layoutNavigation(ctx, ops.Begin(), th, dims,
+			NavButton{Button: btn, Style: StyleSecondary, Icon: icn},
+		)
+		nav = image.Rectangle(layout.Rectangle(nav).Shrink(underlay.Padding()).Shrink(-2, -4, -2, -2))
+		background(ops, ops.End(), nav, image.Point{})
+	}
+	nav(input.Button1, assets.IconBack)
+	nav(input.Button2, assets.IconFlip)
 	return nil, false
 }
 
 // scaleRot is a specialized function for fast scaling and rotation of
 // the camera frames for display.
-func scaleRot(dst, src *image.Gray) {
+func scaleRot(dst, src *image.Gray, rot180 bool) {
 	db := dst.Bounds()
 	sb := src.Bounds()
 	if db.Empty() {
@@ -679,11 +688,19 @@ func scaleRot(dst, src *image.Gray) {
 	}
 	scale := sb.Dx() / db.Dx()
 	for y := 0; y < db.Dy(); y++ {
+		sx := sb.Max.X - 1 - y*scale
+		dy := y + db.Min.Y
+		if rot180 {
+			dy = db.Max.Y - y
+		}
 		for x := 0; x < db.Dx(); x++ {
-			sx, sy := sb.Max.X-1-y*scale, x*scale+sb.Min.Y
-			// Rotate and scale.
+			sy := x*scale + sb.Min.Y
 			c := src.GrayAt(sx, sy)
-			dst.SetGray(x+db.Min.X, y+db.Min.Y, c)
+			dx := x + db.Min.X
+			if rot180 {
+				dx = db.Max.X - 1 - x
+			}
+			dst.SetGray(dx, dy, c)
 		}
 	}
 }

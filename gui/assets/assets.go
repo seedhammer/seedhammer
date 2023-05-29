@@ -25,6 +25,7 @@ var (
 
 	IconCheckmark = mustLoad("icon-checkmark.png")
 	IconBack      = mustLoad("icon-back.png")
+	IconFlip      = mustLoad("icon-flip.png")
 	IconLeft      = mustLoad("icon-left.png")
 	IconBackspace = mustLoad("icon-backspace.png")
 	IconDot       = mustLoad("icon-dot.png")
