@@ -31,7 +31,7 @@ To build a complete `seedhammer.img` image, [Nix](https://nixos.org/) with flake
 The default Nix package in `flake.nix` builds the image:
 
 ```sh
-$ nix build
+$ nix build github:seedhammer/seedhammer
 $ ls result/seedhammer.img
 ```
 
@@ -41,7 +41,7 @@ The `seedhammer.img` image contains the Pi Zero firmware, the Linux kernel and d
 To build a versioned image, use the `mkrelease` script and specify a tag:
 
 ```sh
-$ nix run #mkrelease vx.y.z
+$ nix run github:seedhammer/seedhammer#mkrelease vx.y.z
 ```
 
 the resulting image will embed the version. The command also accepts git branches or commits.
@@ -62,15 +62,15 @@ $ echo "controller" | cpio -H newc -o --quiet | gzip > /Volumes/boot/initramfs.c
 ## Update through USB
 
 There is a crude facility to replace and restart the controller binary on a running device. First,
-build and prepare a debug build of the image:
+build and prepare a debug build of the image
 
 ```
 $ nix build .#image-debug
 ```
 
-then write `result/seedhammer-debug.img` to an SD-card. Connect the device to your machine with
-a USB cable to the USB port closest to the mini-HDMI port of the device; that is, the port usually
-used to communicate with the engraver.
+from a local clone of this repository.  Then write `result/seedhammer-debug.img` to an SD-card.
+Connect the device to your machine with a USB cable to the USB port closest to the mini-HDMI
+port of the device; that is, the port usually used to communicate with the engraver.
 
 Then, to upload and run a new version of the controller binary, run
 
