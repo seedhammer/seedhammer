@@ -197,6 +197,27 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 	}
 }
 
+func TestDecoder(t *testing.T) {
+	parts := []string{
+		"p1of3 abc",
+		"p2of3 def",
+		"p3of3 g",
+	}
+	var d Decoder
+	for _, p := range parts {
+		if err := d.Add(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p := d.Progress(); p != 1. {
+		t.Errorf("decoder progress %f, want 1.", p)
+	}
+	got := string(d.Result())
+	if want := "abcdefg"; got != want {
+		t.Errorf("decoded %q, want %q", got, want)
+	}
+}
+
 func TestElectrumSeed(t *testing.T) {
 	phrase := "head orient raw shoulder size fancy front cycle lamp giant camera jacket"
 	if !ElectrumSeed(phrase) {

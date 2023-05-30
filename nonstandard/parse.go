@@ -345,3 +345,52 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 	}
 	return r, nil
 }
+
+type Decoder struct {
+	parts [][]byte
+}
+
+func (d *Decoder) Add(part string) error {
+	header, rem, ok := strings.Cut(part, " ")
+	if !ok {
+		return errors.New("nonstandard: invalid animated QR part")
+	}
+	var m, n int
+	if _, err := fmt.Sscanf(header, "p%dof%d", &m, &n); err != nil {
+		return errors.New("nonstandard: invalid animated QR part")
+	}
+	if m < 1 || m > n {
+		return errors.New("nonstandard: invalid animated QR part")
+	}
+	if n != len(d.parts) {
+		d.parts = make([][]byte, n)
+	}
+	if d.parts[m-1] == nil {
+		d.parts[m-1] = []byte(rem)
+	}
+	return nil
+}
+
+func (d *Decoder) Progress() float32 {
+	if len(d.parts) == 0 {
+		return 0
+	}
+	n := 0
+	for _, p := range d.parts {
+		if p != nil {
+			n++
+		}
+	}
+	return float32(n) / float32(len(d.parts))
+}
+
+func (d *Decoder) Result() []byte {
+	var res []byte
+	for _, p := range d.parts {
+		if p == nil {
+			return nil
+		}
+		res = append(res, p...)
+	}
+	return res
+}

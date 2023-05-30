@@ -526,11 +526,12 @@ func derivationPath(path urtypes.Path) string {
 }
 
 type ScanScreen struct {
-	Title   string
-	Lead    string
-	decoder ur.Decoder
-	feed    *image.Gray
-	camera  struct {
+	Title     string
+	Lead      string
+	decoder   ur.Decoder
+	nsdecoder nonstandard.Decoder
+	feed      *image.Gray
+	camera    struct {
 		out  chan<- camera.Frame
 		in   <-chan camera.Frame
 		quit chan struct{}
@@ -659,6 +660,9 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, bo
 
 	// Progress
 	progress := int(100 * s.decoder.Progress())
+	if progress == 0 {
+		progress = int(100 * s.nsdecoder.Progress())
+	}
 	if progress > 0 {
 		sz = widget.LabelW(ops.Begin(), ctx.Styles.lead, width, th.Text, fmt.Sprintf("%d%%", progress))
 		_, percent := top.CutBottom(sz.Y)
@@ -705,12 +709,25 @@ func scaleRot(dst, src *image.Gray, rot180 bool) {
 	}
 }
 
+func (s *ScanScreen) parseNonStandard(qr []byte) (any, bool) {
+	if err := s.nsdecoder.Add(string(qr)); err != nil {
+		s.nsdecoder = nonstandard.Decoder{}
+		return qr, true
+	}
+	enc := s.nsdecoder.Result()
+	if enc == nil {
+		return nil, false
+	}
+	return enc, true
+}
+
 func (s *ScanScreen) parseQR(qr []byte) (any, bool) {
 	uqr := strings.ToUpper(string(qr))
 	if !strings.HasPrefix(uqr, "UR:") {
 		s.decoder = ur.Decoder{}
-		return qr, true
+		return s.parseNonStandard(qr)
 	}
+	s.nsdecoder = nonstandard.Decoder{}
 	if err := s.decoder.Add(uqr); err != nil {
 		// Incompatible fragment. Reset decoder and try again.
 		s.decoder = ur.Decoder{}
