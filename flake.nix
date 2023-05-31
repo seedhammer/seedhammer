@@ -407,7 +407,7 @@
 
               outputHashMode = "recursive";
               outputHashAlgo = "sha256";
-              outputHash = "ST/4Sx0jItRvT9kgFqxkGMKBJF8f+/vaxb8+OWZHqZU=";
+              outputHash = "bdiX27i1akVeUL0cob1YfIQPwwUrGsjTs215RtUsmAY=";
             };
             controller = self.lib.${system}.mkcontroller false;
             controller-debug = self.lib.${system}.mkcontroller true;

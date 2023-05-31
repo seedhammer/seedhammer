@@ -211,19 +211,22 @@ func (o OutputDescriptor) Encode() []byte {
 	return enc
 }
 
-func (k KeyDescriptor) String() string {
+func (k KeyDescriptor) ExtendedKey() *hdkeychain.ExtendedKey {
 	var fp [4]byte
 	binary.BigEndian.PutUint32(fp[:], k.ParentFingerprint)
 	childNum := uint32(0)
 	if len(k.DerivationPath) > 0 {
 		childNum = k.DerivationPath[len(k.DerivationPath)-1]
 	}
-	xpub := hdkeychain.NewExtendedKey(
+	return hdkeychain.NewExtendedKey(
 		chaincfg.MainNetParams.HDPublicKeyID[:],
 		k.KeyData, k.ChainCode, fp[:], uint8(len(k.DerivationPath)),
 		childNum, false,
 	)
-	return xpub.String()
+}
+
+func (k KeyDescriptor) String() string {
+	return k.ExtendedKey().String()
 }
 
 // Encode the key in the format described by [BCR-2020-007].
