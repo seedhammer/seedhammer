@@ -24,6 +24,7 @@ import (
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/font/sfnt"
 	"golang.org/x/image/math/fixed"
+	"seedhammer.com/address"
 	"seedhammer.com/backup"
 	"seedhammer.com/bc/ur"
 	"seedhammer.com/bc/urtypes"
@@ -172,11 +173,10 @@ const (
 	multiKey
 )
 
-type CosignersScreen struct {
-	Descriptor urtypes.OutputDescriptor
-
-	page   int
-	scroll int
+type AddressesScreen struct {
+	addresses [2][]string
+	page      int
+	scroll    int
 }
 
 type linePos struct {
@@ -208,11 +208,37 @@ func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA,
 	r.Y += lines[len(lines)-1].Dot.Y
 }
 
-func (s *CosignersScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bool {
+func NewAddressesScreen(desc urtypes.OutputDescriptor) *AddressesScreen {
+	s := new(AddressesScreen)
+	for i := 0; i < 20; i++ {
+		addr, err := address.Receive(&chaincfg.MainNetParams, desc, uint32(i))
+		if err != nil {
+			// Very unlikely.
+			continue
+		}
+		const addrLen = 12
+		s.addresses[0] = append(s.addresses[0], shortenAddress(addrLen, addr))
+		change, err := address.Change(&chaincfg.MainNetParams, desc, uint32(i))
+		if err != nil {
+			continue
+		}
+		s.addresses[1] = append(s.addresses[1], shortenAddress(addrLen, change))
+	}
+	return s
+}
+
+func shortenAddress(n int, addr string) string {
+	if len(addr) <= n {
+		return addr
+	}
+	return addr[:n/2] + "......" + addr[len(addr)-n/2:]
+}
+
+func (s *AddressesScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bool {
 	const linesPerPage = 8
 	const linesPerScroll = linesPerPage - 3
 
-	maxPage := len(s.Descriptor.Keys)
+	const maxPage = len(s.addresses)
 	for {
 		e, ok := ctx.Next()
 		if !ok {
@@ -245,12 +271,15 @@ func (s *CosignersScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) boo
 	}
 
 	th := &descriptorTheme
-	desc := s.Descriptor
 	op.ColorOp(ops, th.Background)
 
 	// Title.
 	r := layout.Rectangle{Max: dims}
-	layoutTitle(ctx, ops, dims.X, th.Text, fmt.Sprintf("Share %d of %d", s.page+1, maxPage))
+	title := "Receive"
+	if s.page == 1 {
+		title = "Change"
+	}
+	layoutTitle(ctx, ops, dims.X, th.Text, title)
 
 	op.MaskOp(ops.Begin(), assets.ArrowLeft)
 	op.ColorOp(ops, th.Text)
@@ -268,21 +297,14 @@ func (s *CosignersScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) boo
 	inner := body.Shrink(scrollFadeDist, 0, scrollFadeDist, 0)
 
 	bodyst := ctx.Styles.body
-	subst := ctx.Styles.subtitle
-	k := desc.Keys[s.page]
 	var bodytxt richText
-	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Fingerprint")
-	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, fmt.Sprintf("%.8x", k.MasterFingerprint))
-	bodytxt.Y += infoSpacing
-	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Derivation Path")
-	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, derivationPath(k.DerivationPath))
-	bodytxt.Y += infoSpacing
-	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, k.String())
-
-	if maxPage > 1 {
-		op.Position(ops, left, content.W(leftsz))
-		op.Position(ops, right, content.E(rightsz))
+	addrs := s.addresses[s.page]
+	for i, addr := range addrs {
+		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, fmt.Sprintf("%d: %s", i+1, addr))
 	}
+
+	op.Position(ops, left, content.W(leftsz))
+	op.Position(ops, right, content.E(rightsz))
 
 	maxScroll := len(bodytxt.Lines) - linesPerPage
 	if s.scroll > maxScroll {
@@ -308,7 +330,7 @@ type DescriptorScreen struct {
 	Descriptor urtypes.OutputDescriptor
 	mnemonic   bip39.Mnemonic
 
-	cosigners *CosignersScreen
+	addresses *AddressesScreen
 	seed      *SeedScreen
 	warning   *ErrorScreen
 	engrave   *EngraveScreen
@@ -389,14 +411,14 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 	th := &descriptorTheme
 	for {
 		switch {
-		case s.cosigners != nil:
-			done := s.cosigners.Layout(ctx, ops.Begin(), dims)
+		case s.addresses != nil:
+			done := s.addresses.Layout(ctx, ops.Begin(), dims)
 			dialog := ops.End()
 			if !done {
 				dialog.Add(ops)
 				return false
 			}
-			s.cosigners = nil
+			s.addresses = nil
 			continue
 		case s.seed != nil:
 			m, done := s.seed.Layout(ctx, ops.Begin(), th, dims)
@@ -453,7 +475,7 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 			if !e.Click {
 				break
 			}
-			s.cosigners = &CosignersScreen{Descriptor: s.Descriptor}
+			s.addresses = NewAddressesScreen(s.Descriptor)
 		case input.Button3:
 			if !e.Click {
 				break
