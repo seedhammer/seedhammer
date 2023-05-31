@@ -83,14 +83,6 @@ func TestValidateDescriptor(t *testing.T) {
 	}
 	fillDescriptor(t, smallDesc, smallDesc.DerivationPath(), 12, 0)
 
-	// Non-standard derivation path.
-	nonStandard := urtypes.OutputDescriptor{
-		Script:    urtypes.P2WSH,
-		Threshold: 2,
-		Keys:      make([]urtypes.KeyDescriptor, 2),
-	}
-	fillDescriptor(t, nonStandard, nil, 12, 0)
-
 	tests := []struct {
 		name string
 		desc urtypes.OutputDescriptor
@@ -98,7 +90,6 @@ func TestValidateDescriptor(t *testing.T) {
 	}{
 		{"duplicate key", dup, new(errDuplicateKey)},
 		{"threshold too small", smallDesc, backup.ErrDescriptorTooLarge},
-		{"non-standard path", nonStandard, new(errNonstandardDerivation)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

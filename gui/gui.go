@@ -12,7 +12,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"reflect"
 	"strings"
 	"text/template"
 	"time"
@@ -939,28 +938,9 @@ func (e *errDuplicateKey) Is(target error) bool {
 	return ok
 }
 
-type errNonstandardDerivation struct {
-	Path urtypes.Path
-}
-
-func (e *errNonstandardDerivation) Error() string {
-	return fmt.Sprintf("non-standard derivation path: %v", e.Path)
-}
-
-func (e *errNonstandardDerivation) Is(target error) bool {
-	_, ok := target.(*errNonstandardDerivation)
-	return ok
-}
-
 func NewErrorScreen(err error) *ErrorScreen {
 	var errDup *errDuplicateKey
-	var errNonStandard *errNonstandardDerivation
 	switch {
-	case errors.As(err, &errNonStandard):
-		return &ErrorScreen{
-			Title: "Non-standard Derivation",
-			Body:  fmt.Sprintf("The derivation path %v is not supported.", errNonStandard.Path),
-		}
 	case errors.As(err, &errDup):
 		return &ErrorScreen{
 			Title: "Duplicated Share",
@@ -986,7 +966,6 @@ func NewErrorScreen(err error) *ErrorScreen {
 }
 
 func validateDescriptor(desc urtypes.OutputDescriptor) error {
-	expPath := desc.DerivationPath()
 	keys := make(map[string]bool)
 	for _, k := range desc.Keys {
 		xpub := k.String()
@@ -996,11 +975,6 @@ func validateDescriptor(desc urtypes.OutputDescriptor) error {
 			}
 		}
 		keys[xpub] = true
-		if len(expPath) == 0 || !reflect.DeepEqual(k.DerivationPath, expPath) {
-			return &errNonstandardDerivation{
-				Path: k.DerivationPath,
-			}
-		}
 	}
 	// Do a dummy engrave to see whether the backup fits any plate.
 	m := make(bip39.Mnemonic, 24)
