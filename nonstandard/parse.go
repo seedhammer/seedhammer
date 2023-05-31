@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
+	"github.com/btcsuite/btcd/chaincfg"
 	"seedhammer.com/bc/urtypes"
 )
 
@@ -119,7 +120,12 @@ func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 			if len(fp) > 4 {
 				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid fingerprint: %q", key)
 			}
+			network, err := networkFor(xpub)
+			if err != nil {
+				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: unknown network: %q", key)
+			}
 			desc.Keys = append(desc.Keys, urtypes.KeyDescriptor{
+				Network:           network,
 				MasterFingerprint: binary.BigEndian.Uint32(fp),
 				DerivationPath:    path,
 				KeyData:           pub.SerializeCompressed(),
@@ -132,6 +138,20 @@ func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 		return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: expected %d keys, but got %d", nkeys, len(desc.Keys))
 	}
 	return desc, nil
+}
+
+func networkFor(xpub *hdkeychain.ExtendedKey) (*chaincfg.Params, error) {
+	networks := []*chaincfg.Params{
+		&chaincfg.MainNetParams,
+		&chaincfg.TestNet3Params,
+		&chaincfg.SimNetParams,
+	}
+	for _, n := range networks {
+		if xpub.IsForNet(n) {
+			return n, nil
+		}
+	}
+	return nil, errors.New("unknown network")
 }
 
 func parsePathElement(p string) (uint32, error) {
@@ -338,6 +358,11 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 		if err != nil {
 			return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: invalid public key: %q", k)
 		}
+		network, err := networkFor(xpub)
+		if err != nil {
+			return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: invalid network: %q", k)
+		}
+		key.Network = network
 		key.ChainCode = xpub.ChainCode()
 		key.KeyData = pub.SerializeCompressed()
 		key.ParentFingerprint = xpub.ParentFingerprint()

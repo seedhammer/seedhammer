@@ -136,7 +136,8 @@ func genPlate(m0 bip39.Mnemonic) backup.PlateDesc {
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 2,
 		}
-		mk, err := hdkeychain.NewMaster(seed, &chaincfg.MainNetParams)
+		network := &chaincfg.MainNetParams
+		mk, err := hdkeychain.NewMaster(seed, network)
 		if err != nil {
 			panic(err)
 		}
@@ -149,6 +150,7 @@ func genPlate(m0 bip39.Mnemonic) backup.PlateDesc {
 			panic(err)
 		}
 		plate.Descriptor.Keys = append(plate.Descriptor.Keys, urtypes.KeyDescriptor{
+			Network:           network,
 			MasterFingerprint: mfp,
 			DerivationPath:    path,
 			KeyData:           pub.SerializeCompressed(),

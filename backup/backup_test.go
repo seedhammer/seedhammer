@@ -222,7 +222,8 @@ func genTestPlate(t *testing.T, desc urtypes.OutputDescriptor, path []uint32, se
 		}
 		m = m.FixChecksum()
 		seed := bip39.MnemonicSeed(m, "")
-		mk, err := hdkeychain.NewMaster(seed, &chaincfg.MainNetParams)
+		network := &chaincfg.MainNetParams
+		mk, err := hdkeychain.NewMaster(seed, network)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -239,6 +240,7 @@ func genTestPlate(t *testing.T, desc urtypes.OutputDescriptor, path []uint32, se
 			t.Fatal(err)
 		}
 		desc.Keys[i] = urtypes.KeyDescriptor{
+			Network:           network,
 			MasterFingerprint: mfp,
 			DerivationPath:    path,
 			ParentFingerprint: xpub.ParentFingerprint(),

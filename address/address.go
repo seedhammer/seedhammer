@@ -17,25 +17,30 @@ import (
 	"seedhammer.com/bc/urtypes"
 )
 
-func Change(net *chaincfg.Params, desc urtypes.OutputDescriptor, index uint32) (string, error) {
-	return address(net, desc, index, true)
+func Change(desc urtypes.OutputDescriptor, index uint32) (string, error) {
+	return address(desc, index, true)
 }
 
-func Receive(net *chaincfg.Params, desc urtypes.OutputDescriptor, index uint32) (string, error) {
-	return address(net, desc, index, false)
+func Receive(desc urtypes.OutputDescriptor, index uint32) (string, error) {
+	return address(desc, index, false)
 }
 
-func address(net *chaincfg.Params, desc urtypes.OutputDescriptor, index uint32, change bool) (string, error) {
+func address(desc urtypes.OutputDescriptor, index uint32, change bool) (string, error) {
 	var addr btcutil.Address
+	var network *chaincfg.Params
 	switch desc.Type {
 	case urtypes.Multi, urtypes.SortedMulti:
 		var keys []*btcutil.AddressPubKey
 		for _, k := range desc.Keys {
-			pub, err := derivePubKey(net, k, index, change)
+			pub, err := derivePubKey(k, index, change)
 			if err != nil {
 				return "", fmt.Errorf("address: %w", err)
 			}
-			addrPub, err := btcutil.NewAddressPubKey(pub.SerializeCompressed(), net)
+			if network != nil && k.Network != network {
+				return "", errors.New("address: multisig descriptor mixes networks")
+			}
+			network = k.Network
+			addrPub, err := btcutil.NewAddressPubKey(pub.SerializeCompressed(), network)
 			if err != nil {
 				return "", fmt.Errorf("address: %w", err)
 			}
@@ -52,10 +57,10 @@ func address(net *chaincfg.Params, desc urtypes.OutputDescriptor, index uint32, 
 		}
 		switch desc.Script {
 		case urtypes.P2SH:
-			addr, err = btcutil.NewAddressScriptHash(script, net)
+			addr, err = btcutil.NewAddressScriptHash(script, network)
 		case urtypes.P2WSH, urtypes.P2SH_P2WSH:
 			hash := sha256.Sum256(script)
-			addr, err = btcutil.NewAddressWitnessScriptHash(hash[:], net)
+			addr, err = btcutil.NewAddressWitnessScriptHash(hash[:], network)
 		default:
 			return "", fmt.Errorf("address: unsupported multisig script: %s", desc.Script)
 		}
@@ -63,20 +68,22 @@ func address(net *chaincfg.Params, desc urtypes.OutputDescriptor, index uint32, 
 			return "", fmt.Errorf("address: %w", err)
 		}
 	case urtypes.Singlesig:
-		pub, err := derivePubKey(net, desc.Keys[0], index, change)
+		k := desc.Keys[0]
+		network = k.Network
+		pub, err := derivePubKey(k, index, change)
 		if err != nil {
 			return "", fmt.Errorf("address: %w", err)
 		}
 		switch desc.Script {
 		case urtypes.P2PKH:
 			pkHash := btcutil.Hash160(pub.SerializeCompressed())
-			addr, err = btcutil.NewAddressPubKeyHash(pkHash, net)
+			addr, err = btcutil.NewAddressPubKeyHash(pkHash, network)
 		case urtypes.P2WPKH, urtypes.P2SH_P2WPKH:
 			pkHash := btcutil.Hash160(pub.SerializeCompressed())
-			addr, err = btcutil.NewAddressWitnessPubKeyHash(pkHash, net)
+			addr, err = btcutil.NewAddressWitnessPubKeyHash(pkHash, network)
 		case urtypes.P2TR:
 			tkey := txscript.ComputeTaprootKeyNoScript(pub)
-			addr, err = btcutil.NewAddressTaproot(schnorr.SerializePubKey(tkey), net)
+			addr, err = btcutil.NewAddressTaproot(schnorr.SerializePubKey(tkey), network)
 		default:
 			return "", fmt.Errorf("address: unsupported singlesig script: %s", desc.Script)
 		}
@@ -93,12 +100,12 @@ func address(net *chaincfg.Params, desc urtypes.OutputDescriptor, index uint32, 
 		if err != nil {
 			return "", fmt.Errorf("address: %w", err)
 		}
-		addr, err = btcutil.NewAddressScriptHash(script, net)
+		addr, err = btcutil.NewAddressScriptHash(script, network)
 	}
 	return addr.String(), nil
 }
 
-func derivePubKey(net *chaincfg.Params, k urtypes.KeyDescriptor, index uint32, change bool) (*secp256k1.PublicKey, error) {
+func derivePubKey(k urtypes.KeyDescriptor, index uint32, change bool) (*secp256k1.PublicKey, error) {
 	children := k.Children
 	if len(children) == 0 {
 		// Default to <0;1>/*.

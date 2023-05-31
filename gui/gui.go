@@ -210,14 +210,14 @@ func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA,
 func NewAddressesScreen(desc urtypes.OutputDescriptor) *AddressesScreen {
 	s := new(AddressesScreen)
 	for i := 0; i < 20; i++ {
-		addr, err := address.Receive(&chaincfg.MainNetParams, desc, uint32(i))
+		addr, err := address.Receive(desc, uint32(i))
 		if err != nil {
 			// Very unlikely.
 			continue
 		}
 		const addrLen = 12
 		s.addresses[0] = append(s.addresses[0], shortenAddress(addrLen, addr))
-		change, err := address.Change(&chaincfg.MainNetParams, desc, uint32(i))
+		change, err := address.Change(desc, uint32(i))
 		if err != nil {
 			continue
 		}
@@ -338,7 +338,8 @@ type DescriptorScreen struct {
 // singlesigDescriptor builds a single-sig descriptor from a seed and a passphrase. It uses
 // P2WSH and its standard derivation path.
 func singlesigDescriptor(m bip39.Mnemonic, pass string) (urtypes.OutputDescriptor, bool) {
-	mk, ok := deriveMasterKey(m, pass)
+	network := &chaincfg.MainNetParams
+	mk, ok := deriveMasterKey(m, pass, network)
 	if !ok {
 		return urtypes.OutputDescriptor{}, false
 	}
@@ -358,6 +359,7 @@ func singlesigDescriptor(m bip39.Mnemonic, pass string) (urtypes.OutputDescripto
 		Type:      urtypes.Singlesig,
 		Keys: []urtypes.KeyDescriptor{
 			{
+				Network:           network,
 				DerivationPath:    path,
 				MasterFingerprint: mfp,
 				KeyData:           pub.SerializeCompressed(),
@@ -370,8 +372,12 @@ func singlesigDescriptor(m bip39.Mnemonic, pass string) (urtypes.OutputDescripto
 }
 
 func descriptorKeyIdx(desc urtypes.OutputDescriptor, m bip39.Mnemonic, pass string) (int, bool) {
+	if len(desc.Keys) == 0 {
+		return 0, false
+	}
+	network := desc.Keys[0].Network
 	seed := bip39.MnemonicSeed(m, pass)
-	mk, err := hdkeychain.NewMaster(seed, &chaincfg.MainNetParams)
+	mk, err := hdkeychain.NewMaster(seed, network)
 	if err != nil {
 		return 0, false
 	}
@@ -389,10 +395,10 @@ func descriptorKeyIdx(desc urtypes.OutputDescriptor, m bip39.Mnemonic, pass stri
 	return 0, false
 }
 
-func deriveMasterKey(m bip39.Mnemonic, pass string) (*hdkeychain.ExtendedKey, bool) {
+func deriveMasterKey(m bip39.Mnemonic, pass string, net *chaincfg.Params) (*hdkeychain.ExtendedKey, bool) {
 	seed := bip39.MnemonicSeed(m, pass)
-	mk, err := hdkeychain.NewMaster(seed, &chaincfg.MainNetParams)
-	// Err is only non-nill if the seed generates an invalid key, or we made a mistake.
+	mk, err := hdkeychain.NewMaster(seed, net)
+	// Err is only non-nil if the seed generates an invalid key, or we made a mistake.
 	// According to [0] the odds of encountering a seed that generates
 	// an invalid key by chance is 1 in 2^127.
 	//

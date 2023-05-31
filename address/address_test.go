@@ -3,7 +3,6 @@ package address
 import (
 	"testing"
 
-	"github.com/btcsuite/btcd/chaincfg"
 	"seedhammer.com/nonstandard"
 )
 
@@ -71,7 +70,7 @@ func TestAddresses(t *testing.T) {
 			t.Fatalf("%s: %v", test.desc, err)
 		}
 		for i, want := range test.receives {
-			got, err := Receive(&chaincfg.MainNetParams, desc, uint32(i))
+			got, err := Receive(desc, uint32(i))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -80,7 +79,7 @@ func TestAddresses(t *testing.T) {
 			}
 		}
 		for i, want := range test.changes {
-			got, err := Change(&chaincfg.MainNetParams, desc, uint32(i))
+			got, err := Change(desc, uint32(i))
 			if err != nil {
 				t.Fatal(err)
 			}

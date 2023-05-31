@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
+	"github.com/btcsuite/btcd/chaincfg"
 	"seedhammer.com/bc/urtypes"
 )
 
@@ -35,6 +36,7 @@ DD4FADEE: xpub6DnediUuY8Pcc6Fej8Yt2ZntPCyFdpbHBkNV7EawesRMbc6i9MKKMhKEv4JMMzwDJc
 				Type:      urtypes.SortedMulti,
 				Keys: []urtypes.KeyDescriptor{
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0x5a0804e3,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						KeyData:           []byte{0x3, 0xa9, 0x39, 0x4a, 0x2f, 0x1a, 0x4f, 0x99, 0x61, 0x3a, 0x71, 0x69, 0x56, 0xc8, 0x54, 0xf, 0x6d, 0xba, 0x6f, 0x18, 0x93, 0x1c, 0x26, 0x39, 0x10, 0x72, 0x21, 0xb2, 0x67, 0xd7, 0x40, 0xaf, 0x23},
@@ -42,6 +44,7 @@ DD4FADEE: xpub6DnediUuY8Pcc6Fej8Yt2ZntPCyFdpbHBkNV7EawesRMbc6i9MKKMhKEv4JMMzwDJc
 						ParentFingerprint: 0xc7bce7a8,
 					},
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0xdd4fadee,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						KeyData:           []byte{0x2, 0x21, 0x96, 0xad, 0xc2, 0x5f, 0xde, 0x16, 0x9f, 0xe9, 0x2e, 0x70, 0x76, 0x90, 0x59, 0x10, 0x22, 0x75, 0xd2, 0xb4, 0xc, 0xc9, 0x87, 0x76, 0xea, 0xab, 0x92, 0xb8, 0x2a, 0x86, 0x13, 0x5e, 0x92},
@@ -49,6 +52,7 @@ DD4FADEE: xpub6DnediUuY8Pcc6Fej8Yt2ZntPCyFdpbHBkNV7EawesRMbc6i9MKKMhKEv4JMMzwDJc
 						ParentFingerprint: 0x22969377,
 					},
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0x9bacd5c0,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						KeyData:           []byte{0x2, 0xfb, 0x72, 0x50, 0x7f, 0xc2, 0xd, 0xdb, 0xa9, 0x29, 0x91, 0xb1, 0x7c, 0x4b, 0xb4, 0x66, 0x13, 0xa, 0xd9, 0x3a, 0x88, 0x6e, 0x73, 0x17, 0x50, 0x33, 0xbb, 0x43, 0xe3, 0xbc, 0x78, 0x5a, 0x6d},
@@ -79,6 +83,7 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 				Type:      urtypes.SortedMulti,
 				Keys: []urtypes.KeyDescriptor{
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0xdc567276,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						KeyData:           []uint8{0x2, 0x1c, 0xb, 0x47, 0x9e, 0xcf, 0x6e, 0x67, 0x71, 0x3d, 0xdf, 0xc, 0x43, 0xb6, 0x34, 0x59, 0x2f, 0x51, 0xc0, 0x37, 0xb6, 0xf9, 0x51, 0xfb, 0x1d, 0xc6, 0x36, 0x1a, 0x98, 0xb1, 0xe5, 0x73, 0x5e},
@@ -86,6 +91,7 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 						ParentFingerprint: 0x18f8c2e7,
 					},
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0xf245ae38,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						KeyData:           []uint8{0x3, 0x97, 0xfc, 0xf2, 0x27, 0x4a, 0xbd, 0x24, 0x3d, 0x42, 0xd4, 0x2d, 0x3c, 0x24, 0x86, 0x8, 0xc6, 0xd1, 0x93, 0x5e, 0xfc, 0xa4, 0x61, 0x38, 0xaf, 0xef, 0x43, 0xaf, 0x8, 0xe9, 0x71, 0x28, 0x96},
@@ -93,6 +99,7 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 						ParentFingerprint: 0x221eb5a0,
 					},
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0xc5d87297,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						KeyData:           []uint8{0x2, 0x83, 0x42, 0xf5, 0xf7, 0x77, 0x3f, 0x6f, 0xab, 0x37, 0x4e, 0x1c, 0x2d, 0x3c, 0xcd, 0xba, 0x26, 0xbc, 0x9, 0x33, 0xfc, 0x4f, 0x63, 0x82, 0x8b, 0x66, 0x2b, 0x43, 0x57, 0xe4, 0xcc, 0x37, 0x91},
@@ -110,6 +117,7 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 				Type:      urtypes.SortedMulti,
 				Keys: []urtypes.KeyDescriptor{
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0xdc567276,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						Children:          []urtypes.Derivation{{Index: 0}, {Type: urtypes.WildcardDerivation}},
@@ -118,6 +126,7 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 						ParentFingerprint: 0x18f8c2e7,
 					},
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0xf245ae38,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						Children:          []urtypes.Derivation{{Index: 0}, {Type: urtypes.WildcardDerivation}},
@@ -126,6 +135,7 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 						ParentFingerprint: 0x221eb5a0,
 					},
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0xc5d87297,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						Children:          []urtypes.Derivation{{Index: 0}, {Type: urtypes.WildcardDerivation}},
@@ -144,6 +154,7 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 				Type:      urtypes.SortedMulti,
 				Keys: []urtypes.KeyDescriptor{
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0xdc567276,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						Children:          []urtypes.Derivation{{Index: 0}, {Type: urtypes.WildcardDerivation}},
@@ -152,6 +163,7 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 						ParentFingerprint: 0x18f8c2e7,
 					},
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0xf245ae38,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						Children:          []urtypes.Derivation{{Index: 0}, {Type: urtypes.WildcardDerivation}},
@@ -160,6 +172,7 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 						ParentFingerprint: 0x221eb5a0,
 					},
 					{
+						Network:           &chaincfg.MainNetParams,
 						MasterFingerprint: 0xc5d87297,
 						DerivationPath:    []uint32{hdkeychain.HardenedKeyStart + 48, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart + 2},
 						Children:          []urtypes.Derivation{{Index: 0}, {Type: urtypes.WildcardDerivation}},
@@ -178,9 +191,26 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 				Threshold: 1,
 				Keys: []urtypes.KeyDescriptor{
 					{
+						Network:           &chaincfg.MainNetParams,
 						KeyData:           []uint8{0x2, 0x1c, 0xb, 0x47, 0x9e, 0xcf, 0x6e, 0x67, 0x71, 0x3d, 0xdf, 0xc, 0x43, 0xb6, 0x34, 0x59, 0x2f, 0x51, 0xc0, 0x37, 0xb6, 0xf9, 0x51, 0xfb, 0x1d, 0xc6, 0x36, 0x1a, 0x98, 0xb1, 0xe5, 0x73, 0x5e},
 						ChainCode:         []uint8{0x6b, 0x3a, 0x4c, 0xfb, 0x6a, 0x45, 0xf6, 0x30, 0x5e, 0xfe, 0x6e, 0xe, 0x97, 0x6b, 0x5d, 0x26, 0xba, 0x27, 0xf7, 0xc3, 0x44, 0xd7, 0xfc, 0x7a, 0xbe, 0xf7, 0xbe, 0x2d, 0x6, 0xd5, 0x2d, 0xfd},
 						ParentFingerprint: 0x18f8c2e7,
+					},
+				},
+			},
+		},
+		{
+			"wpkh(tpubDE77mtPH9LnL5r2mFHjEXM2KZ6P2YyHcyCtjAXroj9jnQDbwtsRim3CoXTv2pQUaJinqoBFAhXguGhZcL4JDVD7JShCnV9MfAfSpke4Ja58)",
+			urtypes.OutputDescriptor{
+				Script:    urtypes.P2WPKH,
+				Type:      urtypes.Singlesig,
+				Threshold: 1,
+				Keys: []urtypes.KeyDescriptor{
+					{
+						Network:           &chaincfg.TestNet3Params,
+						KeyData:           []uint8{0x3, 0x46, 0x6d, 0xc4, 0xf, 0x23, 0x5c, 0x13, 0xa7, 0x3d, 0x2a, 0x65, 0x18, 0x16, 0x89, 0x62, 0x94, 0xd8, 0x75, 0x44, 0xdb, 0x71, 0x6c, 0x28, 0xde, 0x4a, 0x19, 0x58, 0xfb, 0xb8, 0xc5, 0xe9, 0x66},
+						ChainCode:         []uint8{0x7a, 0xb6, 0x2, 0x11, 0xef, 0xd1, 0x25, 0x52, 0x1d, 0xdb, 0x57, 0x77, 0x57, 0xf0, 0xad, 0xb2, 0x94, 0xd7, 0x81, 0xd5, 0x58, 0x3d, 0x94, 0x31, 0xe6, 0x24, 0x35, 0x18, 0x1, 0x6c, 0x7b, 0x75},
+						ParentFingerprint: 0x1b2bf3a6,
 					},
 				},
 			},

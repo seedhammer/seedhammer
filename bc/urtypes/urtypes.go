@@ -25,6 +25,7 @@ type OutputDescriptor struct {
 }
 
 type KeyDescriptor struct {
+	Network           *chaincfg.Params
 	MasterFingerprint uint32
 	DerivationPath    Path
 	Children          []Derivation
@@ -219,7 +220,7 @@ func (k KeyDescriptor) ExtendedKey() *hdkeychain.ExtendedKey {
 		childNum = k.DerivationPath[len(k.DerivationPath)-1]
 	}
 	return hdkeychain.NewExtendedKey(
-		chaincfg.MainNetParams.HDPublicKeyID[:],
+		k.Network.HDPublicKeyID[:],
 		k.KeyData, k.ChainCode, fp[:], uint8(len(k.DerivationPath)),
 		childNum, false,
 	)
@@ -249,7 +250,14 @@ func (k KeyDescriptor) toCBOR() hdKey {
 		// No need to store the depth if the derivation path is present.
 		depth = 0
 	}
+	network := mainnet
+	if k.Network == &chaincfg.TestNet3Params {
+		network = testnet
+	}
 	return hdKey{
+		UseInfo: useInfo{
+			Network: network,
+		},
 		KeyData:           k.KeyData,
 		ChainCode:         k.ChainCode,
 		ParentFingerprint: k.ParentFingerprint,
@@ -321,9 +329,15 @@ type hdKey struct {
 	IsPrivate         bool    `cbor:"2,keyasint,omitempty"`
 	KeyData           []byte  `cbor:"3,keyasint"`
 	ChainCode         []byte  `cbor:"4,keyasint,omitempty"`
+	UseInfo           useInfo `cbor:"5,keyasint,omitempty"`
 	Origin            keyPath `cbor:"6,keyasint,omitempty"`
 	Children          keyPath `cbor:"7,keyasint,omitempty"`
 	ParentFingerprint uint32  `cbor:"8,keyasint,omitempty"`
+}
+
+type useInfo struct {
+	Type    uint32 `cbor:"1,keyasint,omitempty"`
+	Network int    `cbor:"2,keyasint,omitempty"`
 }
 
 type keyPath struct {
@@ -335,6 +349,7 @@ type keyPath struct {
 const (
 	tagHDKey   = 303
 	tagKeyPath = 304
+	tagUseInfo = 305
 
 	tagSH    = 400
 	tagWSH   = 401
@@ -355,6 +370,9 @@ func init() {
 		panic(err)
 	}
 	if err := tags.Add(cbor.TagOptions{DecTag: cbor.DecTagOptional, EncTag: cbor.EncTagRequired}, reflect.TypeOf(keyPath{}), tagKeyPath); err != nil {
+		panic(err)
+	}
+	if err := tags.Add(cbor.TagOptions{DecTag: cbor.DecTagOptional, EncTag: cbor.EncTagRequired}, reflect.TypeOf(useInfo{}), tagUseInfo); err != nil {
 		panic(err)
 	}
 	em, err := cbor.CoreDetEncOptions().EncModeWithTags(tags)
@@ -396,10 +414,17 @@ func Parse(typ string, enc []byte) (any, error) {
 	return value, nil
 }
 
+const mainnet = 0
+const testnet = 1
+
 func parseHDKey(enc []byte) (KeyDescriptor, error) {
 	var k hdKey
 	if err := decMode.Unmarshal(enc, &k); err != nil {
 		return KeyDescriptor{}, fmt.Errorf("ur: crypto-hdkey decoding failed: %w", err)
+	}
+	const cointypeBTC = 0
+	if k.UseInfo.Type != cointypeBTC {
+		return KeyDescriptor{}, fmt.Errorf("ur: crypto-hdkey key has unsupported coin type %d", k.UseInfo.Type)
 	}
 	children, err := parseKeypath(k.Children.Components)
 	if err != nil {
@@ -410,6 +435,15 @@ func parseHDKey(enc []byte) (KeyDescriptor, error) {
 	}
 	if len(k.ChainCode) != 32 {
 		return KeyDescriptor{}, fmt.Errorf("ur: crypto-hdkey chain code is %d bytes, expected 32", len(k.ChainCode))
+	}
+	var net *chaincfg.Params
+	switch n := k.UseInfo.Network; n {
+	case mainnet:
+		net = &chaincfg.MainNetParams
+	case testnet:
+		net = &chaincfg.TestNet3Params
+	default:
+		return KeyDescriptor{}, fmt.Errorf("ur: unknown coininfo network %d", n)
 	}
 	comps, err := parseKeypath(k.Origin.Components)
 	if err != nil {
@@ -431,6 +465,7 @@ func parseHDKey(enc []byte) (KeyDescriptor, error) {
 		return KeyDescriptor{}, fmt.Errorf("ur: origin depth is %d but expected %d", depth, len(devPath))
 	}
 	return KeyDescriptor{
+		Network:           net,
 		MasterFingerprint: k.Origin.Fingerprint,
 		DerivationPath:    devPath,
 		Children:          children,
