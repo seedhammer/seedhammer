@@ -95,6 +95,10 @@ func ClosestWord(word string) (Word, bool) {
 
 // Valid reports whether the mnemonic checksum is correct.
 func (m Mnemonic) Valid() bool {
+	// Panics in splitMnemonic.
+	if len(m)%3 != 0 {
+		return false
+	}
 	ent, _ := splitMnemonic(m)
 	last := m[len(m)-1]
 	return ChecksumWord(ent) == last
