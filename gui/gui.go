@@ -512,12 +512,17 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 	bodyst := ctx.Styles.body
 	subst := ctx.Styles.subtitle
 	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Type")
-	switch {
-	case len(desc.Keys) == 1:
-		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, "Singlesig")
+	var typetxt string
+	switch desc.Type {
+	case urtypes.Singlesig:
+		typetxt = "Singlesig"
 	default:
-		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, fmt.Sprintf("%d-of-%d multisig", desc.Threshold, len(desc.Keys)))
+		typetxt = fmt.Sprintf("%d-of-%d multisig", desc.Threshold, len(desc.Keys))
 	}
+	if len(desc.Keys) > 0 && desc.Keys[0].Network != &chaincfg.MainNetParams {
+		typetxt += " (testnet)"
+	}
+	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, typetxt)
 	bodytxt.Y += infoSpacing
 	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Script")
 	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Script.String())
