@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -21,27 +22,101 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/mjolnir"
+	"seedhammer.com/nonstandard"
 )
 
 var (
-	serialDev = flag.String("device", "", "serial device")
-	dryrun    = flag.Bool("n", false, "dry run")
-	output    = flag.String("o", "plates", "output plates to directory")
-	side      = flag.String("side", "front", "plate side, front or back")
-	threshold = flag.Int("threshold", 2, "threshold")
-	shares    = flag.Int("shares", 3, "number of shares in total")
-	seedonly  = flag.Bool("seedonly", false, "seed-only mode")
-	mnemonic  = flag.String("mnemonic", "flip begin artist fringe online release swift genre wool general transfer arm", "mnemonic")
+	serialDev  = flag.String("device", "", "serial device")
+	dryrun     = flag.Bool("n", false, "dry run")
+	output     = flag.String("o", "plates", "output plates to directory")
+	side       = flag.String("side", "front", "plate side, front or back")
+	descriptor = flag.String("descriptor", "wpkh([97a6d3c2/84h/1h/0h]tpubDD5cTgxiP4qYJgBgkS6arjQH3GsJEHExFZWvumhNGGe4gBShn9u3b4TdpG2DvRg3knNXV7fBdmaw6cH2kKYdk2aXjQZYsnTchA4aFsZWehG)", "output descriptor")
+	mnemonic   = flag.String("mnemonic", "vocal tray giggle tool duck letter category pattern train magnet excite swamp", "seed phrase")
 )
 
 func main() {
 	flag.Parse()
-	m, err := bip39.ParseMnemonic(*mnemonic)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "invalid mnemonic: %v\n", err)
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	plateDesc := genPlate(m)
+}
+
+func run() error {
+	if *mnemonic == "" {
+		return errors.New("specify a seed")
+	}
+	m, err := bip39.ParseMnemonic(*mnemonic)
+	if err != nil {
+		return fmt.Errorf("invalid mnemonic: %w", err)
+	}
+	seed := bip39.MnemonicSeed(m, "")
+	var desc urtypes.OutputDescriptor
+	if *descriptor != "" {
+		desc, err = nonstandard.OutputDescriptor([]byte(*descriptor))
+		if err != nil {
+			return err
+		}
+	}
+	network := &chaincfg.MainNetParams
+	if len(desc.Keys) > 0 {
+		network = desc.Keys[0].Network
+	}
+	mk, err := hdkeychain.NewMaster(seed, network)
+	if err != nil {
+		return err
+	}
+	if *descriptor == "" {
+		path := urtypes.Path{0}
+		mfp, xpub, err := bip32.Derive(mk, path)
+		if err != nil {
+			return fmt.Errorf("failed to derive key: %w", err)
+		}
+		pub, err := xpub.ECPubKey()
+		if err != nil {
+			return fmt.Errorf("failed to derive public key: %w", err)
+		}
+		desc = urtypes.OutputDescriptor{
+			Threshold: 1,
+			Script:    urtypes.UnknownScript,
+			Type:      urtypes.Singlesig,
+			Keys: []urtypes.KeyDescriptor{
+				{
+					Network:           network,
+					DerivationPath:    path,
+					MasterFingerprint: mfp,
+					KeyData:           pub.SerializeCompressed(),
+					ChainCode:         xpub.ChainCode(),
+					ParentFingerprint: xpub.ParentFingerprint(),
+				},
+			},
+		}
+	}
+	if len(desc.Keys) == 0 {
+		return errors.New("descriptor contains no keys")
+	}
+	keyIdx := -1
+	for i, k := range desc.Keys {
+		_, xpub, err := bip32.Derive(mk, k.DerivationPath)
+		if err != nil {
+			// A derivation that generates an invalid key is by itself very unlikely,
+			// but also means that the seed doesn't match this xpub.
+			continue
+		}
+		if k.String() == xpub.String() {
+			keyIdx = i
+			break
+		}
+	}
+	if keyIdx == -1 {
+		return errors.New("seed is not among the descriptor keys")
+	}
+	plate := backup.PlateDesc{
+		Font:       &constant.Font,
+		Descriptor: desc,
+		KeyIdx:     keyIdx,
+		Mnemonic:   m,
+	}
 	if *serialDev != "" {
 		var s int
 		switch *side {
@@ -50,115 +125,45 @@ func main() {
 		case "front":
 			s = 1
 		default:
-			fmt.Fprintf(os.Stderr, "-side must be 'front' or 'back'\n")
-			os.Exit(1)
+			return fmt.Errorf("-side must be 'front' or 'back'")
 		}
-		err = hammer(plateDesc, s, *serialDev)
+		err = hammer(plate, s, *serialDev)
 	} else {
 		if err := os.MkdirAll(*output, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(1)
-		}
-		err = dump(plateDesc, *output)
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(1)
-	}
-}
-
-func dump(plateDesc backup.PlateDesc, output string) error {
-	const ppmm = 24
-	for i := range plateDesc.Descriptor.Keys {
-		desc := plateDesc
-		desc.KeyIdx = i
-		plate, err := backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, desc)
-		if err != nil {
 			return err
 		}
-		bounds := plate.Size.Bounds()
-		bounds = image.Rectangle{
-			Min: bounds.Min.Mul(ppmm),
-			Max: bounds.Max.Mul(ppmm),
+		err = dump(plate, *output)
+	}
+	return err
+}
+
+func dump(desc backup.PlateDesc, output string) error {
+	const ppmm = 24
+	plate, err := backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, desc)
+	if err != nil {
+		return err
+	}
+	bounds := plate.Size.Bounds()
+	bounds = image.Rectangle{
+		Min: bounds.Min.Mul(ppmm),
+		Max: bounds.Max.Mul(ppmm),
+	}
+	for s := range plate.Sides {
+		img := image.NewNRGBA(bounds)
+		r := engrave.NewRasterizer(img, img.Bounds(), ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
+		se := plate.Sides[s]
+		se.Engrave(r)
+		r.Rasterize()
+		buf := new(bytes.Buffer)
+		if err := png.Encode(buf, img); err != nil {
+			return err
 		}
-		for s := range plate.Sides {
-			img := image.NewNRGBA(bounds)
-			r := engrave.NewRasterizer(img, img.Bounds(), ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
-			se := plate.Sides[s]
-			se.Engrave(r)
-			r.Rasterize()
-			buf := new(bytes.Buffer)
-			if err := png.Encode(buf, img); err != nil {
-				return err
-			}
-			file := filepath.Join(output, fmt.Sprintf("plate-%d-side-%d.png", i, s))
-			if err := os.WriteFile(file, buf.Bytes(), 0o644); err != nil {
-				return err
-			}
+		file := filepath.Join(output, fmt.Sprintf("plate-%d-side-%d.png", desc.KeyIdx, s))
+		if err := os.WriteFile(file, buf.Bytes(), 0o644); err != nil {
+			return err
 		}
 	}
 	return nil
-}
-
-func genPlate(m0 bip39.Mnemonic) backup.PlateDesc {
-	plate := backup.PlateDesc{
-		Title:  "Satoshis stash",
-		Font:   &constant.Font,
-		KeyIdx: 0,
-		Descriptor: urtypes.OutputDescriptor{
-			Threshold: *threshold,
-			Type:      urtypes.Singlesig,
-			Script:    urtypes.P2WSH,
-		},
-	}
-	if *threshold > 1 {
-		plate.Descriptor.Type = urtypes.SortedMulti
-	}
-	if *seedonly {
-		plate.Descriptor.Script = urtypes.UnknownScript
-	}
-	for i := 0; i < *shares; i++ {
-		var m bip39.Mnemonic
-		if i == plate.KeyIdx {
-			m = m0
-			plate.Mnemonic = m
-		} else {
-			m = make(bip39.Mnemonic, len(m0))
-			for j := range m {
-				m[j] = bip39.RandomWord()
-			}
-			m = m.FixChecksum()
-		}
-		seed := bip39.MnemonicSeed(m, "")
-		path := urtypes.Path{
-			hdkeychain.HardenedKeyStart + 48,
-			hdkeychain.HardenedKeyStart + 0,
-			hdkeychain.HardenedKeyStart + 0,
-			hdkeychain.HardenedKeyStart + 2,
-		}
-		network := &chaincfg.MainNetParams
-		mk, err := hdkeychain.NewMaster(seed, network)
-		if err != nil {
-			panic(err)
-		}
-		mfp, xpub, err := bip32.Derive(mk, path)
-		if err != nil {
-			panic(err)
-		}
-		pub, err := xpub.ECPubKey()
-		if err != nil {
-			panic(err)
-		}
-		plate.Descriptor.Keys = append(plate.Descriptor.Keys, urtypes.KeyDescriptor{
-			Network:           network,
-			MasterFingerprint: mfp,
-			DerivationPath:    path,
-			KeyData:           pub.SerializeCompressed(),
-			ChainCode:         xpub.ChainCode(),
-			ParentFingerprint: xpub.ParentFingerprint(),
-		})
-	}
-	return plate
 }
 
 func hammer(plateDesc backup.PlateDesc, side int, dev string) error {
