@@ -239,7 +239,10 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 
 	runProgram := func(p *Program, progress chan float32) {
 		p.sent = 0
-		nbatches := (p.count + progBatchSize - 1) / progBatchSize
+		// Round up to nearest batch size. Note that the rounding
+		// adds another, empty, batch in case we fill up the last one.
+		// Otherwise, the engraver won't send a completed status.
+		nbatches := (p.count + progBatchSize) / progBatchSize
 		if nbatches > 0xffff {
 			eerr = errors.New("engrave: program too large")
 			return
@@ -252,15 +255,14 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 			if eerr != nil {
 				return
 			}
-			paddedCount := (p.count + progBatchSize - 1) / progBatchSize * progBatchSize
+			paddedCount := nbatches * progBatchSize
 			switch status[0] {
 			case bufferProgramStatus:
-				rem := p.count - p.sent
-				if rem == 0 {
+				if p.sent == paddedCount {
 					break
 				}
 				ncmd := progBatchSize
-				if ncmd > rem {
+				if rem := p.count - p.sent; ncmd > rem {
 					ncmd = rem
 				}
 				for i := 0; i < ncmd; i++ {
@@ -274,6 +276,7 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 					pad[i] = nopCmd
 				}
 				for i := ncmd; i < progBatchSize; i++ {
+					p.sent++
 					wr(pad[:]...)
 				}
 			case programStepStatus:
