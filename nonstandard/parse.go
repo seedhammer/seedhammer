@@ -296,8 +296,6 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 		}
 		if err == nil {
 			switch script2 {
-			case "multi":
-				r.Type = urtypes.Multi
 			case "sortedmulti":
 				r.Type = urtypes.SortedMulti
 			default:
@@ -309,7 +307,7 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 	switch r.Type {
 	case urtypes.Singlesig:
 		keys = []string{desc}
-	case urtypes.Multi, urtypes.SortedMulti:
+	case urtypes.SortedMulti:
 		args := strings.Split(desc, ",")
 		threshold, err := strconv.Atoi(args[0])
 		if err != nil {

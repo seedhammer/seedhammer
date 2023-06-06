@@ -76,7 +76,7 @@ func TestOutputDescriptor(t *testing.T) {
 			OutputDescriptor{
 				Script:    P2WSH,
 				Threshold: 1,
-				Type:      Multi,
+				Type:      SortedMulti,
 				Keys: []KeyDescriptor{
 					{
 						Network: &chaincfg.MainNetParams,
@@ -104,7 +104,7 @@ func TestOutputDescriptor(t *testing.T) {
 					},
 				},
 			},
-			"d90191d90196a201010282d9012fa303582103cbcaa9c98c877a26977d00825c956a238e8dddfbd322cce4f74b0b5bd6ace4a704582060499f801b896d83179a4374aeb7822aaeaceaa0db1f85ee3e904c4defbd968907d90130a1018601f400f480f4d9012fa403582102fc9e5af0ac8d9b3cecfe2a888e2117ba3d089d8585886c9c826b6b22a98d12ea045820f0909affaa7ee7abe5dd4e100598d4dc53cd709d5a5c2cac40e7412f232f7c9c06d90130a2018200f4021abd16bee507d90130a1018600f400f480f4",
+			"d90191d90197a201010282d9012fa303582103cbcaa9c98c877a26977d00825c956a238e8dddfbd322cce4f74b0b5bd6ace4a704582060499f801b896d83179a4374aeb7822aaeaceaa0db1f85ee3e904c4defbd968907d90130a1018601f400f480f4d9012fa403582102fc9e5af0ac8d9b3cecfe2a888e2117ba3d089d8585886c9c826b6b22a98d12ea045820f0909affaa7ee7abe5dd4e100598d4dc53cd709d5a5c2cac40e7412f232f7c9c06d90130a2018200f4021abd16bee507d90130a1018600f400f480f4",
 		},
 		{
 			twoOfThree,
@@ -188,7 +188,7 @@ func TestOutputDescriptor(t *testing.T) {
 		got := test.desc.Encode()
 		gotHex := hex.EncodeToString(got)
 		if gotHex != test.want {
-			t.Errorf("key:\n%+v\nencoded to:%s\nwanted:    %s\n", test.desc, gotHex, test.want)
+			t.Errorf("%+v\nencoded to:%s\nwanted:    %s\n", test.desc, gotHex, test.want)
 		}
 		parsed, err := Parse("crypto-output", got)
 		if err != nil {

@@ -68,7 +68,7 @@ func TestValidateDescriptor(t *testing.T) {
 	dup := urtypes.OutputDescriptor{
 		Script:    urtypes.P2WSH,
 		Threshold: 1,
-		Type:      urtypes.Multi,
+		Type:      urtypes.SortedMulti,
 		Keys:      make([]urtypes.KeyDescriptor, 2),
 	}
 	fillDescriptor(t, dup, dup.DerivationPath(), 12, 0)
@@ -78,7 +78,7 @@ func TestValidateDescriptor(t *testing.T) {
 	smallDesc := urtypes.OutputDescriptor{
 		Script:    urtypes.P2WSH,
 		Threshold: 2,
-		Type:      urtypes.Multi,
+		Type:      urtypes.SortedMulti,
 		Keys:      make([]urtypes.KeyDescriptor, 5),
 	}
 	fillDescriptor(t, smallDesc, smallDesc.DerivationPath(), 12, 0)
@@ -205,7 +205,7 @@ func TestEngraveScreenError(t *testing.T) {
 			desc := urtypes.OutputDescriptor{
 				Script:    urtypes.P2WSH,
 				Threshold: test.threshold,
-				Type:      urtypes.Multi,
+				Type:      urtypes.SortedMulti,
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
 			mnemonic := fillDescriptor(t, desc, test.path, 12, 0)

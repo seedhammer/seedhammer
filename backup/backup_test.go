@@ -45,7 +45,7 @@ func TestEngraveErrors(t *testing.T) {
 			desc := urtypes.OutputDescriptor{
 				Script:    urtypes.P2WSH,
 				Threshold: test.threshold,
-				Type:      urtypes.Multi,
+				Type:      urtypes.SortedMulti,
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
 			plateDesc := genTestPlate(t, desc, test.path, test.seedLen, 0)
@@ -103,7 +103,7 @@ func TestEngrave(t *testing.T) {
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
 			if len(desc.Keys) > 1 {
-				desc.Type = urtypes.Multi
+				desc.Type = urtypes.SortedMulti
 			}
 			path := desc.DerivationPath()
 			if path == nil {
@@ -202,7 +202,7 @@ func TestSplitUR(t *testing.T) {
 					Keys:      make([]urtypes.KeyDescriptor, n),
 				}
 				if len(desc.Keys) > 1 {
-					desc.Type = urtypes.Multi
+					desc.Type = urtypes.SortedMulti
 				}
 				genTestPlate(t, desc, desc.DerivationPath(), 12, 0)
 				if !Recoverable(desc) {

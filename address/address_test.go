@@ -57,12 +57,6 @@ func TestAddresses(t *testing.T) {
 			[]string{"3DwWNBMDdsP5Tf9wYyGT7qMkCEe5mTC3U3", "334QzbkBDRWfBWuE8Qhj5dXigYZpt7tpcT"},
 			[]string{"39DByP7DcYyQHLhwYewbnN92e2T9Nz4n81", "3DwUtJerhAjkm2UALCkQkNFnrPgFmMZ9hT"},
 		},
-		{
-			// Non-sorted variant.
-			"wsh(multi(2," + xpubs[0] + "," + xpubs[1] + "," + xpubs[2] + "))",
-			[]string{"bc1q4taqq6q6l8fvguva6ftvrz3qgdjy6p3w2s0ds0nl6qrjw7t0hfhqgrqcwd", "bc1qw3nhtat85lz6g3f8dh42067gf25hzquzn0tx9nk9nv2t6wtlx9lsfz7z0n"},
-			nil,
-		},
 	}
 	for _, test := range tests {
 		desc, err := nonstandard.OutputDescriptor([]byte(test.desc))

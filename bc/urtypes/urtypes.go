@@ -90,7 +90,6 @@ type MultisigType int
 
 const (
 	Singlesig MultisigType = iota
-	Multi
 	SortedMulti
 )
 
@@ -151,7 +150,7 @@ func (o OutputDescriptor) DerivationPath() Path {
 func (o OutputDescriptor) Encode() []byte {
 	var v any
 	switch o.Type {
-	case Multi, SortedMulti:
+	case SortedMulti:
 		m := struct {
 			Threshold int        `cbor:"1,keyasint,omitempty"`
 			Keys      []cbor.Tag `cbor:"2,keyasint"`
@@ -164,12 +163,8 @@ func (o OutputDescriptor) Encode() []byte {
 				Content: k.toCBOR(),
 			})
 		}
-		tag := tagMulti
-		if o.Type == SortedMulti {
-			tag = tagSortedMulti
-		}
 		v = cbor.Tag{
-			Number:  uint64(tag),
+			Number:  uint64(tagSortedMulti),
 			Content: m,
 		}
 	case Singlesig:
@@ -533,11 +528,8 @@ func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (OutputDescriptor, err
 		}
 		desc.Threshold = 1
 		desc.Keys = append(desc.Keys, k)
-	case tagMulti, tagSortedMulti:
-		desc.Type = Multi
-		if funcNumber == tagSortedMulti {
-			desc.Type = SortedMulti
-		}
+	case tagSortedMulti:
+		desc.Type = SortedMulti
 		var m multi
 		if err := mode.Unmarshal(enc, &m); err != nil {
 			return OutputDescriptor{}, err

@@ -29,7 +29,7 @@ func address(desc urtypes.OutputDescriptor, index uint32, change bool) (string, 
 	var addr btcutil.Address
 	var network *chaincfg.Params
 	switch desc.Type {
-	case urtypes.Multi, urtypes.SortedMulti:
+	case urtypes.SortedMulti:
 		var keys []*btcutil.AddressPubKey
 		for _, k := range desc.Keys {
 			pub, err := derivePubKey(k, index, change)
@@ -46,11 +46,9 @@ func address(desc urtypes.OutputDescriptor, index uint32, change bool) (string, 
 			}
 			keys = append(keys, addrPub)
 		}
-		if desc.Type == urtypes.SortedMulti {
-			sort.Slice(keys, func(i, j int) bool {
-				return bytes.Compare(keys[i].PubKey().SerializeCompressed(), keys[j].PubKey().SerializeCompressed()) == -1
-			})
-		}
+		sort.Slice(keys, func(i, j int) bool {
+			return bytes.Compare(keys[i].PubKey().SerializeCompressed(), keys[j].PubKey().SerializeCompressed()) == -1
+		})
 		script, err := txscript.MultiSigScript(keys, desc.Threshold)
 		if err != nil {
 			return "", fmt.Errorf("address: %w", err)
