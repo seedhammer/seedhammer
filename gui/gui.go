@@ -1432,10 +1432,8 @@ var (
 
 	EngraveSideA = []Instruction{
 		{
-			Body: "Engraving seed {{.Idx}} of {{.Total}}.",
-		},
-		{
-			Body: "Unscrew the 4 nuts and remove all metal plates.",
+			Body: "Make sure the fingerprint above represents the intended share.",
+			Lead: "seedhammer.com/tip#1",
 		},
 		{
 			Body:  "Place 2 x {{.Name}}\non top of each other.",
@@ -1449,6 +1447,7 @@ var (
 		{
 			Body: "Hold button to start the engraving process. The process is loud, use hearing protection.",
 			Type: ConnectInstruction,
+			Lead: "seedhammer.com/tip#8",
 		},
 		{
 			Lead: "Engraving plate",
