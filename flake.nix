@@ -237,6 +237,9 @@
                 cp -R "${self.packages.${system}.camera-driver}"/* initramfs/
                 # Set constant mtimes and permissions for determinism.
                 chmod 0755 `find initramfs`
+                # Remove symlinks as their permissions are not inconsistent across platforms.
+                # Fortunately we only need symlinks during linking to libraries, not at runtime.
+                rm -f `find initramfs -type l`
                 ${pkgs.coreutils}/bin/touch -d '${timestamp}' `find initramfs`
 
                 ${pkgs.findutils}/bin/find initramfs -mindepth 1 -printf '%P\n'\
@@ -552,7 +555,6 @@
               installPhase = ''
                 mkdir -p $out/lib/libcamera
                 LIBCAM="${self.packages.${system}.libcamera}"
-                chmod +w `find $out/`
                 prefix=${pkgs.stdenv.targetPlatform.config}
                 cclib="${pkgs.stdenv.cc.cc.lib}/$prefix/lib"
 
