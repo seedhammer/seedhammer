@@ -2,7 +2,7 @@
   description = "Builds Seedhammer disk image for Raspberry Pi";
 
   inputs = {
-    nixpkgs.url = "nixpkgs";
+    nixpkgs.url = "github:NixOS/nixpkgs";
     utils.url = "github:numtide/flake-utils";
   };
 
@@ -628,7 +628,7 @@
               nix build "$flake"
               nix run "$flake"#stamp-release $VERSION
 
-              if [ -n "$SSH_SIGNING_KEY" ]; then
+              if [[ -v SSH_SIGNING_KEY ]]; then
                 ssh-keygen -Y sign -f "$SSH_SIGNING_KEY" -n seedhammer.img seedhammer-"$VERSION".img
               fi
             '';

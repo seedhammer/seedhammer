@@ -46,8 +46,22 @@ $ nix run github:seedhammer/seedhammer#mkrelease vx.y.z
 
 the resulting image will embed the version. The command also accepts git branches or commits.
 
-## Development
+### Reproducible builds
 
+The build process is designed to be deterministic; that is, images produced with the above steps
+should match the released images bit-for-bit. If not, please open an issue.
+
+To reproduce a release named vX.Y.Z, use the following command to produce `seedhammer-vX.Y.Z.img`
+in the current directory.
+
+```sh
+$ nix run .#mkrelease vX.Y.Z
+```
+
+Use a tool such as `shasum` or `sha256sum` to verify that the release binary matches.
+
+
+## Development
 
 ### Replacing the controller binary
 
