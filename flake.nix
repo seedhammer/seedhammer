@@ -362,7 +362,7 @@
 
                 # -buildmode=pie is required by musl.
                 CGO_CXXFLAGS="-I${libcamera}/include" \
-                  CGO_LDFLAGS="-L${libcamera}/lib" \
+                  CGO_LDFLAGS="-L${libcamera}/lib -static-libstdc++ -static-libgcc" \
                   CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
                   go build -trimpath -buildmode pie -tags ${tags} -ldflags="-s -w" ./cmd/controller
               '';
@@ -509,7 +509,7 @@
                 ];
 
                 configurePhase = ''
-                  meson setup build \
+                  LDFLAGS="-static-libstdc++ -static-libgcc" meson setup build \
                     -Dv4l2=false \
                     -Dqcam=disabled \
                     -Dcam=disabled \
@@ -556,14 +556,7 @@
                 mkdir -p $out/lib/libcamera
                 LIBCAM="${self.packages.${system}.libcamera}"
                 prefix=${pkgs.stdenv.targetPlatform.config}
-                cclib="${pkgs.stdenv.cc.cc.lib}/$prefix/lib"
 
-                cp "$cclib/libstdc++.so.6" \
-                  "$cclib/libgcc_s.so.1" \
-                  "$cclib/libatomic.so.1" \
-                  $out/lib/
-                chmod +w `find $out/`
-                patchelf --set-rpath "/lib" `find $out/lib -type f`
                 # Copy the dynamic link while stripping it of indeterministic sections.
                 "$prefix"-objcopy -R .note.gnu.build-id "${pkgs.stdenv.cc.libc}/lib/${loader-lib}" \
                   $out/lib/${loader-lib}
