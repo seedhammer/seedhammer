@@ -286,7 +286,6 @@
                 dtparam=speed=40000000
                 dtoverlay=dwc2
               '';
-              util-linux = self.packages.${system}.util-linux;
             in
             pkgs.stdenvNoCC.mkDerivation {
               name = "disk-image";
@@ -303,7 +302,7 @@
 
                 # Create disk image.
                 dd if=/dev/zero of=disk.img bs=1M count=14
-                ${util-linux}/bin/sfdisk disk.img <<EOF
+                ${pkgs.util-linux}/bin/sfdisk disk.img <<EOF
                   label: dos
                   label-id: 0xceedb0ad
 
@@ -311,9 +310,9 @@
                 EOF
 
                 # Create boot partition.
-                START=$(${util-linux}/bin/fdisk -l -o Start disk.img|tail -n 1)
-                SECTORS=$(${util-linux}/bin/fdisk -l -o Sectors disk.img|tail -n 1)
-                ${pkgs.dosfstools}/bin/mkfs.vfat --invariant -i deadbeef -n boot disk.img --offset $START $(sectorsToBlocks $SECTORS)
+                START=$(${pkgs.util-linux}/bin/fdisk -l -o Start disk.img|tail -n 1)
+                SECTORS=$(${pkgs.util-linux}/bin/fdisk -l -o Sectors disk.img|tail -n 1)
+                ${pkgs.dosfstools}/bin/mkfs.vfat --invariant -i deadbeef -n seedhammer disk.img --offset $START $(sectorsToBlocks $SECTORS)
                 OFFSET=$(sectorsToBytes $START)
 
                 # Copy boot files.
@@ -414,48 +413,6 @@
             };
             controller = self.lib.${system}.mkcontroller false;
             controller-debug = self.lib.${system}.mkcontroller true;
-            util-linux =
-              let
-                pkgs = localpkgs;
-                stdenv = pkgs.stdenv;
-              in
-              stdenv.mkDerivation {
-                name = "util-linux";
-
-                src = pkgs.fetchFromGitHub {
-                  owner = "util-linux";
-                  repo = "util-linux";
-                  rev = "v2.39";
-                  hash = "sha256-udzFsLVSsNsoGkMFvJQRoD4na4U+qoSSaenoXZ4gql4=";
-                };
-
-                nativeBuildInputs = with pkgs.buildPackages; [
-                  autoconf
-                  automake
-                  gettext
-                  bison
-                  libtool
-                  pkg-config
-                ];
-
-                buildInputs = with pkgs; [
-                  ncurses
-                ];
-
-                postPatch = pkgs.lib.optionalString stdenv.isDarwin ''
-                  substituteInPlace autogen.sh --replace glibtoolize libtoolize
-                '';
-
-                configureFlags = [
-                  "--disable-asciidoc"
-                  "--disable-wall"
-                  "--disable-mount"
-                ];
-
-                preConfigure = ''
-                  ./autogen.sh
-                '';
-              };
             libcamera =
               let
                 pkgs = crosspkgs;
@@ -649,7 +606,7 @@
               dst="seedhammer-$VERSION.img"
 
               # Append the version string to the kernel cmdline, to be read by the controller binary.
-              START=$(${self.packages.${system}.util-linux}/bin/fdisk -l -o Start $src|tail -n 1)
+              START=$(${pkgs.util-linux}/bin/fdisk -l -o Start $src|tail -n 1)
               OFFSET=$(( $START*512 ))
               ${pkgs.mtools}/bin/mcopy -bpm -i "$src@@$OFFSET" ::cmdline.txt "$TMPDIR/"
               echo -n " sh.version=$VERSION" >> "$TMPDIR/cmdline.txt"
