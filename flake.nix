@@ -609,7 +609,7 @@
               START=$(${pkgs.util-linux}/bin/fdisk -l -o Start $src|tail -n 1)
               OFFSET=$(( $START*512 ))
               ${pkgs.mtools}/bin/mcopy -bpm -i "$src@@$OFFSET" ::cmdline.txt "$TMPDIR/"
-              echo -n " sh.version=$VERSION" >> "$TMPDIR/cmdline.txt"
+              echo -n " sh_version=$VERSION" >> "$TMPDIR/cmdline.txt"
               # preserve attributes for determinism.
               chmod 0755 "$TMPDIR/cmdline.txt"
               ${pkgs.coreutils}/bin/touch -d '${timestamp}' "$TMPDIR/cmdline.txt"
