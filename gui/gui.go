@@ -2408,9 +2408,6 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				}
 				continue
 			}
-			for _, k := range desc.Keys {
-				log.Println(k.MasterFingerprint)
-			}
 			s.desc = &DescriptorScreen{
 				Descriptor: desc,
 			}

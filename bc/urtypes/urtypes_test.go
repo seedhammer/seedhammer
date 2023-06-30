@@ -274,3 +274,50 @@ func TestHDKey(t *testing.T) {
 		}
 	}
 }
+
+func TestCryptoAccount(t *testing.T) {
+	tests := []struct {
+		d   OutputDescriptor
+		enc string
+	}{
+		{
+			OutputDescriptor{
+				Script: P2WPKH, Threshold: 1, Keys: []KeyDescriptor{
+					{
+						Network:           &chaincfg.MainNetParams,
+						MasterFingerprint: 0x4bbaa801,
+						DerivationPath:    Path{hdkeychain.HardenedKeyStart + 84, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart},
+						KeyData:           []uint8{0x2, 0xa1, 0xe9, 0xcd, 0x9e, 0xfc, 0x5, 0x1f, 0x3e, 0x3, 0x74, 0xbf, 0x21, 0x39, 0x90, 0xd2, 0x3b, 0xf3, 0xd7, 0x7f, 0xdd, 0xf1, 0x72, 0xbc, 0xc6, 0x23, 0x43, 0xc4, 0xd7, 0x82, 0xe7, 0x80, 0xec},
+						ChainCode:         []uint8{0x3f, 0xac, 0x4d, 0x0, 0x92, 0x28, 0x2, 0xa9, 0xf2, 0xbd, 0x52, 0xc, 0xc4, 0x51, 0x22, 0x30, 0xcf, 0x29, 0xb, 0x4a, 0x5d, 0x29, 0x7e, 0x5d, 0x3a, 0x69, 0xb9, 0x9f, 0x6, 0x57, 0x7f, 0x66},
+						ParentFingerprint: 0x43ecdeeb,
+					},
+				},
+			},
+			"a2011a4bbaa8010281d90194d9012fa403582102a1e9cd9efc051f3e0374bf213990d23bf3d77fddf172bcc62343c4d782e780ec0458203fac4d00922802a9f2bd520cc4512230cf290b4a5d297e5d3a69b99f06577f6606d90130a301861854f500f500f5021a4bbaa8010303081a43ecdeeb",
+		},
+	}
+	for _, test := range tests {
+		enc, err := hex.DecodeString(test.enc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := Parse("crypto-account", enc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(parsed, test.d) {
+			t.Errorf("crypto-account:\n%s\ndecoded to\n%+v\nexpected\n%+v", test.enc, parsed, test.d)
+		}
+	}
+}
+
+func TestIncompleteCryptoAccount(t *testing.T) {
+	const enc = "a2011a4bbaa8010281d90191d9012fa4035821024eaf73e5f71a386667c34795a955316fdcd0cf8e2bb99defa6a3619cdc6c29140458208f34522cb231cd7e957a8e881798748b90b6dce5488d4140ee14c1ea40abf0de06d90130a301881830f500f500f502f5021a4bbaa8010304081a51cb0a5b"
+	bytes, err := hex.DecodeString(enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse("crypto-account", bytes); err == nil {
+		t.Fatalf("invalid crypto-account %s parsed succesfully", enc)
+	}
+}

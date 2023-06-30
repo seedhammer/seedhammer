@@ -319,6 +319,13 @@ type multi struct {
 	Keys      []cbor.RawMessage `cbor:"2,keyasint"`
 }
 
+// account is the CBOR representation of a crypto-account.
+type account struct {
+	MasterFingerprint uint32            `cbor:"1,keyasint,omitempty"`
+	OutputDescriptors []cbor.RawMessage `cbor:"2,keyasint,omitempty"`
+}
+
+// hdKey is the CBOR representation of a crypto-hdkey.
 type hdKey struct {
 	IsMaster          bool    `cbor:"1,keyasint,omitempty"`
 	IsPrivate         bool    `cbor:"2,keyasint,omitempty"`
@@ -383,17 +390,47 @@ func init() {
 }
 
 func Parse(typ string, enc []byte) (any, error) {
-	var value any
-	var decErr error
 	switch typ {
 	case "crypto-seed":
 		var s seed
-		err := decMode.Unmarshal(enc, &s)
-		value, decErr = s, err
+		if err := decMode.Unmarshal(enc, &s); err != nil {
+			return nil, fmt.Errorf("ur: %s: %w", typ, err)
+		}
+		return s, nil
+	case "crypto-account":
+		// Limited support for crypto-account: unpack a single output
+		// descriptor and treat it like crypto-output.
+		var acc account
+		if err := decMode.Unmarshal(enc, &acc); err != nil {
+			return nil, fmt.Errorf("ur: crypto-account: %w", err)
+		}
+		if len(acc.OutputDescriptors) != 1 {
+			return nil, fmt.Errorf("ur: crypto-account: zero or multiple crypto-outputs")
+		}
+		enc = acc.OutputDescriptors[0]
+		desc, err := parseOutputDescriptor(decMode, acc.OutputDescriptors[0])
+		if err != nil {
+			return nil, fmt.Errorf("ur: crypto-account: %w", err)
+		}
+		// Support only single-sig script types.
+		for _, s := range []Script{P2PKH, P2WPKH, P2SH_P2WPKH, P2TR} {
+			if s == desc.Script {
+				return desc, nil
+			}
+		}
+		return nil, fmt.Errorf("ur: crypto-account: invalid single-sig script: %s", desc.Script)
 	case "crypto-output":
-		value, decErr = parseOutputDescriptor(decMode, enc)
+		desc, err := parseOutputDescriptor(decMode, enc)
+		if err != nil {
+			return nil, fmt.Errorf("ur: crypto-output: %w", err)
+		}
+		return desc, nil
 	case "crypto-hdkey":
-		value, decErr = parseHDKey(enc)
+		key, err := parseHDKey(enc)
+		if err != nil {
+			return nil, fmt.Errorf("ur: crypto-hdkey: %w", err)
+		}
+		return key, nil
 	case "bytes":
 		var content []byte
 		if err := decMode.Unmarshal(enc, &content); err != nil {
@@ -403,10 +440,6 @@ func Parse(typ string, enc []byte) (any, error) {
 	default:
 		return nil, fmt.Errorf("ur: unknown type %q", typ)
 	}
-	if decErr != nil {
-		return nil, fmt.Errorf("ur: %s: %w", typ, decErr)
-	}
-	return value, nil
 }
 
 const mainnet = 0
@@ -509,7 +542,7 @@ func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (OutputDescriptor, err
 	case tagWPKH:
 		desc.Script = P2WPKH
 	default:
-		return OutputDescriptor{}, fmt.Errorf("unknown script type tag: %d", first)
+		return OutputDescriptor{}, fmt.Errorf("ur: unknown script type tag: %d", first)
 	}
 	if len(tags) == 0 {
 		return OutputDescriptor{}, errors.New("ur: missing descriptor script tag")
