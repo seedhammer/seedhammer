@@ -317,56 +317,65 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 		keys = args[1:]
 	}
 	for _, k := range keys {
-		key := urtypes.KeyDescriptor{}
-		if len(k) > 0 && k[0] == '[' {
-			end := strings.Index(k, "]")
-			if end == -1 {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: missing ']': %q", k)
-			}
-			originAndPath := k[1:end]
-			k = k[end+1:]
-			if len(originAndPath) < 9 || originAndPath[8] != '/' {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: missing or invalid fingerprint: %q", k)
-			}
-			fp, err := hex.DecodeString(originAndPath[:8])
-			if err != nil {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: invalid fingerprint: %q", k)
-			}
-			key.MasterFingerprint = binary.BigEndian.Uint32(fp)
-			path, err := parseDerivationPath(originAndPath[9:])
-			if err != nil {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: invalid derivation path: %q", k)
-			}
-			key.DerivationPath = path
-		}
-		if xpubEnd := strings.Index(k, "/"); xpubEnd != -1 {
-			children := k[xpubEnd+1:]
-			k = k[:xpubEnd]
-			childPath, err := parsePath(children)
-			if err != nil {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: invalid children path: %q", k)
-			}
-			key.Children = childPath
-		}
-		xpub, err := hdkeychain.NewKeyFromString(k)
+		key, err := parseHDKey([]byte(k))
 		if err != nil {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: invalid extended key: %q", k)
+			return urtypes.OutputDescriptor{}, fmt.Errorf("hdkey: %w", err)
 		}
-		pub, err := xpub.ECPubKey()
-		if err != nil {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: invalid public key: %q", k)
-		}
-		network, err := networkFor(xpub)
-		if err != nil {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: invalid network: %q", k)
-		}
-		key.Network = network
-		key.ChainCode = xpub.ChainCode()
-		key.KeyData = pub.SerializeCompressed()
-		key.ParentFingerprint = xpub.ParentFingerprint()
 		r.Keys = append(r.Keys, key)
 	}
 	return r, nil
+}
+
+func parseHDKey(enc []byte) (urtypes.KeyDescriptor, error) {
+	k := string(enc)
+	var key urtypes.KeyDescriptor
+	if len(k) > 0 && k[0] == '[' {
+		end := strings.Index(k, "]")
+		if end == -1 {
+			return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: missing ']': %q", k)
+		}
+		originAndPath := k[1:end]
+		k = k[end+1:]
+		if len(originAndPath) < 9 || originAndPath[8] != '/' {
+			return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: missing or invalid fingerprint: %q", k)
+		}
+		fp, err := hex.DecodeString(originAndPath[:8])
+		if err != nil {
+			return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid fingerprint: %q", k)
+		}
+		key.MasterFingerprint = binary.BigEndian.Uint32(fp)
+		path, err := parseDerivationPath(originAndPath[9:])
+		if err != nil {
+			return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid derivation path: %q", k)
+		}
+		key.DerivationPath = path
+	}
+	if xpubEnd := strings.Index(k, "/"); xpubEnd != -1 {
+		children := k[xpubEnd+1:]
+		k = k[:xpubEnd]
+		childPath, err := parsePath(children)
+		if err != nil {
+			return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid children path: %q", k)
+		}
+		key.Children = childPath
+	}
+	xpub, err := hdkeychain.NewKeyFromString(k)
+	if err != nil {
+		return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid extended key: %q", k)
+	}
+	pub, err := xpub.ECPubKey()
+	if err != nil {
+		return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid public key: %q", k)
+	}
+	network, err := networkFor(xpub)
+	if err != nil {
+		return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid network: %q", k)
+	}
+	key.Network = network
+	key.ChainCode = xpub.ChainCode()
+	key.KeyData = pub.SerializeCompressed()
+	key.ParentFingerprint = xpub.ParentFingerprint()
+	return key, nil
 }
 
 type Decoder struct {
