@@ -55,7 +55,7 @@ To reproduce a release named vX.Y.Z, use the following command to produce `seedh
 in the current directory.
 
 ```sh
-$ nix run .#mkrelease vX.Y.Z
+$ nix run github:seedhammer/seedhammer#mkrelease vX.Y.Z
 ```
 
 Use a tool such as `shasum` or `sha256sum` to verify that the release binary matches.
