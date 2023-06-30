@@ -93,6 +93,16 @@ const (
 	SortedMulti
 )
 
+// Singlesig reports whether the script is for single-sig.
+func (s Script) Singlesig() bool {
+	for _, s2 := range []Script{P2PKH, P2WPKH, P2SH_P2WPKH, P2TR} {
+		if s == s2 {
+			return true
+		}
+	}
+	return false
+}
+
 // DerivationPath returns the standard derivation path
 // for the script. It panics if the script is unknown.
 func (s Script) DerivationPath() Path {
@@ -412,13 +422,10 @@ func Parse(typ string, enc []byte) (any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("ur: crypto-account: %w", err)
 		}
-		// Support only single-sig script types.
-		for _, s := range []Script{P2PKH, P2WPKH, P2SH_P2WPKH, P2TR} {
-			if s == desc.Script {
-				return desc, nil
-			}
+		if !desc.Script.Singlesig() {
+			return nil, fmt.Errorf("ur: crypto-account: invalid single-sig script: %s", desc.Script)
 		}
-		return nil, fmt.Errorf("ur: crypto-account: invalid single-sig script: %s", desc.Script)
+		return desc, nil
 	case "crypto-output":
 		desc, err := parseOutputDescriptor(decMode, enc)
 		if err != nil {
