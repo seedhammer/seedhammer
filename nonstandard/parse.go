@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -48,6 +49,25 @@ func OutputDescriptor(enc []byte) (urtypes.OutputDescriptor, error) {
 	}
 	if err := json.Unmarshal(enc, &jsonDesc); err == nil {
 		return parseTextOutputDescriptor(jsonDesc.Descriptor)
+	}
+	// If the derivation path of a cosigner key expression matches
+	// a single-sig script, convert it to an output descriptor.
+	k, err := parseHDKey(enc)
+	if err == nil {
+		for _, s := range []urtypes.Script{urtypes.P2PKH, urtypes.P2WPKH, urtypes.P2SH_P2WPKH} {
+			path := s.DerivationPath()
+			if !reflect.DeepEqual(path, k.DerivationPath) {
+				continue
+			}
+			return urtypes.OutputDescriptor{
+				Type:      urtypes.Singlesig,
+				Threshold: 1,
+				Script:    s,
+				Keys: []urtypes.KeyDescriptor{
+					k,
+				},
+			}, nil
+		}
 	}
 	return urtypes.OutputDescriptor{}, errors.New("nonstandard: unrecognized output descriptor format")
 }
@@ -362,6 +382,14 @@ func parseHDKey(enc []byte) (urtypes.KeyDescriptor, error) {
 	xpub, err := hdkeychain.NewKeyFromString(k)
 	if err != nil {
 		return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid extended key: %q", k)
+	}
+	// Replace any slip-0132 version bytes.
+	switch hex.EncodeToString(xpub.Version()) {
+	case "04b24746", // zpub
+		"049d7cb2",   // ypub
+		"0x0295b43f", // Ypub
+		"02aa7ed3":   // Zpub
+		xpub.SetNet(&chaincfg.MainNetParams)
 	}
 	pub, err := xpub.ECPubKey()
 	if err != nil {
