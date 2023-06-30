@@ -94,45 +94,45 @@ const (
 )
 
 // DerivationPath returns the standard derivation path
-// for descriptor. It returns nil if the path is unknown.
-func (o OutputDescriptor) DerivationPath() Path {
-	switch {
-	case o.Script == P2WPKH:
+// for the script. It panics if the script is unknown.
+func (s Script) DerivationPath() Path {
+	switch s {
+	case P2WPKH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 84,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Script == P2PKH:
+	case P2PKH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 44,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Script == P2SH_P2WPKH:
+	case P2SH_P2WPKH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 49,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Script == P2TR:
+	case P2TR:
 		return Path{
 			hdkeychain.HardenedKeyStart + 86,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 		}
-	case o.Script == P2SH:
+	case P2SH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 45,
 		}
-	case o.Script == P2SH_P2WSH:
+	case P2SH_P2WSH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 48,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 0,
 			hdkeychain.HardenedKeyStart + 1,
 		}
-	case o.Script == P2WSH:
+	case P2WSH:
 		return Path{
 			hdkeychain.HardenedKeyStart + 48,
 			hdkeychain.HardenedKeyStart + 0,
@@ -140,7 +140,7 @@ func (o OutputDescriptor) DerivationPath() Path {
 			hdkeychain.HardenedKeyStart + 2,
 		}
 	}
-	return nil
+	panic("unknown script")
 }
 
 // Encode the output descriptor in the format described by

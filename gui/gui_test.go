@@ -34,14 +34,14 @@ func TestDescriptorScreenError(t *testing.T) {
 		Threshold: 2,
 		Keys:      make([]urtypes.KeyDescriptor, 2),
 	}
-	fillDescriptor(t, dupDesc, dupDesc.DerivationPath(), 12, 0)
+	fillDescriptor(t, dupDesc, dupDesc.Script.DerivationPath(), 12, 0)
 	dupDesc.Keys[1] = dupDesc.Keys[0]
 	smallDesc := urtypes.OutputDescriptor{
 		Script:    urtypes.P2WSH,
 		Threshold: 2,
 		Keys:      make([]urtypes.KeyDescriptor, 5),
 	}
-	fillDescriptor(t, smallDesc, smallDesc.DerivationPath(), 12, 0)
+	fillDescriptor(t, smallDesc, smallDesc.Script.DerivationPath(), 12, 0)
 	tests := []struct {
 		name string
 		desc urtypes.OutputDescriptor
@@ -71,7 +71,7 @@ func TestValidateDescriptor(t *testing.T) {
 		Type:      urtypes.SortedMulti,
 		Keys:      make([]urtypes.KeyDescriptor, 2),
 	}
-	fillDescriptor(t, dup, dup.DerivationPath(), 12, 0)
+	fillDescriptor(t, dup, dup.Script.DerivationPath(), 12, 0)
 	dup.Keys[1] = dup.Keys[0]
 
 	// Threshold too small.
@@ -81,7 +81,7 @@ func TestValidateDescriptor(t *testing.T) {
 		Type:      urtypes.SortedMulti,
 		Keys:      make([]urtypes.KeyDescriptor, 5),
 	}
-	fillDescriptor(t, smallDesc, smallDesc.DerivationPath(), 12, 0)
+	fillDescriptor(t, smallDesc, smallDesc.Script.DerivationPath(), 12, 0)
 
 	tests := []struct {
 		name string

@@ -105,10 +105,7 @@ func TestEngrave(t *testing.T) {
 			if len(desc.Keys) > 1 {
 				desc.Type = urtypes.SortedMulti
 			}
-			path := desc.DerivationPath()
-			if path == nil {
-				t.Fatal("no derivation path for descriptor")
-			}
+			path := desc.Script.DerivationPath()
 			plateDesc := genTestPlate(t, desc, path, test.seedLen, 0)
 			const ppmm = 4
 			plate, err := Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
@@ -204,7 +201,7 @@ func TestSplitUR(t *testing.T) {
 				if len(desc.Keys) > 1 {
 					desc.Type = urtypes.SortedMulti
 				}
-				genTestPlate(t, desc, desc.DerivationPath(), 12, 0)
+				genTestPlate(t, desc, desc.Script.DerivationPath(), 12, 0)
 				if !Recoverable(desc) {
 					t.Errorf("%d-of-%d: failed to recover", m, n)
 				}
