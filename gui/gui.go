@@ -578,7 +578,7 @@ func (s *ScanScreen) close() {
 	}
 }
 
-func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, bool) {
+func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, Result) {
 	const cameraFrameScale = 3
 	if s.camera.quit == nil && s.camera.err == nil {
 		frames := make(chan camera.Frame, 1)
@@ -615,7 +615,7 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, bo
 		switch e.Button {
 		case input.Button1:
 			s.close()
-			return nil, true
+			return nil, ResultCancelled
 		case input.Button2:
 			ctx.RotateCamera = !ctx.RotateCamera
 		}
@@ -648,10 +648,10 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, bo
 			break
 		}
 		for _, res := range results {
-			v, ok := s.parseQR(res)
-			if ok {
+			v, res := s.parseQR(res)
+			if res != ResultNone {
 				s.close()
-				return v, true
+				return v, res
 			}
 		}
 	default:
@@ -711,7 +711,7 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, bo
 	}
 	nav(input.Button1, assets.IconBack)
 	nav(input.Button2, assets.IconFlip)
-	return nil, false
+	return nil, ResultNone
 }
 
 // scaleRot is a specialized function for fast scaling and rotation of
@@ -741,19 +741,19 @@ func scaleRot(dst, src *image.Gray, rot180 bool) {
 	}
 }
 
-func (s *ScanScreen) parseNonStandard(qr []byte) (any, bool) {
+func (s *ScanScreen) parseNonStandard(qr []byte) (any, Result) {
 	if err := s.nsdecoder.Add(string(qr)); err != nil {
 		s.nsdecoder = nonstandard.Decoder{}
-		return qr, true
+		return qr, ResultComplete
 	}
 	enc := s.nsdecoder.Result()
 	if enc == nil {
-		return nil, false
+		return nil, ResultNone
 	}
-	return enc, true
+	return enc, ResultComplete
 }
 
-func (s *ScanScreen) parseQR(qr []byte) (any, bool) {
+func (s *ScanScreen) parseQR(qr []byte) (any, Result) {
 	uqr := strings.ToUpper(string(qr))
 	if !strings.HasPrefix(uqr, "UR:") {
 		s.decoder = ur.Decoder{}
@@ -768,17 +768,17 @@ func (s *ScanScreen) parseQR(qr []byte) (any, bool) {
 	typ, enc, err := s.decoder.Result()
 	if err != nil {
 		s.decoder = ur.Decoder{}
-		return nil, false
+		return nil, ResultNone
 	}
 	if enc == nil {
-		return nil, false
+		return nil, ResultNone
 	}
 	s.decoder = ur.Decoder{}
 	v, err := urtypes.Parse(typ, enc)
 	if err != nil {
-		return nil, false
+		return nil, ResultComplete
 	}
-	return v, true
+	return v, ResultComplete
 }
 
 type ErrorScreen struct {
@@ -1547,14 +1547,16 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 		}
 		switch {
 		case s.scanner != nil:
-			res, done := s.scanner.Layout(ctx, ops.Begin(), dims)
+			res, status := s.scanner.Layout(ctx, ops.Begin(), dims)
 			dialog := ops.End()
-			if !done {
+			switch status {
+			case ResultNone:
 				dialog.Add(ops)
 				return nil, false
 			}
 			s.scanner = nil
-			if res == nil {
+			switch status {
+			case ResultCancelled:
 				continue
 			}
 			if b, ok := res.([]byte); ok {
@@ -2380,14 +2382,16 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			s.engrave = eng
 			continue
 		case s.scanner != nil:
-			res, done := s.scanner.Layout(ctx, ops.Begin(), dims)
+			res, status := s.scanner.Layout(ctx, ops.Begin(), dims)
 			dialog := ops.End()
-			if !done {
+			switch status {
+			case ResultNone:
 				dialog.Add(ops)
 				return
 			}
 			s.scanner = nil
-			if res == nil {
+			switch status {
+			case ResultCancelled:
 				continue
 			}
 			desc, ok := res.(urtypes.OutputDescriptor)
