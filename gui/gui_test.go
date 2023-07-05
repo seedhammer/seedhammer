@@ -409,8 +409,8 @@ func TestMulti(t *testing.T) {
 	}
 
 	r := newRunner(t)
-	// Select multisig, start scanner.
-	r.Button(t, input.Right, input.Button3)
+	// Start scanner.
+	r.Button(t, input.Button3)
 	r.QR(t, twoOfThreeUR...)
 	for r.app.scr.desc == nil {
 		r.Frame(t)
@@ -441,60 +441,6 @@ func TestMulti(t *testing.T) {
 	}
 
 	testEngraving(t, r, r.app.scr.desc.engrave, twoOfThree.Descriptor, mnemonic, 0)
-}
-
-func TestSingle(t *testing.T) {
-	r := newRunner(t)
-
-	// Single sig, 12 words.
-	r.Button(t, input.Button3, input.Button3)
-	// Select keyboard input.
-	r.Button(t, input.Button3)
-	for r.app.scr.seed == nil {
-		r.Frame(t)
-	}
-
-	mnemonic := make(bip39.Mnemonic, 12)
-	for i := range mnemonic {
-		mnemonic[i] = bip39.RandomWord()
-	}
-	mnemonic = mnemonic.FixChecksum()
-	for _, w := range mnemonic {
-		r.String(t, strings.ToUpper(bip39.LabelFor(w)))
-		r.Button(t, input.Button2)
-	}
-	for !r.app.scr.seed.Mnemonic.Valid() {
-		r.Frame(t)
-	}
-	if got := r.app.scr.seed.Mnemonic; !reflect.DeepEqual(got, mnemonic) {
-		t.Fatalf("got seed %v, wanted %v", got, mnemonic)
-	}
-
-	// Accept seed.
-	r.Button(t, input.Button3)
-	for r.app.scr.engrave == nil {
-		r.Frame(t)
-	}
-
-	seed := bip39.MnemonicSeed(mnemonic, "")
-	desc, ok := singlesigDescriptor(mnemonic)
-	if !ok {
-		t.Fatalf("failed to build single-sig descriptor")
-	}
-	mk, err := hdkeychain.NewMaster(seed, &chaincfg.MainNetParams)
-	if err != nil {
-		t.Fatal(err)
-	}
-	k := desc.Keys[0]
-	mfp, xpub, err := bip32.Derive(mk, k.DerivationPath)
-	if mfp != k.MasterFingerprint {
-		t.Fatalf("expected fingerprint %.8x, got %.8x", mfp, k.MasterFingerprint)
-	}
-	if want, got := xpub.String(), k.String(); want != got {
-		t.Fatalf("got xpub %s, wanted %s", got, want)
-	}
-
-	testEngraving(t, r, r.app.scr.engrave, desc, mnemonic, 0)
 }
 
 func fillDescriptor(t *testing.T, desc urtypes.OutputDescriptor, path urtypes.Path, seedlen int, keyIdx int) bip39.Mnemonic {

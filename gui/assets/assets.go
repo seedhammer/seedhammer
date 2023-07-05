@@ -15,10 +15,7 @@ var (
 	ArrowLeft  = mustLoad("arrow-left.png")
 	ArrowRight = mustLoad("arrow-right.png")
 
-	PlateCreditcardPrimary   = mustLoad("plate-creditcard-primary.png")
-	PlateCreditcardSecondary = mustLoad("plate-creditcard-secondary.png")
-	PlateSquarePrimary       = mustLoad("plate-square-primary.png")
-	PlateSquareSecondary     = mustLoad("plate-square-secondary.png")
+	Hammer = mustLoad("hammer.png")
 
 	NavBtnPrimary   = mustLoad("nav-btn-primary.png")
 	NavBtnSecondary = mustLoad("nav-btn-secondary.png")

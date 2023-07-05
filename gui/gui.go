@@ -164,11 +164,10 @@ func (c *Context) Next() (Event, bool) {
 
 const longestWord = "TOMORROW"
 
-type walletType int
+type program int
 
 const (
-	singleKey walletType = iota
-	multiKey
+	backupWallet program = iota
 )
 
 type AddressesScreen struct {
@@ -332,42 +331,6 @@ type DescriptorScreen struct {
 	seed      *SeedScreen
 	warning   *ErrorScreen
 	engrave   *EngraveScreen
-}
-
-// singlesigDescriptor builds a single-sig descriptor from a seed and a passphrase. It uses
-// P2WSH and its standard derivation path.
-func singlesigDescriptor(m bip39.Mnemonic) (urtypes.OutputDescriptor, bool) {
-	network := &chaincfg.MainNetParams
-	mk, ok := deriveMasterKey(m, network)
-	if !ok {
-		return urtypes.OutputDescriptor{}, false
-	}
-
-	path := urtypes.Path{0}
-	mfp, xpub, err := bip32.Derive(mk, path)
-	if err != nil {
-		return urtypes.OutputDescriptor{}, false
-	}
-	pub, err := xpub.ECPubKey()
-	if err != nil {
-		return urtypes.OutputDescriptor{}, false
-	}
-	desc := urtypes.OutputDescriptor{
-		Threshold: 1,
-		Script:    urtypes.UnknownScript,
-		Type:      urtypes.Singlesig,
-		Keys: []urtypes.KeyDescriptor{
-			{
-				Network:           network,
-				DerivationPath:    path,
-				MasterFingerprint: mfp,
-				KeyData:           pub.SerializeCompressed(),
-				ChainCode:         xpub.ChainCode(),
-				ParentFingerprint: xpub.ParentFingerprint(),
-			},
-		},
-	}
-	return desc, true
 }
 
 func descriptorKeyIdx(desc urtypes.OutputDescriptor, m bip39.Mnemonic, pass string) (int, bool) {
@@ -2311,23 +2274,19 @@ func (s *ChoiceScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.P
 
 type MainScreen struct {
 	mnemonic bip39.Mnemonic
-	page     walletType
+	page     program
 	scanner  *ScanScreen
 	desc     *DescriptorScreen
-	seed     *SeedScreen
 	warning  *ErrorScreen
 	sdcard   struct {
 		warning *ConfirmWarningScreen
 		shown   bool
 	}
-	engrave *EngraveScreen
 }
 
 func (s *MainScreen) Select(ctx *Context) {
 	switch s.page {
-	case singleKey:
-		s.seed = NewEmptySeedScreen(ctx, "Input Seed")
-	case multiKey:
+	case backupWallet:
 		s.scanner = &ScanScreen{
 			Title: "Scan",
 			Lead:  "Wallet Output Descriptor",
@@ -2344,42 +2303,11 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 	}
 	for {
 		switch s.page {
-		case singleKey:
-			title = "Backup Singlesig"
-			th = &singleTheme
-		case multiKey:
-			title = "Backup Multisig"
+		case backupWallet:
+			title = "Backup Wallet"
 			th = &descriptorTheme
 		}
 		switch {
-		case s.seed != nil:
-			m, done := s.seed.Layout(ctx, ops.Begin(), th, dims)
-			dialog := ops.End()
-			if !done {
-				dialog.Add(ops)
-				return
-			}
-			s.seed = nil
-			if m == nil {
-				break
-			}
-			desc, ok := singlesigDescriptor(m)
-			if !ok {
-				s.warning = &ErrorScreen{
-					Title: "Invalid Seed",
-					Body:  "The seed is invalid.",
-				}
-				continue
-			}
-			s.mnemonic = m
-			s.seed = nil
-			eng, err := NewEngraveScreen(ctx, desc, s.mnemonic)
-			if err != nil {
-				s.warning = NewErrorScreen(err)
-				continue
-			}
-			s.engrave = eng
-			continue
 		case s.scanner != nil:
 			res, status := s.scanner.Layout(ctx, ops.Begin(), dims)
 			dialog := ops.End()
@@ -2410,18 +2338,6 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			s.desc = &DescriptorScreen{
 				Descriptor: desc,
 			}
-			continue
-		case s.engrave != nil:
-			res := s.engrave.Layout(ctx, ops.Begin(), dims)
-			dialog := ops.End()
-			switch res {
-			case ResultNone:
-				dialog.Add(ops)
-				return
-			case ResultCancelled:
-				s.seed = NewSeedScreen(ctx, s.mnemonic)
-			}
-			s.engrave = nil
 			continue
 		case s.desc != nil:
 			done := s.desc.Layout(ctx, ops.Begin(), dims)
@@ -2481,14 +2397,14 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			}
 			s.page--
 			if s.page < 0 {
-				s.page = multiKey
+				s.page = backupWallet
 			}
 		case input.Right:
 			if !e.Pressed {
 				break
 			}
 			s.page++
-			if s.page > multiKey {
+			if s.page > backupWallet {
 				s.page = 0
 			}
 		}
@@ -2614,36 +2530,32 @@ func (s *MainScreen) layoutPage(ops op.Ctx, th *Colors, width int) image.Point {
 
 	const margin = 16
 
-	op.Position(ops, left, image.Pt(margin, h.Y(leftsz)))
-	op.Position(ops, content, image.Pt((width-contentsz.X)/2, h.Y(contentsz)))
-	op.Position(ops, right, image.Pt(width-margin-rightsz.X, h.Y(rightsz)))
+	op.Position(ops, content, image.Pt((width-contentsz.X)/2, 8+h.Y(contentsz)))
+	const npage = int(backupWallet) + 1
+	if npage > 1 {
+		op.Position(ops, left, image.Pt(margin, h.Y(leftsz)))
+		op.Position(ops, right, image.Pt(width-margin-rightsz.X, h.Y(rightsz)))
+	}
 
 	return image.Pt(width, h.Size.Y)
 }
 
 func (s *MainScreen) layoutMainPlates(ops op.Ctx) image.Point {
 	switch s.page {
-	case singleKey:
-		img := assets.PlateCreditcardPrimary
+	case backupWallet:
+		img := assets.Hammer
 		op.ImageOp(ops, img)
 		return img.Bounds().Size()
-	case multiKey:
-		img := assets.PlateSquarePrimary
-		off := image.Pt(16, 8)
-		var cursor image.Point
-		for i := 0; i < 5; i++ {
-			op.Offset(ops, cursor)
-			op.ImageOp(ops, img)
-			cursor = cursor.Add(off)
-		}
-		return img.Bounds().Size().Add(cursor).Sub(off)
 	}
 	panic("invalid page")
 }
 
 func (s *MainScreen) layoutPager(ops op.Ctx, th *Colors) image.Point {
-	const npages = int(multiKey) + 1
+	const npages = int(backupWallet) + 1
 	const space = 4
+	if npages <= 1 {
+		return image.Point{}
+	}
 	sz := assets.CircleFilled.Bounds().Size()
 	for i := 0; i < npages; i++ {
 		op.Offset(ops, image.Pt((sz.X+space)*i, 0))
