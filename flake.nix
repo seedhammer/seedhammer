@@ -237,7 +237,7 @@
                 cp -R "${self.packages.${system}.camera-driver}"/* initramfs/
                 # Set constant mtimes and permissions for determinism.
                 chmod 0755 `find initramfs`
-                # Remove symlinks as their permissions are not inconsistent across platforms.
+                # Remove symlinks as their permissions are not consistent across platforms.
                 # Fortunately we only need symlinks during linking to libraries, not at runtime.
                 rm -f `find initramfs -type l`
                 ${pkgs.coreutils}/bin/touch -d '${timestamp}' `find initramfs`
@@ -430,12 +430,13 @@
               in
               pkgs.stdenv.mkDerivation rec {
                 pname = "libcamera";
-                version = "0.0.5";
+                version = "0.1";
+                patch = "0";
 
                 src = pkgs.fetchgit {
                   url = "https://git.libcamera.org/libcamera/libcamera.git";
-                  rev = "v${version}";
-                  hash = "sha256-rd1YIEosg4+H/FJBYCoxdQlV9F0evU5fckHJrSdVPOE";
+                  rev = "v${version}.${patch}";
+                  hash = "sha256-icHZtv25QvJEv0DlELT3cDxho3Oz2BJAMNKr5W4bshk=";
                 };
 
                 patches = [
@@ -472,7 +473,7 @@
                     -Dcam=disabled \
                     -Dgstreamer=disabled \
                     -Dtracing=disabled \
-                    -Dpipelines=raspberrypi \
+                    -Dpipelines=rpi/vc4 \
                     -Ddocumentation=disabled \
                     -Dlc-compliance=disabled \
                     --cross-file=${cross-file} \
@@ -483,14 +484,13 @@
                 '';
 
                 installPhase = ''
-                  mkdir -p $out/lib/libcamera $out/share/libcamera/ipa/raspberrypi $out/include
-                  cp -P ./src/libcamera/base/libcamera-base.so.${version} \
-                    ./src/libcamera/base/libcamera-base.so \
-                    ./src/libcamera/libcamera.so.${version} \
-                    ./src/libcamera/libcamera.so \
-                    $out/lib
-                  cp ./src/ipa/raspberrypi/ipa_rpi.so $out/lib/libcamera
-                  cp ../src/ipa/raspberrypi/data/*.json $out/share/libcamera/ipa/raspberrypi
+                  mkdir -p $out/lib/libcamera $out/share/libcamera/ipa/rpi/vc4 $out/include
+                  cp ./src/libcamera/libcamera.so.${version}.${patch} $out/lib/libcamera.so.${version}
+                  cp ./src/libcamera/base/libcamera-base.so.${version}.${patch} $out/lib/libcamera-base.so.${version}
+                  ln -s $out/lib/libcamera.so.${version} $out/lib/libcamera.so
+                  ln -s $out/lib/libcamera-base.so.${version} $out/lib/libcamera-base.so
+                  cp ./src/ipa/rpi/vc4/ipa_rpi_vc4.so $out/lib/libcamera
+                  cp ../src/ipa/rpi/vc4/data/*.json $out/share/libcamera/ipa/rpi/vc4/
                   cp -a ../include/libcamera include/libcamera $out/include
                   patchelf --set-rpath "/lib" `find $out/lib -type f`
                 '';
