@@ -330,13 +330,7 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	}
 	runReset := func() {
 		off := int(math.Round(10 * Millimeter))
-		const steps = 3
-		for i := 0; i < steps; i++ {
-			coord0 := off * (i + 0) / steps
-			reset.Line(image.Pt(coord0, coord0))
-			coord1 := off * (i + 1) / steps
-			reset.Move(image.Pt(coord1, coord1))
-		}
+		reset.Line(image.Pt(off, off))
 	}
 	runReset()
 	reset.Prepare()
