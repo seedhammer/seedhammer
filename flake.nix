@@ -130,7 +130,11 @@
                 ./scripts/config --enable VIDEO_BCM2835_UNICAM
                 ./scripts/config --enable VIDEO_CODEC_BCM2835
                 ./scripts/config --enable VIDEO_ISP_BCM2835
+                # Raspberry camera module 1.
                 ./scripts/config --enable VIDEO_OV5647
+                # Raspberry camera module 3.
+                ./scripts/config --enable VIDEO_IMX708
+                ./scripts/config --enable VIDEO_DW9807_VCM
                 # Enable SPI.
                 ./scripts/config --enable SPI_BCM2835
                 # Enable FTDI USB serial driver.
@@ -174,6 +178,7 @@
                 cp arch/arm/boot/dts/*rpi-zero*.dtb $out/
                 cp arch/arm/boot/dts/overlays/dwc2.dtbo $out/overlays/
                 cp arch/arm/boot/dts/overlays/ov5647.dtbo $out/overlays/
+                cp arch/arm/boot/dts/overlays/imx708.dtbo $out/overlays/
                 cp arch/arm/boot/dts/overlays/mipi-dbi-spi.dtbo $out/overlays/
               '';
 
@@ -534,9 +539,9 @@
             firmware = localpkgs.fetchFromGitHub {
               owner = "raspberrypi";
               repo = "firmware";
-              rev = "0d6514f32722e4acf091ab2af9715793ffd6b727";
+              rev = "9de4cecc88873d154455b2c254a2bfbb2be8c1b7";
               sparseCheckout = [ "boot" ];
-              hash = "sha256-lX33EMZas1cdCFb/UZc6yjIWZ/4Rj2/yI07GZjnL7fs=";
+              hash = "sha256-rSZ3sUnSmBcsIqc+K91GDs5qlqiP+j9zf9gM2lqzr8w=";
             };
             initramfs = self.lib.${system}.mkinitramfs false;
             initramfs-debug = self.lib.${system}.mkinitramfs true;
