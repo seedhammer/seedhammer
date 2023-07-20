@@ -147,6 +147,10 @@
                 # Enable slower but better supported USB driver.
                 ./scripts/config --disable USB_DWCOTG
                 ./scripts/config --enable USB_DWC2
+
+                # For Raspberry Pi Zero 2.
+                ./scripts/config --enable ARCH_MULTI_V7
+                ./scripts/config --enable ARM_ERRATA_643719
               '' + (if debug then ''
                 ./scripts/config --enable USB_G_SERIAL
               '' else "");
