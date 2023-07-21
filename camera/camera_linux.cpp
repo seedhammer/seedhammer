@@ -104,7 +104,17 @@ int open_camera(unsigned int width, unsigned int height, uintptr_t handle) {
 
   auto &rawConfig = conf->at(1);
   auto sensor_size = c->properties().get(properties::PixelArraySize).value();
-  rawConfig.size = sensor_size;
+  // Even though we set bufferCount to 0, memory is still allocated for this
+  // dummy stream. Limit stream size the avoid out-of-memory errors. The limit
+  // is arbitrarily set to the camera module 1 sensor.
+  const int max_width = 2592;
+  const int max_height = 1944;
+  if (sensor_size.width > max_width || sensor_size.height > max_height) {
+    sensor_size.width = sensor_size.width/2;
+    sensor_size.height = sensor_size.height/2;
+  }
+  rawConfig.size.width = sensor_size.width;
+  rawConfig.size.height = sensor_size.height;
   rawConfig.pixelFormat = formats::SBGGR8; // Any supported raw format would do.
   rawConfig.colorSpace = ColorSpace::Raw;
   rawConfig.bufferCount = 0;
@@ -184,6 +194,9 @@ int start_camera(unsigned int width, unsigned int height) {
   // Determine exposure from the center of the image.
   controls.get()->set(controls::AeMeteringMode,
                       controls::MeteringCentreWeighted);
+  // Enable auto-focus, close range.
+  controls.get()->set(controls::AfMode, controls::AfModeContinuous);
+  controls.get()->set(controls::AfRange, controls::AfRangeMacro);
   auto ret = camera->start(controls.get());
   if (ret != 0) {
     return ret;
