@@ -162,7 +162,7 @@ func (c *Context) Next() (Event, bool) {
 	return evt, true
 }
 
-const longestWord = "REMEMBER"
+const longestWord = "TOMORROW"
 const passphrase = ""
 
 type walletType int
