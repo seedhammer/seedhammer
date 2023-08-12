@@ -725,16 +725,16 @@ func scaleRot(dst, src *image.Gray, rot180 bool) {
 	scale := sb.Dx() / db.Dx()
 	for y := 0; y < db.Dy(); y++ {
 		sx := sb.Max.X - 1 - y*scale
-		dy := y + db.Min.Y
+		dy := db.Max.Y - y
 		if rot180 {
-			dy = db.Max.Y - y
+			dy = y + db.Min.Y
 		}
 		for x := 0; x < db.Dx(); x++ {
 			sy := x*scale + sb.Min.Y
 			c := src.GrayAt(sx, sy)
-			dx := x + db.Min.X
+			dx := db.Max.X - 1 - x
 			if rot180 {
-				dx = db.Max.X - 1 - x
+				dx = x + db.Min.X
 			}
 			dst.SetGray(dx, dy, c)
 		}
