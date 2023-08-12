@@ -176,10 +176,9 @@
                 mkdir -p $out/overlays
                 cp arch/arm/boot/zImage $out/kernel.img
                 cp arch/arm/boot/dts/*rpi-zero*.dtb $out/
-                cp arch/arm/boot/dts/overlays/dwc2.dtbo $out/overlays/
-                cp arch/arm/boot/dts/overlays/ov5647.dtbo $out/overlays/
-                cp arch/arm/boot/dts/overlays/imx708.dtbo $out/overlays/
-                cp arch/arm/boot/dts/overlays/mipi-dbi-spi.dtbo $out/overlays/
+                pushd arch/arm/boot/dts/overlays
+                cp dwc2.dtbo ov5647.dtbo imx708.dtbo mipi-dbi-spi.dtbo disable-bt.dtbo disable-wifi.dtbo $out/overlays/
+                popd
               '';
 
               allowedReferences = [ ];
@@ -294,6 +293,8 @@
                 dtparam=write-only
                 dtparam=speed=40000000
                 dtoverlay=dwc2
+                dtoverlay=disable-bt
+                dtoverlay=disable-wifi
               '';
             in
             pkgs.stdenvNoCC.mkDerivation {
