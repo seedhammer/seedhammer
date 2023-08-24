@@ -163,7 +163,7 @@ func TestDescriptorScreen(t *testing.T) {
 func TestEngraveScreenCancel(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
-	scr, err := NewEngraveScreen(ctx, twoOfThree.Descriptor, twoOfThree.Mnemonic)
+	scr, err := NewEngraveScreen(ctx, twoOfThree.Descriptor, 0, twoOfThree.Mnemonic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestEngraveScreenError(t *testing.T) {
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
 			mnemonic := fillDescriptor(t, desc, test.path, 12, 0)
-			_, err := NewEngraveScreen(ctx, desc, mnemonic)
+			_, err := NewEngraveScreen(ctx, desc, 0, mnemonic)
 			if err == nil {
 				t.Fatal("invalid descriptor succeeded")
 			}
@@ -225,7 +225,7 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	p.engrave.closed = make(chan []mjolnir.Cmd, 1)
 	p.engrave.connErr = errors.New("failed to connect")
 	ctx := NewContext(p)
-	scr, err := NewEngraveScreen(ctx, twoOfThree.Descriptor, twoOfThree.Mnemonic)
+	scr, err := NewEngraveScreen(ctx, twoOfThree.Descriptor, 0, twoOfThree.Mnemonic)
 	if err != nil {
 		t.Fatal(err)
 	}

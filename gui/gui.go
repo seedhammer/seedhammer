@@ -870,8 +870,6 @@ type EngraveScreen struct {
 	confirm ConfirmDelay
 }
 
-var errKeyNotInDescriptor = errors.New("share not part of descriptor")
-
 type errDuplicateKey struct {
 	Fingerprint uint32
 }
@@ -897,11 +895,6 @@ func NewErrorScreen(err error) *ErrorScreen {
 		return &ErrorScreen{
 			Title: "Too Large",
 			Body:  "The descriptor cannot fit any plate size.",
-		}
-	case errors.Is(err, errKeyNotInDescriptor):
-		return &ErrorScreen{
-			Title: "Unknown Share",
-			Body:  "The share is not part of the wallet or is passphrase protected.",
 		}
 	default:
 		return &ErrorScreen{
@@ -948,11 +941,7 @@ func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (
 	return backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
 }
 
-func NewEngraveScreen(ctx *Context, desc urtypes.OutputDescriptor, m bip39.Mnemonic) (*EngraveScreen, error) {
-	keyIdx, ok := descriptorKeyIdx(desc, m, "")
-	if !ok {
-		return nil, errKeyNotInDescriptor
-	}
+func NewEngraveScreen(ctx *Context, desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (*EngraveScreen, error) {
 	plate, err := engravePlate(desc, keyIdx, m)
 	if err != nil {
 		return nil, err
@@ -1646,7 +1635,15 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				}
 				break
 			}
-			eng, err := NewEngraveScreen(ctx, s.Descriptor, s.Mnemonic)
+			keyIdx, ok := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
+			if !ok {
+				s.warning = &ErrorScreen{
+					Title: "Unknown Share",
+					Body:  "The share is not part of the wallet or is passphrase protected.",
+				}
+				break
+			}
+			eng, err := NewEngraveScreen(ctx, s.Descriptor, keyIdx, s.Mnemonic)
 			if err != nil {
 				s.warning = NewErrorScreen(err)
 				break
