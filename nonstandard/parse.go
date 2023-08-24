@@ -52,8 +52,7 @@ func OutputDescriptor(enc []byte) (urtypes.OutputDescriptor, error) {
 	}
 	// If the derivation path of a cosigner key expression matches
 	// a single-sig script, convert it to an output descriptor.
-	k, err := parseHDKey(enc)
-	if err == nil {
+	if k, err := parseHDKey(nil, enc); err == nil {
 		for _, s := range []urtypes.Script{urtypes.P2PKH, urtypes.P2WPKH, urtypes.P2SH_P2WPKH} {
 			path := s.DerivationPath()
 			if !reflect.DeepEqual(path, k.DerivationPath) {
@@ -337,7 +336,7 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 		keys = args[1:]
 	}
 	for _, k := range keys {
-		key, err := parseHDKey([]byte(k))
+		key, err := parseHDKey(r.Script.DerivationPath(), []byte(k))
 		if err != nil {
 			return urtypes.OutputDescriptor{}, fmt.Errorf("hdkey: %w", err)
 		}
@@ -346,27 +345,29 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 	return r, nil
 }
 
-func parseHDKey(enc []byte) (urtypes.KeyDescriptor, error) {
+func parseHDKey(impliedPath urtypes.Path, enc []byte) (urtypes.KeyDescriptor, error) {
 	k := string(enc)
-	var key urtypes.KeyDescriptor
+	key := urtypes.KeyDescriptor{
+		DerivationPath: impliedPath,
+	}
 	if len(k) > 0 && k[0] == '[' {
 		end := strings.Index(k, "]")
 		if end == -1 {
-			return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: missing ']': %q", k)
+			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: missing ']': %q", k)
 		}
 		originAndPath := k[1:end]
 		k = k[end+1:]
 		if len(originAndPath) < 9 || originAndPath[8] != '/' {
-			return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: missing or invalid fingerprint: %q", k)
+			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: missing or invalid fingerprint: %q", k)
 		}
 		fp, err := hex.DecodeString(originAndPath[:8])
 		if err != nil {
-			return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid fingerprint: %q", k)
+			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid fingerprint: %q", k)
 		}
 		key.MasterFingerprint = binary.BigEndian.Uint32(fp)
 		path, err := parseDerivationPath(originAndPath[9:])
 		if err != nil {
-			return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid derivation path: %q", k)
+			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid derivation path: %q", k)
 		}
 		key.DerivationPath = path
 	}
@@ -375,29 +376,49 @@ func parseHDKey(enc []byte) (urtypes.KeyDescriptor, error) {
 		k = k[:xpubEnd]
 		childPath, err := parsePath(children)
 		if err != nil {
-			return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid children path: %q", k)
+			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid children path: %q", k)
 		}
 		key.Children = childPath
 	}
 	xpub, err := hdkeychain.NewKeyFromString(k)
 	if err != nil {
-		return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid extended key: %q", k)
+		return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid extended key: %q", k)
 	}
-	// Replace any slip-0132 version bytes.
-	switch hex.EncodeToString(xpub.Version()) {
-	case "04b24746", // zpub
-		"049d7cb2",   // ypub
-		"0x0295b43f", // Ypub
-		"02aa7ed3":   // Zpub
+	const (
+		xpubVer = "0488b21e"
+		zpubVer = "04b24746"
+		ypubVer = "049d7cb2"
+		YpubVer = "0x0295b43f"
+		ZpubVer = "02aa7ed3"
+	)
+	version := hex.EncodeToString(xpub.Version())
+	if key.DerivationPath == nil {
+		// This is a key with no implicit or explicit derivation path, fall back
+		// to deriving the path from the SLIP-132 version. We support only the
+		// common ones, because ideally the derivation path should always be provided.
+		var script urtypes.Script
+		switch version {
+		case xpubVer:
+			script = urtypes.P2PKH
+		case zpubVer:
+			script = urtypes.P2WPKH
+		default:
+			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: unsupported version: %s", version)
+		}
+		key.DerivationPath = script.DerivationPath()
+	}
+	// Now we have a derivation path, normalize the version bytes to xpub.
+	switch version {
+	case zpubVer, ypubVer, YpubVer, ZpubVer:
 		xpub.SetNet(&chaincfg.MainNetParams)
 	}
 	pub, err := xpub.ECPubKey()
 	if err != nil {
-		return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid public key: %q", k)
+		return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid public key: %q", k)
 	}
 	network, err := networkFor(xpub)
 	if err != nil {
-		return urtypes.KeyDescriptor{}, fmt.Errorf("descriptor: invalid network: %q", k)
+		return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid network: %q", k)
 	}
 	key.Network = network
 	key.ChainCode = xpub.ChainCode()
