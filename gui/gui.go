@@ -964,7 +964,7 @@ func NewErrorScreen(err error) *ErrorScreen {
 	case errors.Is(err, errKeyNotInDescriptor):
 		return &ErrorScreen{
 			Title: "Unknown Share",
-			Body:  "The share is not part of the wallet.",
+			Body:  "The share is not part of the wallet or is passphrase protected.",
 		}
 	default:
 		return &ErrorScreen{
