@@ -155,7 +155,7 @@ func TestDescriptorScreen(t *testing.T) {
 	// Accept seed.
 	ctxButton(ctx, input.Button3)
 	scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if scr.warning == nil {
+	if scr.seed.warning == nil {
 		t.Fatal("a non-participating seed was accepted")
 	}
 }
@@ -337,7 +337,7 @@ func ctxQR(t *testing.T, p *testPlatform, frame func(), qrs ...string) {
 func TestSeedScreenScan(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
-	scr := NewEmptySeedScreen(ctx, "")
+	scr := NewEmptySeedScreen(urtypes.OutputDescriptor{}, "")
 	frame := func() {
 		scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	}
@@ -358,7 +358,7 @@ func TestSeedScreenScan(t *testing.T) {
 func TestSeedScreenScanInvalid(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
-	scr := NewEmptySeedScreen(ctx, "")
+	scr := NewEmptySeedScreen(urtypes.OutputDescriptor{}, "")
 	frame := func() {
 		scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	}
@@ -374,13 +374,13 @@ func TestSeedScreenScanInvalid(t *testing.T) {
 func TestSeedScreenInvalidSeed(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
-	scr := NewSeedScreen(ctx, make(bip39.Mnemonic, len(twoOfThree.Mnemonic)))
+	scr := NewSeedScreen(urtypes.OutputDescriptor{}, make(bip39.Mnemonic, len(twoOfThree.Mnemonic)))
 	copy(scr.Mnemonic, twoOfThree.Mnemonic)
 	// Invalidate seed.
 	scr.Mnemonic[0] = 0
 	// Accept seed.
 	ctxButton(ctx, input.Button3)
-	_, done := scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
+	done := scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	if done || scr.warning == nil {
 		t.Fatal("invalid seed accepted")
 	}
@@ -391,13 +391,11 @@ func TestSeedScreenInvalidSeed(t *testing.T) {
 	ctxButton(ctx, input.Button1)
 	// Hold confirm.
 	ctxPress(ctx, input.Button3)
-	_, done = scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
-	if done {
+	if done = scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{}); done {
 		t.Error("exited screen without confirmation")
 	}
 	p.timeOffset += confirmDelay
-	_, done = scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
-	if !done {
+	if done = scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{}); !done {
 		t.Error("failed to exit screen")
 	}
 }
@@ -436,11 +434,11 @@ func TestMulti(t *testing.T) {
 
 	// Accept seed, go to engrave.
 	r.Button(t, input.Button3)
-	for r.app.scr.desc.engrave == nil {
+	for r.app.scr.desc.seed.engrave == nil {
 		r.Frame(t)
 	}
 
-	testEngraving(t, r, r.app.scr.desc.engrave, twoOfThree.Descriptor, mnemonic, 0)
+	testEngraving(t, r, r.app.scr.desc.seed.engrave, twoOfThree.Descriptor, mnemonic, 0)
 }
 
 func fillDescriptor(t *testing.T, desc urtypes.OutputDescriptor, path urtypes.Path, seedlen int, keyIdx int) bip39.Mnemonic {

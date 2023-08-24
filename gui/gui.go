@@ -325,12 +325,10 @@ func (s *AddressesScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) boo
 
 type DescriptorScreen struct {
 	Descriptor urtypes.OutputDescriptor
-	mnemonic   bip39.Mnemonic
 
 	addresses *AddressesScreen
 	seed      *SeedScreen
 	warning   *ErrorScreen
-	engrave   *EngraveScreen
 }
 
 func descriptorKeyIdx(desc urtypes.OutputDescriptor, m bip39.Mnemonic, pass string) (int, bool) {
@@ -370,8 +368,8 @@ func deriveMasterKey(m bip39.Mnemonic, net *chaincfg.Params) (*hdkeychain.Extend
 
 const infoSpacing = 8
 
-func (s *DescriptorScreen) inputSeed(ctx *Context) {
-	s.seed = NewEmptySeedScreen(ctx, "Input Share")
+func (s *DescriptorScreen) inputSeed() {
+	s.seed = NewEmptySeedScreen(s.Descriptor, "Input Share")
 }
 
 func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bool {
@@ -388,37 +386,13 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 			s.addresses = nil
 			continue
 		case s.seed != nil:
-			m, done := s.seed.Layout(ctx, ops.Begin(), th, dims)
+			done := s.seed.Layout(ctx, ops.Begin(), th, dims)
 			dialog := ops.End()
 			if !done {
 				dialog.Add(ops)
 				return false
 			}
 			s.seed = nil
-			if m == nil {
-				break
-			}
-			s.mnemonic = m
-			eng, err := NewEngraveScreen(ctx, s.Descriptor, s.mnemonic)
-			if err != nil {
-				s.warning = NewErrorScreen(err)
-				continue
-			}
-			s.engrave = eng
-			continue
-		case s.engrave != nil:
-			res := s.engrave.Layout(ctx, ops.Begin(), dims)
-			dialog := ops.End()
-			switch res {
-			case ResultNone:
-				dialog.Add(ops)
-				return false
-			case ResultCancelled:
-				s.seed = NewSeedScreen(ctx, s.mnemonic)
-			case ResultComplete:
-				s.inputSeed(ctx)
-			}
-			s.engrave = nil
 			continue
 		case s.warning != nil:
 			dismissed := s.warning.Layout(ctx, ops.Begin(), th, dims)
@@ -451,7 +425,7 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 				s.warning = NewErrorScreen(err)
 				continue
 			}
-			s.inputSeed(ctx)
+			s.inputSeed()
 		}
 	}
 
@@ -1443,8 +1417,10 @@ var (
 	}
 )
 
-func NewEmptySeedScreen(ctx *Context, title string) *SeedScreen {
-	s := &SeedScreen{}
+func NewEmptySeedScreen(desc urtypes.OutputDescriptor, title string) *SeedScreen {
+	s := &SeedScreen{
+		Descriptor: desc,
+	}
 	s.method = &ChoiceScreen{
 		Title:   title,
 		Lead:    "Choose input method",
@@ -1453,22 +1429,25 @@ func NewEmptySeedScreen(ctx *Context, title string) *SeedScreen {
 	return s
 }
 
-func NewSeedScreen(ctx *Context, m bip39.Mnemonic) *SeedScreen {
+func NewSeedScreen(desc urtypes.OutputDescriptor, m bip39.Mnemonic) *SeedScreen {
 	return &SeedScreen{
-		Mnemonic: m,
+		Descriptor: desc,
+		Mnemonic:   m,
 	}
 }
 
 type SeedScreen struct {
-	Mnemonic bip39.Mnemonic
-	selected int
-	scroll   int
-	method   *ChoiceScreen
-	seedlen  *ChoiceScreen
-	input    *WordKeyboardScreen
-	scanner  *ScanScreen
-	cancel   *ConfirmWarningScreen
-	warning  *ErrorScreen
+	Descriptor urtypes.OutputDescriptor
+	Mnemonic   bip39.Mnemonic
+	selected   int
+	scroll     int
+	method     *ChoiceScreen
+	seedlen    *ChoiceScreen
+	input      *WordKeyboardScreen
+	scanner    *ScanScreen
+	engrave    *EngraveScreen
+	cancel     *ConfirmWarningScreen
+	warning    *ErrorScreen
 }
 
 func (s *SeedScreen) empty() bool {
@@ -1488,7 +1467,7 @@ func emptyMnemonic(nwords int) bip39.Mnemonic {
 	return m
 }
 
-func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) (bip39.Mnemonic, bool) {
+func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) bool {
 	var complete bool
 	for {
 		complete = len(s.Mnemonic) > 0
@@ -1514,7 +1493,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			switch status {
 			case ResultNone:
 				dialog.Add(ops)
-				return nil, false
+				return false
 			}
 			s.scanner = nil
 			switch status {
@@ -1550,7 +1529,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			dialog := ops.End()
 			if !done {
 				dialog.Add(ops)
-				return nil, false
+				return false
 			}
 			s.seedlen = nil
 			if choice == -1 {
@@ -1568,11 +1547,11 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			dialog := ops.End()
 			if !done {
 				dialog.Add(ops)
-				return nil, false
+				return false
 			}
 			switch choice {
 			case -1:
-				return nil, true
+				return true
 			case 0:
 				s.seedlen = &ChoiceScreen{
 					Title:   "Input Seed",
@@ -1591,19 +1570,31 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			dialog := ops.End()
 			if !done {
 				dialog.Add(ops)
-				return nil, false
+				return false
 			}
 			s.input = nil
 			if s.empty() {
-				return nil, true
+				return true
 			}
+			continue
+		case s.engrave != nil:
+			res := s.engrave.Layout(ctx, ops.Begin(), dims)
+			dialog := ops.End()
+			switch res {
+			case ResultNone:
+				dialog.Add(ops)
+				return false
+			case ResultComplete:
+				return true
+			}
+			s.engrave = nil
 			continue
 		case s.cancel != nil:
 			result := s.cancel.Layout(ctx, ops.Begin(), th, dims)
 			warning := ops.End()
 			switch result {
 			case ConfirmYes:
-				return nil, true
+				return true
 			case ConfirmNo:
 				s.cancel = nil
 				continue
@@ -1620,7 +1611,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				break
 			}
 			if s.empty() {
-				return nil, true
+				return true
 			}
 			s.cancel = &ConfirmWarningScreen{
 				Title: "Discard Seed?",
@@ -1655,7 +1646,13 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				}
 				break
 			}
-			return s.Mnemonic, true
+			eng, err := NewEngraveScreen(ctx, s.Descriptor, s.Mnemonic)
+			if err != nil {
+				s.warning = NewErrorScreen(err)
+				break
+			}
+			s.engrave = eng
+			continue
 		case input.Down:
 			if e.Pressed && s.selected < len(s.Mnemonic)-1 {
 				s.selected++
@@ -1727,7 +1724,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			layoutNavigation(ctx, ops, th, dims, NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
 		}
 	}
-	return nil, false
+	return false
 }
 
 const scrollFadeDist = 16
