@@ -2404,7 +2404,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			if !ok {
 				s.warning = &ErrorScreen{
 					Title: "Error",
-					Body:  "The scanned data does not represent a wallet output descriptor.",
+					Body:  "The scanned data does not represent a wallet output descriptor or XPUB key.",
 				}
 				continue
 			}
