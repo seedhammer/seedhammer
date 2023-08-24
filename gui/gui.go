@@ -1436,6 +1436,7 @@ type SeedScreen struct {
 	scanner    *ScanScreen
 	engrave    *EngraveScreen
 	cancel     *ConfirmWarningScreen
+	confirm    *ConfirmWarningScreen
 	warning    *ErrorScreen
 }
 
@@ -1465,15 +1466,6 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				complete = false
 				break
 			}
-		}
-		if s.warning != nil {
-			dismiss := s.warning.Layout(ctx, ops.Begin(), th, dims)
-			warning := ops.End()
-			if dismiss {
-				s.warning = nil
-				continue
-			}
-			defer warning.Add(ops)
 		}
 		switch {
 		case s.scanner != nil:
@@ -1589,6 +1581,32 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				continue
 			}
 			defer warning.Add(ops)
+		case s.confirm != nil:
+			result := s.confirm.Layout(ctx, ops.Begin(), th, dims)
+			warning := ops.End()
+			switch result {
+			case ConfirmYes:
+				s.confirm = nil
+				eng, err := NewEngraveScreen(ctx, s.Descriptor, 0, s.Mnemonic)
+				if err != nil {
+					s.warning = NewErrorScreen(err)
+					continue
+				}
+				s.engrave = eng
+				continue
+			case ConfirmNo:
+				s.confirm = nil
+				continue
+			}
+			defer warning.Add(ops)
+		case s.warning != nil:
+			dismiss := s.warning.Layout(ctx, ops.Begin(), th, dims)
+			warning := ops.End()
+			if dismiss {
+				s.warning = nil
+				continue
+			}
+			defer warning.Add(ops)
 		}
 		e, ok := ctx.Next()
 		if !ok {
@@ -1637,9 +1655,21 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			}
 			keyIdx, ok := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
 			if !ok {
-				s.warning = &ErrorScreen{
-					Title: "Unknown Share",
-					Body:  "The share is not part of the wallet or is passphrase protected.",
+				// Passphrase protected seeds don't match the descriptor, so
+				// allow the user to ignore the mismatch. Don't allow this for
+				// multisig descriptors where we can't know which key the seed belongs
+				// to.
+				if len(s.Descriptor.Keys) == 1 {
+					s.confirm = &ConfirmWarningScreen{
+						Title: "Unknown Share",
+						Body:  "Long press to confirm the share has a passphrase.\n\nPress back otherwise.",
+						Icon:  assets.IconCheckmark,
+					}
+				} else {
+					s.warning = &ErrorScreen{
+						Title: "Unknown Share",
+						Body:  "The share is not part of the wallet or is passphrase protected.",
+					}
 				}
 				break
 			}
@@ -1712,7 +1742,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 	}
 	clipScroll(ops, ops.End(), image.Rectangle(list))
 
-	if s.cancel == nil && s.warning == nil {
+	if s.cancel == nil && s.warning == nil && s.confirm == nil {
 		layoutNavigation(ctx, ops, th, dims,
 			NavButton{Button: input.Button1, Style: StyleSecondary, Icon: assets.IconBack},
 			NavButton{Button: input.Button2, Style: StyleSecondary, Icon: assets.IconEdit},
