@@ -163,7 +163,6 @@ func (c *Context) Next() (Event, bool) {
 }
 
 const longestWord = "TOMORROW"
-const passphrase = ""
 
 type walletType int
 
@@ -337,9 +336,9 @@ type DescriptorScreen struct {
 
 // singlesigDescriptor builds a single-sig descriptor from a seed and a passphrase. It uses
 // P2WSH and its standard derivation path.
-func singlesigDescriptor(m bip39.Mnemonic, pass string) (urtypes.OutputDescriptor, bool) {
+func singlesigDescriptor(m bip39.Mnemonic) (urtypes.OutputDescriptor, bool) {
 	network := &chaincfg.MainNetParams
-	mk, ok := deriveMasterKey(m, pass, network)
+	mk, ok := deriveMasterKey(m, network)
 	if !ok {
 		return urtypes.OutputDescriptor{}, false
 	}
@@ -395,8 +394,8 @@ func descriptorKeyIdx(desc urtypes.OutputDescriptor, m bip39.Mnemonic, pass stri
 	return 0, false
 }
 
-func deriveMasterKey(m bip39.Mnemonic, pass string, net *chaincfg.Params) (*hdkeychain.ExtendedKey, bool) {
-	seed := bip39.MnemonicSeed(m, pass)
+func deriveMasterKey(m bip39.Mnemonic, net *chaincfg.Params) (*hdkeychain.ExtendedKey, bool) {
+	seed := bip39.MnemonicSeed(m, "")
 	mk, err := hdkeychain.NewMaster(seed, net)
 	// Err is only non-nil if the seed generates an invalid key, or we made a mistake.
 	// According to [0] the odds of encountering a seed that generates
@@ -437,7 +436,7 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 				break
 			}
 			s.mnemonic = m
-			eng, err := NewEngraveScreen(ctx, s.Descriptor, s.mnemonic, passphrase)
+			eng, err := NewEngraveScreen(ctx, s.Descriptor, s.mnemonic)
 			if err != nil {
 				s.warning = NewErrorScreen(err)
 				continue
@@ -1012,8 +1011,8 @@ func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (
 	return backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
 }
 
-func NewEngraveScreen(ctx *Context, desc urtypes.OutputDescriptor, m bip39.Mnemonic, passphrase string) (*EngraveScreen, error) {
-	keyIdx, ok := descriptorKeyIdx(desc, m, passphrase)
+func NewEngraveScreen(ctx *Context, desc urtypes.OutputDescriptor, m bip39.Mnemonic) (*EngraveScreen, error) {
+	keyIdx, ok := descriptorKeyIdx(desc, m, "")
 	if !ok {
 		return nil, errKeyNotInDescriptor
 	}
@@ -2364,7 +2363,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			if m == nil {
 				break
 			}
-			desc, ok := singlesigDescriptor(m, passphrase)
+			desc, ok := singlesigDescriptor(m)
 			if !ok {
 				s.warning = &ErrorScreen{
 					Title: "Invalid Seed",
@@ -2374,7 +2373,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			}
 			s.mnemonic = m
 			s.seed = nil
-			eng, err := NewEngraveScreen(ctx, desc, s.mnemonic, passphrase)
+			eng, err := NewEngraveScreen(ctx, desc, s.mnemonic)
 			if err != nil {
 				s.warning = NewErrorScreen(err)
 				continue
