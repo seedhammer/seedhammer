@@ -988,7 +988,6 @@ type engraveState struct {
 	errs         <-chan error
 	lastProgress float32
 	warning      *ErrorScreen
-	fatal        bool
 }
 
 func (s *EngraveScreen) close() {
@@ -1068,12 +1067,10 @@ loop:
 			s.engrave = engraveState{}
 			if err != nil {
 				log.Printf("gui: connection lost to engraver: %v", err)
-				s.engrave = engraveState{
-					warning: &ErrorScreen{
-						Title: "Connection Error",
-						Body:  "Connection to the engraver failed.",
-					},
-					fatal: true,
+				s.step--
+				s.engrave.warning = &ErrorScreen{
+					Title: "Connection Error",
+					Body:  "Connection to the engraver failed.",
 				}
 				break
 			}
@@ -1127,10 +1124,6 @@ loop:
 			dialog := ops.End()
 			if dismissed {
 				s.engrave.warning = nil
-				if s.engrave.fatal {
-					s.close()
-					return ResultCancelled
-				}
 				continue
 			}
 			defer dialog.Add(ops)

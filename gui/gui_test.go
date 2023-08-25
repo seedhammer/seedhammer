@@ -264,8 +264,8 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	}
 	// Dismiss error and verify screen exits.
 	ctxButton(ctx, input.Button3)
-	res := scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if res != ResultCancelled {
+	scr.Layout(ctx, op.Ctx{}, image.Point{})
+	if scr.engrave.warning != nil {
 		t.Fatal("screen didn't exit after fatal engraver error")
 	}
 	// Verify device was closed.
