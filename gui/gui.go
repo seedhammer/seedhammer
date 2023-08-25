@@ -992,20 +992,10 @@ type engraveState struct {
 }
 
 func (s *EngraveScreen) close() {
-	e := s.engrave
+	if s.engrave.cancel != nil {
+		close(s.engrave.cancel)
+	}
 	s.engrave = engraveState{}
-	go func() {
-		if e.cancel != nil {
-			close(e.cancel)
-		}
-		// Wait a bit for cancellation.
-		if e.errs != nil {
-			select {
-			case <-e.errs:
-			case <-time.After(5 * time.Second):
-			}
-		}
-	}()
 }
 
 func (s *EngraveScreen) moveStep(ctx *Context) bool {
