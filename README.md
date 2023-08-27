@@ -51,13 +51,6 @@ the resulting image will embed the version. The command also accepts git branche
 The build process is designed to be deterministic; that is, images produced with the above steps
 should match the released images bit-for-bit. If not, please open an issue.
 
-To reproduce a release named vX.Y.Z, use the following command to produce `seedhammer-vX.Y.Z.img`
-in the current directory.
-
-```sh
-$ nix run github:seedhammer/seedhammer#mkrelease vX.Y.Z
-```
-
 Use a tool such as `shasum` or `sha256sum` to verify that the release binary matches.
 
 
