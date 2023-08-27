@@ -631,7 +631,7 @@ func newRunner(t *testing.T) *runner {
 }
 
 func (r *runner) Framebuffer() draw.RGBA64Image {
-	return rgb16.New(image.Rect(0, 0, 0, 0))
+	return rgb16.New(image.Rect(0, 0, 1, 1))
 }
 
 func (r *runner) Dirty(sr image.Rectangle) error {
