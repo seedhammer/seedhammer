@@ -155,6 +155,9 @@
                 # For Raspberry Pi Zero 2.
                 ./scripts/config --enable ARCH_MULTI_V7
                 ./scripts/config --enable ARM_ERRATA_643719
+                # Enabling VDSO for some reason introduces enough differences between
+                # Linux and macOS that the resulting kernel image differs.
+                ./scripts/config --disable VDSO
               '' + (if debug then ''
                 ./scripts/config --enable USB_G_SERIAL
               '' else "");
