@@ -179,10 +179,23 @@ func splitUR(desc urtypes.OutputDescriptor, keyIdx int) (urs []string) {
 			}
 			shares = [][]int{all}
 		}
+	case n == 4 && m == 2:
+		// Optimal, but 2 parts per share.
+		seqLen = m * 2
+		switch keyIdx {
+		case 0:
+			shares = [][]int{{0}, {1}}
+		case 1:
+			shares = [][]int{{2}, {3}}
+		case 2:
+			shares = [][]int{{0, 2}, {1, 3}}
+		case 3:
+			shares = [][]int{{0, 2, 1}, {1, 3, 2}}
+		}
 	case n == 5 && m == 3:
 		// Optimal, but 2 parts per share. There doesn't seem to exist an
 		// optimal scheme with 1 part per share.
-		seqLen = n + 1
+		seqLen = m * 2
 		second := []int{
 			n,
 			(keyIdx + n - 1) % n,
