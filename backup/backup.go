@@ -126,7 +126,7 @@ func Engrave(scale, strokeWidth float32, plate PlateDesc) (Plate, error) {
 // that makes m-of-n backups recoverable regardless of
 // which m-sized subset is used. To achieve that, we're exploiting the
 // fact that the UR encoding of a fragment can contain multiple fragments,
-// XOR'ed together.
+// xor'ed together.
 //
 // Schemes are implemented for backups where m == n - 1 and for 3-of-5.
 //
@@ -135,30 +135,30 @@ func Engrave(scale, strokeWidth float32, plate PlateDesc) (Plate, error) {
 //
 //	1, 2, ..., m
 //
-// The final share contains the XOR of all m parts.
+// The final share contains the xor of all m parts.
 //
 // The scheme can trivially recover the data when selecting the m shares each with 1
 // part. For all other selections, one share will be missing, say k, but we'll have the
-// final plate with every part XOR'ed together. So, k is derived by XOR'ing (canceling) every
+// final plate with every part xor'ed together. So, k is derived by xor'ing (canceling) every
 // part other than k into the combined part.
 //
 // Example: a 2-of-3 setup will have data split into 2 parts, with the 3 shares assigned parts
-// like so: 1, 2, 1 XOR 2. Selecting the first two plates, the data is trivially recovered;
+// like so: 1, 2, 1 ⊕ 2. Selecting the first two plates, the data is trivially recovered;
 // otherwise we have one part, say 1, and the combined part. The other part, 2, is then recovered
-// by XOR'ing the one part with the combination: 1 XOR 1 XOR 2 = 2.
+// by xor'ing the one part with the combination: 1 ⊕ 1 ⊕ 2 = 2.
 //
-// For m == n - 2, the data is split into n + 1 parts, and each share will have two parts assigned.
+// For 3-of-5, the data is split into 6 parts, and each share will have two parts assigned.
 //
 // The assignment is as follows, where p1 and p2 denotes the two parts assigned to each share.
 //
 //	share    |    p1     |        p2
-//	 1            1         (n+1) XOR n XOR 2
-//	 2            2         (n+1) XOR 1 XOR 3
-//	 3            3         (n+1) XOR 2 XOR 4
-//	...          ...              ...
-//	 n            n         (n+1) XOR n XOR 1
+//	 1            1         6 ⊕ 5 ⊕ 2
+//	 2            2         6 ⊕ 1 ⊕ 3
+//	 3            3         6 ⊕ 2 ⊕ 4
+//	 4            4         6 ⊕ 3 ⊕ 5
+//	 5            5         6 ⊕ 4 ⊕ 1
 //
-// That is, every share is assigned a part and the combination of the n+1 part with the neighbour
+// That is, every share is assigned a part and the combination of the 6 part with the neighbour
 // parts.
 //
 // [UR]: https://github.com/BlockchainCommons/Research/blob/master/papers/bcr-2020-005-ur.md
