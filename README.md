@@ -56,17 +56,7 @@ Use a tool such as `shasum` or `sha256sum` to verify that the release binary mat
 
 ## Development
 
-### Replacing the controller binary
-
-To replace just the `controller` program, re-build it with Go and replace
-the initial RAM filesystem. For example, if `boot` is mounted on `/Volumes/boot`:
-
-```sh
-$ CGO_ENABLED=0 GOARCH=arm GOARM=6 GOOS=linux go build ./cmd/controller
-$ echo "controller" | cpio -H newc -o --quiet | gzip > /Volumes/boot/initramfs.cpio.gz
-```
-
-## Update through USB
+### Update through USB
 
 There is a crude facility to replace and restart the controller binary on a running device. First,
 build and prepare a debug build of the image
