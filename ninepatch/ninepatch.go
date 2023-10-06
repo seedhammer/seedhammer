@@ -34,6 +34,7 @@ func nineBounds(img image.RGBA64Image, row, col int) image.Rectangle {
 		_, _, _, a := c.RGBA()
 		if a != 0 {
 			res.Min.X = x
+			res.Max.X = x
 			break
 		}
 	}
@@ -42,6 +43,7 @@ func nineBounds(img image.RGBA64Image, row, col int) image.Rectangle {
 		_, _, _, a := c.RGBA()
 		if a != 0 {
 			res.Min.Y = y
+			res.Max.Y = y
 			break
 		}
 	}
