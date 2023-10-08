@@ -735,9 +735,7 @@ func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 			}
 		}
 	}
-	r := layout.Rectangle{Max: dims}
-	sz := layoutWarning(ctx, ops.Begin(), th, dims.X, s.Title, s.Body)
-	op.Position(ops, ops.End(), r.Center(sz))
+	layoutWarning(ctx, ops, th, dims, s.Title, s.Body)
 	layoutNavigation(ctx, ops, th, dims, NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
 	return false
 }
@@ -810,9 +808,7 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 			}
 		}
 	}
-	r := layout.Rectangle{Max: dims}
-	sz := layoutWarning(ctx, ops.Begin(), th, dims.X, s.Title, s.Body)
-	op.Position(ops, ops.End(), r.Center(sz))
+	layoutWarning(ctx, ops, th, dims, s.Title, s.Body)
 	icn := s.Icon
 	if s.confirm.Running() {
 		icn = ProgressImage{
@@ -1770,32 +1766,30 @@ func (_ scrollMask) ColorModel() color.Model {
 	return color.AlphaModel
 }
 
-func layoutWarning(ctx *Context, ops op.Ctx, th *Colors, width int, title, txt string) image.Point {
+func layoutWarning(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, title, txt string) image.Point {
 	op.ColorOp(ops, color.NRGBA{A: theme.overlayMask})
 
-	const margin = 4
+	const btnMargin = 4
+	const boxMargin = 16
 	wbbg := assets.WarningBoxBg
 	wbout := assets.WarningBoxBorder
-	ptop, pend, _, pstart := wbbg.Padding()
-	width -= 2*(assets.NavBtnPrimary.Bounds().Dx()+margin) + pstart + pend
-	titlesz := widget.LabelW(ops.Begin(), ctx.Styles.warning, width, th.Text, strings.ToUpper(title)+"\n")
+	ptop, pend, pbottom, pstart := wbbg.Padding()
+	btnOff := assets.NavBtnPrimary.Bounds().Dx() + btnMargin
+	titlesz := widget.LabelW(ops.Begin(), ctx.Styles.warning, dims.X-btnOff*2, th.Text, strings.ToUpper(title))
 	titlew := ops.End()
-	bodysz := widget.LabelW(ops.Begin(), ctx.Styles.body, width, th.Text, txt)
+	widget.LabelW(ops.Begin(), ctx.Styles.body, dims.X-btnOff*2, th.Text, "\n"+txt)
 	body := ops.End()
-	maxw := bodysz.X
-	if titlesz.X > maxw {
-		maxw = titlesz.X
+	r := image.Rectangle{
+		Min: image.Pt(pstart+boxMargin, ptop+boxMargin),
+		Max: image.Pt(dims.X-pend-boxMargin, dims.Y-pbottom-boxMargin),
 	}
-	r := image.Rectangle{Max: image.Pt(maxw, titlesz.Y+bodysz.Y)}
 	box := wbbg.For(r)
-	op.MaskOp(ops.Begin(), wbbg.For(r))
+	op.MaskOp(ops, box)
 	op.ColorOp(ops, th.Background)
 	op.MaskOp(ops, wbout.For(r))
 	op.ColorOp(ops, th.Text)
-	off := image.Pt(pstart, ptop)
-	op.Position(ops, ops.End(), off)
-	op.Position(ops, titlew, off.Add(image.Pt((maxw-titlesz.X)/2, 0)))
-	op.Position(ops, body, off.Add(image.Pt(0, titlesz.Y)))
+	op.Position(ops, titlew, image.Pt((dims.X-titlesz.X)/2, r.Min.Y))
+	op.Position(ops, body, image.Pt(btnOff, titlesz.Y+r.Min.Y))
 	return box.Bounds().Size()
 }
 
@@ -2432,14 +2426,11 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 	op.Position(ops, ops.End(), r.SE(versz.Add(image.Pt(4, 0))))
 	shsz := widget.LabelW(ops.Begin(), ctx.Styles.debug, 100, th.Text, "SeedHammer")
 	op.Position(ops, ops.End(), r.SW(shsz).Add(image.Pt(3, 0)))
-
 	if err != nil {
-		sz := layoutWarning(ctx, ops.Begin(), th, dims.X,
+		layoutWarning(ctx, ops, th, dims,
 			"Error",
 			err.Error(),
 		)
-		r := layout.Rectangle{Max: dims}
-		op.Position(ops, ops.End(), r.Center(sz))
 	} else if s.warning == nil {
 		layoutNavigation(ctx, ops, th, dims, NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
 	}

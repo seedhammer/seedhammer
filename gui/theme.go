@@ -88,7 +88,7 @@ func NewStyles() Styles {
 			Face: mustFace(pBold, 10),
 		},
 		warning: text.Style{
-			Face:       mustFace(pBold, 16),
+			Face:       mustFace(pBold, 23),
 			LineHeight: 0.75,
 			Alignment:  text.AlignCenter,
 		},
