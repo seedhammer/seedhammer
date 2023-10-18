@@ -425,8 +425,11 @@ func TestMulti(t *testing.T) {
 		r.String(t, strings.ToUpper(bip39.LabelFor(word)))
 		r.Button(t, input.Button2)
 	}
-	for r.app.scr.desc.seed == nil || !r.app.scr.desc.seed.Mnemonic.Valid() {
-		r.Frame(t)
+	r.Frame(t)
+	r.Frame(t)
+	if sc := r.app.scr.desc; sc.seed == nil || !sc.seed.Mnemonic.Valid() {
+		t.Fatalf("got invalid seed %v, wanted %v", sc.seed.Mnemonic, mnemonic)
+
 	}
 	if got := r.app.scr.desc.seed.Mnemonic; !reflect.DeepEqual(got, mnemonic) {
 		t.Fatalf("got seed %v, wanted %v", got, mnemonic)

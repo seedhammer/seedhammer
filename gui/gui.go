@@ -138,6 +138,10 @@ func (c *Context) Repeat() {
 	}
 }
 
+func (c *Context) Reset() {
+	c.events = c.events[:0]
+}
+
 func (c *Context) Events(evts ...input.Event) {
 	for _, e := range evts {
 		e2 := Event{Event: e}
@@ -153,13 +157,18 @@ func (c *Context) Events(evts ...input.Event) {
 	}
 }
 
-func (c *Context) Next() (Event, bool) {
+func (c *Context) Next(btns ...input.Button) (Event, bool) {
 	if len(c.events) == 0 {
 		return Event{}, false
 	}
-	evt := c.events[0]
-	c.events = c.events[1:]
-	return evt, true
+	e := c.events[0]
+	for _, btn := range btns {
+		if e.Button == btn {
+			c.events = c.events[1:]
+			return e, true
+		}
+	}
+	return Event{}, false
 }
 
 const longestWord = "TOMORROW"
@@ -237,7 +246,7 @@ func (s *AddressesScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) boo
 
 	const maxPage = len(s.addresses)
 	for {
-		e, ok := ctx.Next()
+		e, ok := ctx.Next(input.Button1, input.Left, input.Right, input.Up, input.Down)
 		if !ok {
 			break
 		}
@@ -266,7 +275,6 @@ func (s *AddressesScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) boo
 			}
 		}
 	}
-
 	th := &descriptorTheme
 	op.ColorOp(ops, th.Background)
 
@@ -302,7 +310,6 @@ func (s *AddressesScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) boo
 
 	op.Position(ops, left, content.W(leftsz))
 	op.Position(ops, right, content.E(rightsz))
-
 	maxScroll := len(bodytxt.Lines) - linesPerPage
 	if s.scroll > maxScroll {
 		s.scroll = maxScroll
@@ -315,7 +322,7 @@ func (s *AddressesScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) boo
 	for _, l := range bodytxt.Lines {
 		op.Position(ops, l.W, inner.Min.Sub(image.Pt(0, off)))
 	}
-	clipScroll(ops, ops.End(), image.Rectangle(body))
+	fadeClip(ops, ops.End(), image.Rectangle(body))
 
 	layoutNavigation(ctx, ops, th, dims,
 		NavButton{Button: input.Button1, Style: StyleSecondary, Icon: assets.IconBack},
@@ -403,7 +410,7 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 			}
 			defer warning.Add(ops)
 		}
-		e, ok := ctx.Next()
+		e, ok := ctx.Next(input.Button1, input.Button2, input.Button3)
 		if !ok {
 			break
 		}
@@ -541,7 +548,7 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, Re
 		s.camera.out = out
 	}
 	for {
-		e, ok := ctx.Next()
+		e, ok := ctx.Next(input.Button1, input.Button2)
 		if !ok {
 			break
 		}
@@ -720,11 +727,13 @@ func (s *ScanScreen) parseQR(qr []byte) (any, Result) {
 type ErrorScreen struct {
 	Title string
 	Body  string
+	w     Warning
 }
 
 func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) bool {
 	for {
-		e, ok := ctx.Next()
+		s.w.Update(ctx)
+		e, ok := ctx.Next(input.Button3)
 		if !ok {
 			break
 		}
@@ -735,7 +744,7 @@ func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 			}
 		}
 	}
-	layoutWarning(ctx, ops, th, dims, s.Title, s.Body)
+	s.w.Layout(ctx, ops, th, dims, s.Title, s.Body)
 	layoutNavigation(ctx, ops, th, dims, NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
 	return false
 }
@@ -744,8 +753,14 @@ type ConfirmWarningScreen struct {
 	Title string
 	Body  string
 	Icon  image.RGBA64Image
+	w     Warning
 
 	confirm ConfirmDelay
+}
+
+type Warning struct {
+	scroll  int
+	txtclip int
 }
 
 type ConfirmResult int
@@ -783,14 +798,35 @@ func (c *ConfirmDelay) Running() bool {
 
 const confirmDelay = 1 * time.Second
 
+func (w *Warning) Update(ctx *Context) {
+	for {
+		e, ok := ctx.Next(input.Up, input.Down)
+		if !ok {
+			break
+		}
+		switch e.Button {
+		case input.Up:
+			if e.Pressed {
+				w.scroll -= w.txtclip / 2
+			}
+		case input.Down:
+			if e.Pressed {
+				w.scroll += w.txtclip / 2
+			}
+		}
+	}
+
+}
+
 func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) ConfirmResult {
 	var progress float32
 	for {
+		s.w.Update(ctx)
 		progress = s.confirm.Progress(ctx)
 		if progress == 1 {
 			return ConfirmYes
 		}
-		e, ok := ctx.Next()
+		e, ok := ctx.Next(input.Button1, input.Button3)
 		if !ok {
 			break
 		}
@@ -808,7 +844,7 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 			}
 		}
 	}
-	layoutWarning(ctx, ops, th, dims, s.Title, s.Body)
+	s.w.Layout(ctx, ops, th, dims, s.Title, s.Body)
 	icn := s.Icon
 	if s.confirm.Running() {
 		icn = ProgressImage{
@@ -1124,7 +1160,7 @@ loop:
 			}
 			defer dialog.Add(ops)
 		}
-		e, ok := ctx.Next()
+		e, ok := ctx.Next(input.Button1, input.Button2, input.Button3)
 		if !ok {
 			break
 		}
@@ -1587,7 +1623,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			}
 			defer warning.Add(ops)
 		}
-		e, ok := ctx.Next()
+		e, ok := ctx.Next(input.Button1, input.Button2, input.Center, input.Button3, input.Up, input.Down)
 		if !ok {
 			break
 		}
@@ -1719,7 +1755,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			y += lineHeight
 		}
 	}
-	clipScroll(ops, ops.End(), image.Rectangle(list))
+	fadeClip(ops, ops.End(), image.Rectangle(list))
 
 	if s.cancel == nil && s.warning == nil && s.confirm == nil {
 		layoutNavigation(ctx, ops, th, dims,
@@ -1735,7 +1771,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 
 const scrollFadeDist = 16
 
-func clipScroll(ops op.Ctx, w op.CallOp, r image.Rectangle) {
+func fadeClip(ops op.Ctx, w op.CallOp, r image.Rectangle) {
 	op.MaskOp(ops, scrollMask(r))
 	op.Position(ops, w, image.Pt(0, 0))
 }
@@ -1766,19 +1802,15 @@ func (_ scrollMask) ColorModel() color.Model {
 	return color.AlphaModel
 }
 
-func layoutWarning(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, title, txt string) image.Point {
+func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, title, txt string) image.Point {
+	const btnMargin = 4
+	const boxMargin = 6
+
 	op.ColorOp(ops, color.NRGBA{A: theme.overlayMask})
 
-	const btnMargin = 4
-	const boxMargin = 16
 	wbbg := assets.WarningBoxBg
 	wbout := assets.WarningBoxBorder
 	ptop, pend, pbottom, pstart := wbbg.Padding()
-	btnOff := assets.NavBtnPrimary.Bounds().Dx() + btnMargin
-	titlesz := widget.LabelW(ops.Begin(), ctx.Styles.warning, dims.X-btnOff*2, th.Text, strings.ToUpper(title))
-	titlew := ops.End()
-	widget.LabelW(ops.Begin(), ctx.Styles.body, dims.X-btnOff*2, th.Text, "\n"+txt)
-	body := ops.End()
 	r := image.Rectangle{
 		Min: image.Pt(pstart+boxMargin, ptop+boxMargin),
 		Max: image.Pt(dims.X-pend-boxMargin, dims.Y-pbottom-boxMargin),
@@ -1788,8 +1820,30 @@ func layoutWarning(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, title
 	op.ColorOp(ops, th.Background)
 	op.MaskOp(ops, wbout.For(r))
 	op.ColorOp(ops, th.Text)
+
+	btnOff := assets.NavBtnPrimary.Bounds().Dx() + btnMargin
+	titlesz := widget.LabelW(ops.Begin(), ctx.Styles.warning, dims.X-btnOff*2, th.Text, strings.ToTitle(title))
+	titlew := ops.End()
 	op.Position(ops, titlew, image.Pt((dims.X-titlesz.X)/2, r.Min.Y))
-	op.Position(ops, body, image.Pt(btnOff, titlesz.Y+r.Min.Y))
+
+	bodysz := widget.LabelW(ops.Begin(), ctx.Styles.body, dims.X-btnOff*2, th.Text, txt)
+	body := ops.End()
+	rClip := image.Rectangle{
+		Min: image.Pt(0, ptop+titlesz.Y),
+		Max: image.Pt(dims.X-pend-boxMargin, dims.Y-pbottom-boxMargin),
+	}
+	innerCtx := ops.Begin()
+	w.txtclip = rClip.Dy()
+	maxScroll := bodysz.Y - (rClip.Dy() - 2*scrollFadeDist)
+	if w.scroll > maxScroll {
+		w.scroll = maxScroll
+	}
+	if w.scroll < 0 {
+		w.scroll = 0
+	}
+	op.Position(innerCtx, body, image.Pt(btnOff, rClip.Min.Y+scrollFadeDist-w.scroll))
+	fadeClip(ops, ops.End(), image.Rectangle(rClip))
+
 	return box.Bounds().Size()
 }
 
@@ -1804,7 +1858,8 @@ func (s *WordKeyboardScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims i
 		s.kbd = NewKeyboard(ctx)
 	}
 	for {
-		e, ok := ctx.Next()
+		s.kbd.Update(ctx)
+		e, ok := ctx.Next(input.Button1, input.Button2)
 		if !ok {
 			break
 		}
@@ -1832,8 +1887,6 @@ func (s *WordKeyboardScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims i
 					break
 				}
 			}
-		default:
-			s.kbd.Event(e)
 		}
 	}
 	completedWord, complete := s.kbd.Complete()
@@ -2005,62 +2058,68 @@ func (k *Keyboard) Valid(r rune) bool {
 	return valid && k.mask&(1<<idx) == 0
 }
 
-func (k *Keyboard) Event(e Event) {
-	if !e.Pressed {
-		return
-	}
-	switch e.Button {
-	case input.Left:
-		next := k.col
-		row := kbdKeys[k.row]
-		n := len(row)
-		for {
-			next = (next - 1 + n) % n
-			if !k.Valid(kbdKeys[k.row][next]) {
-				continue
-			}
-			k.col = next
-			k.adjust(true)
+func (k *Keyboard) Update(ctx *Context) {
+	for {
+		e, ok := ctx.Next(input.Left, input.Right, input.Up, input.Down, input.Center, input.Rune, input.Button3)
+		if !ok {
 			break
 		}
-	case input.Right:
-		next := k.col
-		row := kbdKeys[k.row]
-		n := len(row)
-		for {
-			next = (next + 1) % n
-			if !k.Valid(kbdKeys[k.row][next]) {
-				continue
-			}
-			k.col = next
-			k.adjust(true)
-			break
+		if !e.Pressed {
+			continue
 		}
-	case input.Up:
-		n := len(kbdKeys)
-		next := k.row
-		for {
-			next = (next - 1 + n) % n
-			if k.adjustCol(next) {
+		switch e.Button {
+		case input.Left:
+			next := k.col
+			row := kbdKeys[k.row]
+			n := len(row)
+			for {
+				next = (next - 1 + n) % n
+				if !k.Valid(kbdKeys[k.row][next]) {
+					continue
+				}
+				k.col = next
 				k.adjust(true)
 				break
 			}
-		}
-	case input.Down:
-		n := len(kbdKeys)
-		next := k.row
-		for {
-			next = (next + 1) % n
-			if k.adjustCol(next) {
+		case input.Right:
+			next := k.col
+			row := kbdKeys[k.row]
+			n := len(row)
+			for {
+				next = (next + 1) % n
+				if !k.Valid(kbdKeys[k.row][next]) {
+					continue
+				}
+				k.col = next
 				k.adjust(true)
 				break
 			}
+		case input.Up:
+			n := len(kbdKeys)
+			next := k.row
+			for {
+				next = (next - 1 + n) % n
+				if k.adjustCol(next) {
+					k.adjust(true)
+					break
+				}
+			}
+		case input.Down:
+			n := len(kbdKeys)
+			next := k.row
+			for {
+				next = (next + 1) % n
+				if k.adjustCol(next) {
+					k.adjust(true)
+					break
+				}
+			}
+		case input.Rune:
+			k.rune(e.Rune)
+		case input.Center, input.Button3:
+			r := kbdKeys[k.row][k.col]
+			k.rune(r)
 		}
-	case input.Rune:
-		k.rune(e.Rune)
-	case input.Center, input.Button3:
-		r := kbdKeys[k.row][k.col]
-		k.rune(r)
 	}
 }
 
@@ -2184,7 +2243,7 @@ type ChoiceScreen struct {
 
 func (s *ChoiceScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, active bool) (int, bool) {
 	for active {
-		e, ok := ctx.Next()
+		e, ok := ctx.Next(input.Button1, input.Button3, input.Center, input.Up, input.Down)
 		if !ok {
 			break
 		}
@@ -2279,6 +2338,7 @@ type MainScreen struct {
 	scanner  *ScanScreen
 	desc     *DescriptorScreen
 	warning  *ErrorScreen
+	error    Warning
 	sdcard   struct {
 		warning *ConfirmWarningScreen
 		shown   bool
@@ -2371,7 +2431,8 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			}
 			defer warning.Add(ops)
 		}
-		e, ok := ctx.Next()
+		s.error.Update(ctx)
+		e, ok := ctx.Next(input.Button3, input.Center, input.Left, input.Right)
 		if !ok {
 			break
 		}
@@ -2427,7 +2488,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 	shsz := widget.LabelW(ops.Begin(), ctx.Styles.debug, 100, th.Text, "SeedHammer")
 	op.Position(ops, ops.End(), r.SW(shsz).Add(image.Pt(3, 0)))
 	if err != nil {
-		layoutWarning(ctx, ops, th, dims,
+		s.error.Layout(ctx, ops, th, dims,
 			"Error",
 			err.Error(),
 		)
@@ -2626,6 +2687,7 @@ func (a *App) Frame() {
 		a.idle.eatButton = true
 	}
 	screenshot := false
+	a.ctx.Reset()
 loop:
 	for {
 		select {
