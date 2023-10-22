@@ -1664,7 +1664,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				if nonstandard.ElectrumSeed(strings.Join(words, " ")) {
 					s.warning.Body = "Electrum seeds are not supported."
 				} else {
-					s.warning.Body = "The seed phrase is invalid.\nCheck the words and try again."
+					s.warning.Body = "The seed phrase is invalid.\n\nCheck the words and try again."
 				}
 				break
 			}
