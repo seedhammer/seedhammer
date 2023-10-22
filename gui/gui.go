@@ -1102,7 +1102,7 @@ loop:
 				s.step--
 				s.engrave.warning = &ErrorScreen{
 					Title: "Connection Error",
-					Body:  "Connection to the engraver failed.",
+					Body:  fmt.Sprintf("Turn off the engraver and disconnect this device from it. Wait 10 seconds, then turn on the engraver and reconnect.\n\nError details: %v", err),
 				}
 				break
 			}
