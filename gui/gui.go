@@ -1826,23 +1826,23 @@ func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point,
 	titlew := ops.End()
 	op.Position(ops, titlew, image.Pt((dims.X-titlesz.X)/2, r.Min.Y))
 
-	bodysz := widget.LabelW(ops.Begin(), ctx.Styles.body, dims.X-btnOff*2, th.Text, txt)
-	body := ops.End()
-	rClip := image.Rectangle{
-		Min: image.Pt(0, ptop+titlesz.Y),
-		Max: image.Pt(dims.X-pend-boxMargin, dims.Y-pbottom-boxMargin),
+	bodyClip := image.Rectangle{
+		Min: image.Pt(pstart+boxMargin, ptop+titlesz.Y),
+		Max: image.Pt(dims.X-btnOff, dims.Y-pbottom-boxMargin),
 	}
+	bodysz := widget.LabelW(ops.Begin(), ctx.Styles.body, bodyClip.Dx(), th.Text, txt)
+	body := ops.End()
 	innerCtx := ops.Begin()
-	w.txtclip = rClip.Dy()
-	maxScroll := bodysz.Y - (rClip.Dy() - 2*scrollFadeDist)
+	w.txtclip = bodyClip.Dy()
+	maxScroll := bodysz.Y - (bodyClip.Dy() - 2*scrollFadeDist)
 	if w.scroll > maxScroll {
 		w.scroll = maxScroll
 	}
 	if w.scroll < 0 {
 		w.scroll = 0
 	}
-	op.Position(innerCtx, body, image.Pt(btnOff, rClip.Min.Y+scrollFadeDist-w.scroll))
-	fadeClip(ops, ops.End(), image.Rectangle(rClip))
+	op.Position(innerCtx, body, image.Pt(bodyClip.Min.X, bodyClip.Min.Y+scrollFadeDist-w.scroll))
+	fadeClip(ops, ops.End(), image.Rectangle(bodyClip))
 
 	return box.Bounds().Size()
 }
