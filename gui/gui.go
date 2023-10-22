@@ -1041,7 +1041,7 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 			log.Printf("gui: failed to connect to engraver: %v", err)
 			s.engrave.warning = &ErrorScreen{
 				Title: "Connection Error",
-				Body:  "Failed to establish a connection to the engraver.",
+				Body:  fmt.Sprintf("Ensure the engraver is turned on and verify that it is connected to the middle port of this device.\n\nError details: %v", err),
 			}
 			return false
 		}
