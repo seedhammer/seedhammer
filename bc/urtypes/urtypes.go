@@ -18,6 +18,7 @@ import (
 )
 
 type OutputDescriptor struct {
+	Title     string
 	Script    Script
 	Threshold int
 	Type      MultisigType

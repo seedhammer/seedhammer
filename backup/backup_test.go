@@ -43,6 +43,7 @@ func TestEngraveErrors(t *testing.T) {
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("error-%d", i), func(t *testing.T) {
 			desc := urtypes.OutputDescriptor{
+				Title:     "Satoshi Stash",
 				Script:    urtypes.P2WSH,
 				Threshold: test.threshold,
 				Type:      urtypes.SortedMulti,
@@ -97,6 +98,7 @@ func TestEngrave(t *testing.T) {
 			t.Parallel()
 
 			desc := urtypes.OutputDescriptor{
+				Title:     "Satoshi Stash",
 				Script:    test.script,
 				Threshold: test.threshold,
 				Type:      urtypes.Singlesig,
@@ -193,6 +195,7 @@ func TestSplitUR(t *testing.T) {
 			t.Parallel()
 			for m := 1; m <= n; m++ {
 				desc := urtypes.OutputDescriptor{
+					Title:     "Some title",
 					Script:    urtypes.P2WSH,
 					Threshold: m,
 					Type:      urtypes.Singlesig,
@@ -207,6 +210,25 @@ func TestSplitUR(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTitleString(t *testing.T) {
+	tests := []struct {
+		test  string
+		title string
+	}{
+		{"Satoshi's Wallet", "SATOSHI'S WALL"},
+		{"Anø de:Æby09 . asd asd asd as das d asd asdf sdf s fd", "AN DE:BY09 . A"},
+		{"Æg", "G"},
+		{"🤡 💩", " "},
+		{"$€#,", "#,"},
+	}
+	for _, test := range tests {
+		s := TitleString(&constant.Font, test.test)
+		if s != test.title {
+			t.Fatalf("got %q, wanted %q", s, test.title)
+		}
 	}
 }
 
@@ -249,7 +271,6 @@ func genTestPlate(t *testing.T, desc urtypes.OutputDescriptor, path []uint32, se
 		}
 	}
 	return PlateDesc{
-		Title:      "Satoshi Stash",
 		Font:       &constant.Font,
 		KeyIdx:     keyIdx,
 		Mnemonic:   mnemonic,

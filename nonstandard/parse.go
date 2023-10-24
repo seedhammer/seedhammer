@@ -45,10 +45,16 @@ func OutputDescriptor(enc []byte) (urtypes.OutputDescriptor, error) {
 		return desc, nil
 	}
 	var jsonDesc struct {
+		Label      string `json:"label"`
 		Descriptor string `json:"descriptor"`
 	}
 	if err := json.Unmarshal(enc, &jsonDesc); err == nil {
-		return parseTextOutputDescriptor(jsonDesc.Descriptor)
+		desc, err := parseTextOutputDescriptor(jsonDesc.Descriptor)
+		if err != nil {
+			return desc, err
+		}
+		desc.Title = jsonDesc.Label
+		return desc, err
 	}
 	// If the derivation path of a cosigner key expression matches
 	// a single-sig script, convert it to an output descriptor.
@@ -99,6 +105,7 @@ func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 		seenKeys[key] = val
 		switch key {
 		case "Name":
+			desc.Title = val
 		case "Policy":
 			if _, err := fmt.Sscanf(val, "%d of %d", &desc.Threshold, &nkeys); err != nil {
 				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid Policy header: %q", val)

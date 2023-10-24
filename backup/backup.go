@@ -57,7 +57,6 @@ func (p PlateSize) offset() (int, int) {
 }
 
 type PlateDesc struct {
-	Title      string
 	Descriptor urtypes.OutputDescriptor
 	KeyIdx     int
 	Mnemonic   bip39.Mnemonic
@@ -76,8 +75,24 @@ func dims(c engrave.Command) (engrave.Command, image.Point) {
 
 var ErrDescriptorTooLarge = errors.New("output descriptor is too large to backup")
 
+const MaxTitleLen = 18
+
 const outerMargin float32 = 3
 const innerMargin float32 = 10
+
+func TitleString(face *font.Face, s string) string {
+	s = strings.ToUpper(s)
+	res := ""
+	for _, r := range s {
+		if _, _, valid := face.Decode(r); valid {
+			res += string(r)
+		}
+		if len(res) == MaxTitleLen {
+			break
+		}
+	}
+	return res
+}
 
 func Engrave(scale, strokeWidth float32, plate PlateDesc) (Plate, error) {
 	scalef := func(v float32) int {
@@ -95,7 +110,7 @@ func Engrave(scale, strokeWidth float32, plate PlateDesc) (Plate, error) {
 		)
 		switch {
 		case seedOnly && len(plate.Mnemonic) > 12:
-			p.Sides = append(p.Sides, seedBackSide(scalef, constant, plate.Title, plate.Font, plate.Mnemonic, b.Size()))
+			p.Sides = append(p.Sides, seedBackSide(scalef, constant, plate.Descriptor.Title, plate.Font, plate.Mnemonic, b.Size()))
 		case !seedOnly:
 			urs := splitUR(plate.Descriptor, plate.KeyIdx)
 			side, err := descriptorSide(scalef, sw, plate.Font, urs, p.Size, b.Size())
@@ -250,7 +265,9 @@ func Recoverable(desc urtypes.OutputDescriptor) bool {
 		if err != nil {
 			return false
 		}
-		if !reflect.DeepEqual(got, desc) {
+		gotDesc := got.(urtypes.OutputDescriptor)
+		gotDesc.Title = desc.Title
+		if !reflect.DeepEqual(gotDesc, desc) {
 			return false
 		}
 	}
@@ -333,7 +350,7 @@ func frontSide(scale func(float32) int, constant *engrave.ConstantStringer, stro
 	}
 
 	// Engrave title.
-	title := strings.ToUpper(plate.Title)
+	title := strings.ToUpper(plate.Descriptor.Title)
 	switch size {
 	case SmallPlate:
 		title, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), title)))

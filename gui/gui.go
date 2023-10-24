@@ -452,6 +452,11 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 
 	bodyst := ctx.Styles.body
 	subst := ctx.Styles.subtitle
+	if desc.Title != "" {
+		bodytxt.Add(ops, subst, body.Dx(), th.Text, "Title")
+		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Title)
+		bodytxt.Y += infoSpacing
+	}
 	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Type")
 	var typetxt string
 	switch desc.Type {
@@ -2413,6 +2418,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				}
 				continue
 			}
+			desc.Title = backup.TitleString(&constant.Font, desc.Title)
 			s.desc = &DescriptorScreen{
 				Descriptor: desc,
 			}
