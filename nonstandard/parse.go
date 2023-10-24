@@ -52,7 +52,7 @@ func OutputDescriptor(enc []byte) (urtypes.OutputDescriptor, error) {
 	}
 	// If the derivation path of a cosigner key expression matches
 	// a single-sig script, convert it to an output descriptor.
-	if k, err := parseHDKey(nil, enc); err == nil {
+	if k, err := parseHDKeyExpr(nil, enc); err == nil {
 		for _, s := range []urtypes.Script{urtypes.P2PKH, urtypes.P2WPKH, urtypes.P2SH_P2WPKH} {
 			path := s.DerivationPath()
 			if !reflect.DeepEqual(path, k.DerivationPath) {
@@ -124,7 +124,7 @@ func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: unknown format %q", val)
 			}
 		default:
-			xpub, err := hdkeychain.NewKeyFromString(val)
+			_, xpub, err := parseHDKey(val)
 			if err != nil {
 				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid xpub: %q", val)
 			}
@@ -336,7 +336,7 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 		keys = args[1:]
 	}
 	for _, k := range keys {
-		key, err := parseHDKey(r.Script.DerivationPath(), []byte(k))
+		key, err := parseHDKeyExpr(r.Script.DerivationPath(), []byte(k))
 		if err != nil {
 			return urtypes.OutputDescriptor{}, fmt.Errorf("hdkey: %w", err)
 		}
@@ -345,7 +345,8 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 	return r, nil
 }
 
-func parseHDKey(impliedPath urtypes.Path, enc []byte) (urtypes.KeyDescriptor, error) {
+// parseHDKeyExpr parses an extended key on the form [mfp/path]key.
+func parseHDKeyExpr(impliedPath urtypes.Path, enc []byte) (urtypes.KeyDescriptor, error) {
 	k := string(enc)
 	key := urtypes.KeyDescriptor{
 		DerivationPath: impliedPath,
@@ -380,37 +381,15 @@ func parseHDKey(impliedPath urtypes.Path, enc []byte) (urtypes.KeyDescriptor, er
 		}
 		key.Children = childPath
 	}
-	xpub, err := hdkeychain.NewKeyFromString(k)
+	script, xpub, err := parseHDKey(k)
 	if err != nil {
-		return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid extended key: %q", k)
+		return urtypes.KeyDescriptor{}, err
 	}
-	const (
-		xpubVer = "0488b21e"
-		zpubVer = "04b24746"
-		ypubVer = "049d7cb2"
-		YpubVer = "0x0295b43f"
-		ZpubVer = "02aa7ed3"
-	)
-	version := hex.EncodeToString(xpub.Version())
 	if key.DerivationPath == nil {
 		// This is a key with no implicit or explicit derivation path, fall back
 		// to deriving the path from the SLIP-132 version. We support only the
 		// common ones, because ideally the derivation path should always be provided.
-		var script urtypes.Script
-		switch version {
-		case xpubVer:
-			script = urtypes.P2PKH
-		case zpubVer:
-			script = urtypes.P2WPKH
-		default:
-			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: unsupported version: %s", version)
-		}
 		key.DerivationPath = script.DerivationPath()
-	}
-	// Now we have a derivation path, normalize the version bytes to xpub.
-	switch version {
-	case zpubVer, ypubVer, YpubVer, ZpubVer:
-		xpub.SetNet(&chaincfg.MainNetParams)
 	}
 	pub, err := xpub.ECPubKey()
 	if err != nil {
@@ -425,6 +404,46 @@ func parseHDKey(impliedPath urtypes.Path, enc []byte) (urtypes.KeyDescriptor, er
 	key.KeyData = pub.SerializeCompressed()
 	key.ParentFingerprint = xpub.ParentFingerprint()
 	return key, nil
+}
+
+// parseHDKey parses an extended key, along with its implied script type. It returns
+// normalized xpubs where the version bytes matches a network.
+func parseHDKey(k string) (urtypes.Script, *hdkeychain.ExtendedKey, error) {
+	xpub, err := hdkeychain.NewKeyFromString(k)
+	if err != nil {
+		return 0, nil, fmt.Errorf("hdkey: invalid extended key: %q", k)
+	}
+	const (
+		xpubVer = "0488b21e"
+		zpubVer = "04b24746"
+		ypubVer = "049d7cb2"
+		YpubVer = "0295b43f"
+		ZpubVer = "02aa7ed3"
+
+		tpubVer = "043587cf"
+	)
+	version := hex.EncodeToString(xpub.Version())
+	var script urtypes.Script
+	switch version {
+	case xpubVer, tpubVer:
+		script = urtypes.P2PKH
+	case zpubVer:
+		script = urtypes.P2WPKH
+	case YpubVer:
+		script = urtypes.P2SH_P2WSH
+	case ZpubVer:
+		script = urtypes.P2WSH
+	default:
+		return 0, nil, fmt.Errorf("hdkey: unsupported version: %s", version)
+	}
+	// Now we have a derivation path, normalize the version bytes to xpub.
+	switch version {
+	case zpubVer, ypubVer, YpubVer, ZpubVer:
+		xpub.SetNet(&chaincfg.MainNetParams)
+	case tpubVer:
+		xpub.SetNet(&chaincfg.TestNet3Params)
+	}
+	return script, xpub, nil
 }
 
 type Decoder struct {

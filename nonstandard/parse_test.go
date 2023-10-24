@@ -126,7 +126,7 @@ func TestOutputDescriptors(t *testing.T) {
 	for _, test := range tests {
 		got, err := OutputDescriptor([]byte(test.encoded))
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%q\nfailed with: %v", test.encoded, err)
 		}
 		if !reflect.DeepEqual(got, test.desc) {
 			t.Errorf("%q\ndecoded to\n%#v\nexpected\n%#v\n", test.encoded, got, test.desc)
@@ -156,6 +156,22 @@ DD4FADEE: xpub6DnediUuY8Pcc6Fej8Yt2ZntPCyFdpbHBkNV7EawesRMbc6i9MKKMhKEv4JMMzwDJc
 9BACD5C0: xpub6EefrCrMAduhNwnsHb3dAs8DYZSw4f63WyR6DaEByUHjwvPDdhczj15FyBBG4tbEJtf4vRKTv1ng5SPPnWv1Pve1f15EJfiBY5oYDN6VLEC
 `,
 			"wsh(sortedmulti(2,[5A0804E3/48'/0'/0'/2']xpub6F148LnjUhGrHfEN6Pa8VkwF8L6FJqYALxAkuHfacfVhMLVY4MRuUVMxr9pguAv67DHx1YFxqoKN8s4QfZtD9sR2xRCffTqi9E8FiFLAYk8,[DD4FADEE/48'/0'/0'/2']xpub6DnediUuY8Pcc6Fej8Yt2ZntPCyFdpbHBkNV7EawesRMbc6i9MKKMhKEv4JMMzwDJckaV4czBvNdc6ikwLiZqdUqMd5ZKQGYaQT4cXMeVjf,[9BACD5C0/48'/0'/0'/2']xpub6EefrCrMAduhNwnsHb3dAs8DYZSw4f63WyR6DaEByUHjwvPDdhczj15FyBBG4tbEJtf4vRKTv1ng5SPPnWv1Pve1f15EJfiBY5oYDN6VLEC))",
+		},
+		{
+			// Wallet with Zpub keys.
+			`# BlueWallet Multisig setup file
+Name: V2
+Policy: 2 of 3
+Derivation: m/48'/0'/0'/2'
+Format: P2WSH
+
+79E1C26F: Zpub753vSk6B5CuYmJBvgBQYmBUghHoApQHtgJWthN7WmrJsaRaCGuQFguZTXdJxCL2rUbFdsVcLuT9ASoKGtRtug3A6SZmhfaMzYH5yc11Da3h
+
+FC68BCE8: Zpub74vSYSU12tQqbxYb7YYwUSHq8bUVSe3iKxG8JHmuLjEu1K3ZjjgH1refsgdUhxR4WttV1NFQzJnZZtueannW6Mau9QXs58wLWvh3ftfkk97
+
+347BCBE3: Zpub74bnCwDLdCa7ytzd2unjhLL842fv4RocsHbRBcpP8Nv2DGp6eCzZfJesd55YvYv1TkVrsyCNSV8HcoHcHpmm1GvmhuYmschCbYcTR1orqKB
+`,
+			"wsh(sortedmulti(2,[79E1C26F/48'/0'/0'/2']Zpub753vSk6B5CuYmJBvgBQYmBUghHoApQHtgJWthN7WmrJsaRaCGuQFguZTXdJxCL2rUbFdsVcLuT9ASoKGtRtug3A6SZmhfaMzYH5yc11Da3h,[FC68BCE8/48'/0'/0'/2']Zpub74vSYSU12tQqbxYb7YYwUSHq8bUVSe3iKxG8JHmuLjEu1K3ZjjgH1refsgdUhxR4WttV1NFQzJnZZtueannW6Mau9QXs58wLWvh3ftfkk97,[347BCBE3/48'/0'/0'/2']Zpub74bnCwDLdCa7ytzd2unjhLL842fv4RocsHbRBcpP8Nv2DGp6eCzZfJesd55YvYv1TkVrsyCNSV8HcoHcHpmm1GvmhuYmschCbYcTR1orqKB))",
 		},
 		{
 			`# Exported from Nunchuk
