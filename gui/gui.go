@@ -1174,7 +1174,7 @@ loop:
 			} else {
 				s.cancel = &ConfirmWarningScreen{
 					Title: "Cancel?",
-					Body:  "This will cancel the engraving process\n\nHold button to confirm.",
+					Body:  "This will cancel the engraving process.\n\nHold button to confirm.",
 					Icon:  assets.IconDiscard,
 				}
 			}
