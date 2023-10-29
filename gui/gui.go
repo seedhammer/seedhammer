@@ -402,13 +402,11 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 			s.seed = nil
 			continue
 		case s.warning != nil:
-			dismissed := s.warning.Layout(ctx, ops.Begin(), th, dims)
-			warning := ops.End()
+			dismissed := s.warning.Update(ctx)
 			if dismissed {
 				s.warning = nil
 				continue
 			}
-			defer warning.Add(ops)
 		}
 		e, ok := ctx.Next(input.Button1, input.Button2, input.Button3)
 		if !ok {
@@ -476,12 +474,16 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 	}
 	op.Position(ops, ops.End(), body.Min.Add(image.Pt(0, scrollFadeDist)))
 
-	if s.warning == nil {
+	switch {
+	default:
 		layoutNavigation(ctx, ops, th, dims,
 			NavButton{Button: input.Button1, Style: StyleSecondary, Icon: assets.IconBack},
 			NavButton{Button: input.Button2, Style: StyleSecondary, Icon: assets.IconInfo},
 			NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
 		)
+	case s.warning != nil:
+		s.warning.Layout(ctx, ops.Begin(), th, dims)
+		ops.End().Add(ops)
 	}
 	return false
 }
@@ -730,7 +732,7 @@ type ErrorScreen struct {
 	w     Warning
 }
 
-func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) bool {
+func (s *ErrorScreen) Update(ctx *Context) bool {
 	for {
 		s.w.Update(ctx)
 		e, ok := ctx.Next(input.Button3)
@@ -744,9 +746,12 @@ func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 			}
 		}
 	}
+	return false
+}
+
+func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
 	s.w.Layout(ctx, ops, th, dims, s.Title, s.Body)
 	layoutNavigation(ctx, ops, th, dims, NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
-	return false
 }
 
 type ConfirmWarningScreen struct {
@@ -755,7 +760,8 @@ type ConfirmWarningScreen struct {
 	Icon  image.RGBA64Image
 	w     Warning
 
-	confirm ConfirmDelay
+	confirm  ConfirmDelay
+	progress float32
 }
 
 type Warning struct {
@@ -818,12 +824,11 @@ func (w *Warning) Update(ctx *Context) {
 
 }
 
-func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) ConfirmResult {
-	var progress float32
+func (s *ConfirmWarningScreen) Update(ctx *Context) ConfirmResult {
 	for {
 		s.w.Update(ctx)
-		progress = s.confirm.Progress(ctx)
-		if progress == 1 {
+		s.progress = s.confirm.Progress(ctx)
+		if s.progress == 1 {
 			return ConfirmYes
 		}
 		e, ok := ctx.Next(input.Button1, input.Button3)
@@ -844,11 +849,15 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 			}
 		}
 	}
+	return ConfirmNone
+}
+
+func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
 	s.w.Layout(ctx, ops, th, dims, s.Title, s.Body)
 	icn := s.Icon
 	if s.confirm.Running() {
 		icn = ProgressImage{
-			Progress: progress,
+			Progress: s.progress,
 			Src:      assets.IconProgress,
 		}
 	}
@@ -856,7 +865,6 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 		NavButton{Button: input.Button1, Style: StyleSecondary, Icon: assets.IconBack},
 		NavButton{Button: input.Button3, Style: StylePrimary, Icon: icn},
 	)
-	return ConfirmNone
 }
 
 type ProgressImage struct {
@@ -1140,8 +1148,7 @@ loop:
 		}
 		switch {
 		case s.cancel != nil:
-			result := s.cancel.Layout(ctx, ops.Begin(), th, dims)
-			dialog := ops.End()
+			result := s.cancel.Update(ctx)
 			switch result {
 			case ConfirmYes:
 				s.close()
@@ -1150,15 +1157,12 @@ loop:
 				s.cancel = nil
 				continue
 			}
-			defer dialog.Add(ops)
 		case s.engrave.warning != nil:
-			dismissed := s.engrave.warning.Layout(ctx, ops.Begin(), th, dims)
-			dialog := ops.End()
+			dismissed := s.engrave.warning.Update(ctx)
 			if dismissed {
 				s.engrave.warning = nil
 				continue
 			}
-			defer dialog.Add(ops)
 		}
 		e, ok := ctx.Next(input.Button1, input.Button2, input.Button3)
 		if !ok {
@@ -1251,7 +1255,8 @@ loop:
 		op.Position(ops, ops.End(), r.SE(sz).Sub(image.Pt(4, 0)))
 	}
 
-	if s.cancel == nil && s.engrave.warning == nil {
+	switch {
+	default:
 		icnBack := assets.IconBack
 		if canPrev {
 			icnBack = assets.IconLeft
@@ -1271,6 +1276,14 @@ loop:
 		default:
 			layoutNavigation(ctx, ops, th, dims, NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconRight})
 		}
+	case s.cancel != nil:
+		s.cancel.Layout(ctx, ops.Begin(), th, dims)
+		dialog := ops.End()
+		dialog.Add(ops)
+	case s.engrave.warning != nil:
+		s.engrave.warning.Layout(ctx, ops.Begin(), th, dims)
+		dialog := ops.End()
+		dialog.Add(ops)
 	}
 	return ResultNone
 }
@@ -1538,7 +1551,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				Mnemonic: s.Mnemonic,
 			}
 			continue
-		case s.method != nil:
+		case s.method != nil && s.warning == nil:
 			choice, done := s.method.Layout(ctx, ops.Begin(), th, dims, s.warning == nil)
 			dialog := ops.End()
 			if !done {
@@ -1586,8 +1599,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			s.engrave = nil
 			continue
 		case s.cancel != nil:
-			result := s.cancel.Layout(ctx, ops.Begin(), th, dims)
-			warning := ops.End()
+			result := s.cancel.Update(ctx)
 			switch result {
 			case ConfirmYes:
 				return true
@@ -1595,10 +1607,8 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				s.cancel = nil
 				continue
 			}
-			defer warning.Add(ops)
 		case s.confirm != nil:
-			result := s.confirm.Layout(ctx, ops.Begin(), th, dims)
-			warning := ops.End()
+			result := s.confirm.Update(ctx)
 			switch result {
 			case ConfirmYes:
 				s.confirm = nil
@@ -1613,15 +1623,12 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				s.confirm = nil
 				continue
 			}
-			defer warning.Add(ops)
 		case s.warning != nil:
-			dismiss := s.warning.Layout(ctx, ops.Begin(), th, dims)
-			warning := ops.End()
+			dismiss := s.warning.Update(ctx)
 			if dismiss {
 				s.warning = nil
 				continue
 			}
-			defer warning.Add(ops)
 		}
 		e, ok := ctx.Next(input.Button1, input.Button2, input.Center, input.Button3, input.Up, input.Down)
 		if !ok {
@@ -1757,7 +1764,8 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 	}
 	fadeClip(ops, ops.End(), image.Rectangle(list))
 
-	if s.cancel == nil && s.warning == nil && s.confirm == nil {
+	switch {
+	default:
 		layoutNavigation(ctx, ops, th, dims,
 			NavButton{Button: input.Button1, Style: StyleSecondary, Icon: assets.IconBack},
 			NavButton{Button: input.Button2, Style: StyleSecondary, Icon: assets.IconEdit},
@@ -1765,6 +1773,15 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 		if complete {
 			layoutNavigation(ctx, ops, th, dims, NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
 		}
+	case s.cancel != nil:
+		s.cancel.Layout(ctx, ops.Begin(), th, dims)
+		ops.End().Add(ops)
+	case s.confirm != nil:
+		s.confirm.Layout(ctx, ops.Begin(), th, dims)
+		ops.End().Add(ops)
+	case s.warning != nil:
+		s.warning.Layout(ctx, ops.Begin(), th, dims)
+		ops.End().Add(ops)
 	}
 	return false
 }
@@ -2409,16 +2426,13 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			}
 			s.desc = nil
 		case s.warning != nil:
-			dismissed := s.warning.Layout(ctx, ops.Begin(), th, dims)
-			warning := ops.End()
+			dismissed := s.warning.Update(ctx)
 			if dismissed {
 				s.warning = nil
 				continue
 			}
-			defer warning.Add(ops)
 		case s.sdcard.warning != nil:
-			res := s.sdcard.warning.Layout(ctx, ops.Begin(), th, dims)
-			warning := ops.End()
+			res := s.sdcard.warning.Update(ctx)
 			switch res {
 			case ConfirmYes:
 				s.sdcard.warning = nil
@@ -2429,7 +2443,6 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				s.sdcard.warning = nil
 				continue
 			}
-			defer warning.Add(ops)
 		}
 		s.error.Update(ctx)
 		e, ok := ctx.Next(input.Button3, input.Center, input.Left, input.Right)
@@ -2487,13 +2500,20 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 	op.Position(ops, ops.End(), r.SE(versz.Add(image.Pt(4, 0))))
 	shsz := widget.LabelW(ops.Begin(), ctx.Styles.debug, 100, th.Text, "SeedHammer")
 	op.Position(ops, ops.End(), r.SW(shsz).Add(image.Pt(3, 0)))
-	if err != nil {
+	switch {
+	default:
+		layoutNavigation(ctx, ops, th, dims, NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
+	case s.warning != nil:
+		s.warning.Layout(ctx, ops.Begin(), th, dims)
+		ops.End().Add(ops)
+	case err != nil:
 		s.error.Layout(ctx, ops, th, dims,
 			"Error",
 			err.Error(),
 		)
-	} else if s.warning == nil {
-		layoutNavigation(ctx, ops, th, dims, NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
+	case s.sdcard.warning != nil:
+		s.sdcard.warning.Layout(ctx, ops.Begin(), th, dims)
+		ops.End().Add(ops)
 	}
 }
 
