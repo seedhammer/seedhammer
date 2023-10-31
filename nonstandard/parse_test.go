@@ -184,8 +184,7 @@ FC68BCE8: Zpub74vSYSU12tQqbxYb7YYwUSHq8bUVSe3iKxG8JHmuLjEu1K3ZjjgH1refsgdUhxR4Wt
 		},
 		{
 			"test",
-			`# Exported from Nunchuk
-Name: test
+			`Name: test
 Policy: 2 of 3
 Format: P2WSH
 
@@ -219,11 +218,11 @@ c5d87297: xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892R
 	for _, test := range tests {
 		got, err := OutputDescriptor([]byte(test.encoded))
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("failed to parse:\n%q\nerror: %v", test.encoded, err)
 		}
 		want, err := parseTextOutputDescriptor(test.desc)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("failed to parse reference:\n%q\nerror: %v", test.desc, err)
 		}
 		want.Title = test.name
 		if !reflect.DeepEqual(got, want) {

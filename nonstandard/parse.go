@@ -3,7 +3,6 @@
 package nonstandard
 
 import (
-	"bytes"
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/binary"
@@ -36,9 +35,8 @@ func ElectrumSeed(phrase string) bool {
 }
 
 func OutputDescriptor(enc []byte) (urtypes.OutputDescriptor, error) {
-	header, _, _ := bytes.Cut(enc, []byte("\n"))
-	if bytes.HasPrefix(header, []byte("# ")) && (bytes.Contains(header, []byte("Multisig setup file")) || bytes.Contains(header, []byte("Exported from Nunchuk"))) {
-		return parseBlueWalletDescriptor(string(enc))
+	if bw, err := parseBlueWalletDescriptor(string(enc)); err == nil && bw.Title != "" {
+		return bw, nil
 	}
 	desc, err := parseTextOutputDescriptor(string(enc))
 	if err == nil {
@@ -86,7 +84,7 @@ func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 	var path urtypes.Path
 	seenKeys := make(map[string]string)
 	for len(lines) > 0 {
-		l := strings.TrimSpace(lines[0])
+		l := lines[0]
 		lines = lines[1:]
 		if l == "" || strings.HasPrefix(l, "#") {
 			continue
