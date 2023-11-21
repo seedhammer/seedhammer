@@ -112,50 +112,45 @@ func TestMainScreen(t *testing.T) {
 	frame := func() {
 		scr.Layout(ctx, op.Ctx{}, image.Point{}, nil)
 	}
-	// Select multisig, scan SeedQR.
-	ctxButton(ctx, input.Right, input.Button3)
 	// Test sd card warning.
+	ctxButton(ctx, input.Button3)
 	frame()
 	if scr.sdcard.warning == nil {
-		t.Fatal("MainScreen ignored SD card inserted")
+		t.Fatal("MainScreen ignored SD card present")
 	}
 	ctx.NoSDCard = true
 	frame()
 	if scr.sdcard.warning != nil {
 		t.Fatal("MainScreen ignored SD card ejected")
 	}
+	// Input method camera
+	ctxButton(ctx, input.Down, input.Button3)
 	frame()
-	ctxQR(t, p, frame, "011513251154012711900771041507421289190620080870026613431420201617920614089619290300152408010643")
-	if scr.warning == nil {
-		t.Fatal("MainScreen accepted invalid data for a wallet descriptor")
+	// Scan xpub as descriptor.
+	ctxQR(t, p, frame, "xpub6F148LnjUhGrHfEN6Pa8VkwF8L6FJqYALxAkuHfacfVhMLVY4MRuUVMxr9pguAv67DHx1YFxqoKN8s4QfZtD9sR2xRCffTqi9E8FiFLAYk8")
+	if scr.seed.warning == nil {
+		t.Fatal("MainScreen accepted invalid data for a Seed")
 	}
 }
 
-func TestDescriptorScreen(t *testing.T) {
-	scr := &DescriptorScreen{
-		Descriptor: twoOfThree.Descriptor,
-	}
-	ctx := NewContext(newPlatform())
-
-	// Accept seed, select 12 words.
-	ctxButton(ctx, input.Button3, input.Button3)
-	// Select keyboard input.
-	ctxButton(ctx, input.Button3)
-
+func TestNonParticipatingSeed(t *testing.T) {
 	// Enter seed not part of the descriptor.
 	mnemonic := make(bip39.Mnemonic, 12)
 	for i := range mnemonic {
 		mnemonic[i] = bip39.RandomWord()
 	}
 	mnemonic = mnemonic.FixChecksum()
-	for _, w := range mnemonic {
-		ctxString(ctx, strings.ToUpper(bip39.LabelFor(w)))
-		ctxButton(ctx, input.Button2)
+	scr := &DescriptorScreen{
+		Mnemonic:   mnemonic,
+		Descriptor: twoOfThree.Descriptor,
 	}
-	// Accept seed.
+	ctx := NewContext(newPlatform())
+
+	// Accept descriptor.
 	ctxButton(ctx, input.Button3)
+
 	scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if scr.seed.warning == nil {
+	if scr.warning == nil || scr.warning.Title != "Unknown Share" {
 		t.Fatal("a non-participating seed was accepted")
 	}
 }
@@ -295,7 +290,7 @@ func TestScanScreenError(t *testing.T) {
 	}
 }
 
-func TestWordKeyboardcreen(t *testing.T) {
+func TestWordKeyboardScreen(t *testing.T) {
 	ctx := NewContext(newPlatform())
 	for _, w := range bip39.Wordlist {
 		scr := &WordKeyboardScreen{
@@ -303,8 +298,8 @@ func TestWordKeyboardcreen(t *testing.T) {
 		}
 		ctxString(ctx, strings.ToUpper(w))
 		ctxButton(ctx, input.Button2)
-		done := scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
-		if !done {
+		res := scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
+		if res == ResultNone {
 			t.Errorf("keyboard did not accept %q", w)
 		}
 		if got := bip39.LabelFor(scr.Mnemonic[0]); got != w {
@@ -314,8 +309,13 @@ func TestWordKeyboardcreen(t *testing.T) {
 }
 
 func ctxQR(t *testing.T, p *testPlatform, frame func(), qrs ...string) {
+	t.Helper()
 	for _, qr := range qrs {
-		<-p.camera.init
+		select {
+		case <-p.camera.init:
+		case <-time.After(5 * time.Second):
+			t.Fatal("camera never turned on")
+		}
 		p.camera.in <- qrFrame(t, qr)
 		delivered := make(chan struct{})
 		go func() {
@@ -337,7 +337,7 @@ func ctxQR(t *testing.T, p *testPlatform, frame func(), qrs ...string) {
 func TestSeedScreenScan(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
-	scr := NewEmptySeedScreen(urtypes.OutputDescriptor{}, "")
+	scr := NewEmptySeedScreen("")
 	frame := func() {
 		scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	}
@@ -358,7 +358,7 @@ func TestSeedScreenScan(t *testing.T) {
 func TestSeedScreenScanInvalid(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
-	scr := NewEmptySeedScreen(urtypes.OutputDescriptor{}, "")
+	scr := NewEmptySeedScreen("")
 	frame := func() {
 		scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	}
@@ -374,14 +374,14 @@ func TestSeedScreenScanInvalid(t *testing.T) {
 func TestSeedScreenInvalidSeed(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
-	scr := NewSeedScreen(urtypes.OutputDescriptor{}, make(bip39.Mnemonic, len(twoOfThree.Mnemonic)))
+	scr := NewSeedScreen(make(bip39.Mnemonic, len(twoOfThree.Mnemonic)))
 	copy(scr.Mnemonic, twoOfThree.Mnemonic)
 	// Invalidate seed.
 	scr.Mnemonic[0] = 0
 	// Accept seed.
 	ctxButton(ctx, input.Button3)
-	done := scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
-	if done || scr.warning == nil {
+	_, res := scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
+	if res != ResultNone || scr.warning == nil {
 		t.Fatal("invalid seed accepted")
 	}
 	// Dismiss error.
@@ -391,11 +391,13 @@ func TestSeedScreenInvalidSeed(t *testing.T) {
 	ctxButton(ctx, input.Button1)
 	// Hold confirm.
 	ctxPress(ctx, input.Button3)
-	if done = scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{}); done {
+	_, res = scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
+	if res != ResultNone {
 		t.Error("exited screen without confirmation")
 	}
 	p.timeOffset += confirmDelay
-	if done = scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{}); !done {
+	_, res = scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
+	if res == ResultNone {
 		t.Error("failed to exit screen")
 	}
 }
@@ -407,19 +409,10 @@ func TestMulti(t *testing.T) {
 	}
 
 	r := newRunner(t)
-	// Start scanner.
-	r.Button(t, input.Button3)
-	r.QR(t, twoOfThreeUR...)
-	for r.app.scr.desc == nil {
-		r.Frame(t)
-	}
-	// Accept descriptor, select 12 words.
-	r.Button(t, input.Button3, input.Button3)
-	// Select keyboard input.
-	r.Button(t, input.Button3)
-	for r.app.scr.desc.seed == nil {
-		r.Frame(t)
-	}
+
+	//Seed input method, keyboad input, select 12 words.
+	r.Button(t, input.Button3, input.Button3, input.Button3)
+
 	mnemonic := twoOfThree.Mnemonic
 	for _, word := range mnemonic {
 		r.String(t, strings.ToUpper(bip39.LabelFor(word)))
@@ -427,21 +420,28 @@ func TestMulti(t *testing.T) {
 	}
 	r.Frame(t)
 	r.Frame(t)
-	if sc := r.app.scr.desc; sc.seed == nil || !sc.seed.Mnemonic.Valid() {
-		t.Fatalf("got invalid seed %v, wanted %v", sc.seed.Mnemonic, mnemonic)
+	if sc := r.app.scr.seed; sc == nil || !sc.Mnemonic.Valid() {
+		t.Fatalf("got invalid seed %v, wanted %v", sc.Mnemonic, mnemonic)
 
 	}
-	if got := r.app.scr.desc.seed.Mnemonic; !reflect.DeepEqual(got, mnemonic) {
+	if got := r.app.scr.seed.Mnemonic; !reflect.DeepEqual(got, mnemonic) {
 		t.Fatalf("got seed %v, wanted %v", got, mnemonic)
 	}
 
-	// Accept seed, go to engrave.
-	r.Button(t, input.Button3)
-	for r.app.scr.desc.seed.engrave == nil {
+	// Accept seed, go to descriptor scan.
+	r.Button(t, input.Button3, input.Button3)
+
+	r.QR(t, twoOfThreeUR...)
+	for r.app.scr.desc == nil {
 		r.Frame(t)
 	}
+	// Accept descriptor, go to engrave.
+	r.Button(t, input.Button3)
 
-	testEngraving(t, r, r.app.scr.desc.seed.engrave, twoOfThree.Descriptor, mnemonic, 0)
+	for r.app.scr.engrave == nil {
+		r.Frame(t)
+	}
+	testEngraving(t, r, r.app.scr.engrave, twoOfThree.Descriptor, mnemonic, 0)
 }
 
 func fillDescriptor(t *testing.T, desc urtypes.OutputDescriptor, path urtypes.Path, seedlen int, keyIdx int) bip39.Mnemonic {

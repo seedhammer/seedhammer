@@ -332,10 +332,10 @@ func (s *AddressesScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) boo
 
 type DescriptorScreen struct {
 	Descriptor urtypes.OutputDescriptor
-
-	addresses *AddressesScreen
-	seed      *SeedScreen
-	warning   *ErrorScreen
+	Mnemonic   bip39.Mnemonic
+	addresses  *AddressesScreen
+	confirm    *ConfirmWarningScreen
+	warning    *ErrorScreen
 }
 
 func descriptorKeyIdx(desc urtypes.OutputDescriptor, m bip39.Mnemonic, pass string) (int, bool) {
@@ -375,11 +375,7 @@ func deriveMasterKey(m bip39.Mnemonic, net *chaincfg.Params) (*hdkeychain.Extend
 
 const infoSpacing = 8
 
-func (s *DescriptorScreen) inputSeed() {
-	s.seed = NewEmptySeedScreen(s.Descriptor, "Input Share")
-}
-
-func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bool {
+func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (int, Result) {
 	th := &descriptorTheme
 	for {
 		switch {
@@ -388,19 +384,21 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 			dialog := ops.End()
 			if !done {
 				dialog.Add(ops)
-				return false
+				return 0, ResultNone
 			}
 			s.addresses = nil
 			continue
-		case s.seed != nil:
-			done := s.seed.Layout(ctx, ops.Begin(), th, dims)
-			dialog := ops.End()
-			if !done {
-				dialog.Add(ops)
-				return false
+		case s.confirm != nil:
+			result := s.confirm.Update(ctx)
+			switch result {
+			case ConfirmYes:
+				s.confirm = nil
+				keyIdx, _ := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
+				return keyIdx, ResultComplete
+			case ConfirmNo:
+				s.confirm = nil
+				return 0, ResultCancelled
 			}
-			s.seed = nil
-			continue
 		case s.warning != nil:
 			dismissed := s.warning.Update(ctx)
 			if dismissed {
@@ -415,7 +413,7 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 		switch e.Button {
 		case input.Button1:
 			if e.Click {
-				return true
+				return 0, ResultCancelled
 			}
 		case input.Button2:
 			if !e.Click {
@@ -430,7 +428,27 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 				s.warning = NewErrorScreen(err)
 				continue
 			}
-			s.inputSeed()
+			keyIdx, ok := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
+			if !ok {
+				// Passphrase protected seeds don't match the descriptor, so
+				// allow the user to ignore the mismatch. Don't allow this for
+				// multisig descriptors where we can't know which key the seed belongs
+				// to.
+				if len(s.Descriptor.Keys) == 1 {
+					s.confirm = &ConfirmWarningScreen{
+						Title: "Unknown Share",
+						Body:  "Long press to confirm the share has a passphrase.\n\nPress back otherwise.",
+						Icon:  assets.IconCheckmark,
+					}
+				} else {
+					s.warning = &ErrorScreen{
+						Title: "Unknown Share",
+						Body:  "The share is not part of the wallet or is passphrase protected.",
+					}
+				}
+				continue
+			}
+			return keyIdx, ResultComplete
 		}
 	}
 
@@ -489,8 +507,11 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bo
 	case s.warning != nil:
 		s.warning.Layout(ctx, ops.Begin(), th, dims)
 		ops.End().Add(ops)
+	case s.confirm != nil:
+		s.confirm.Layout(ctx, ops.Begin(), th, dims)
+		ops.End().Add(ops)
 	}
-	return false
+	return 0, ResultNone
 }
 
 func derivationPath(path urtypes.Path) string {
@@ -1439,38 +1460,33 @@ var (
 	}
 )
 
-func NewEmptySeedScreen(desc urtypes.OutputDescriptor, title string) *SeedScreen {
+func NewEmptySeedScreen(title string) *SeedScreen {
 	s := &SeedScreen{
-		Descriptor: desc,
-	}
-	s.method = &ChoiceScreen{
-		Title:   title,
-		Lead:    "Choose input method",
-		Choices: []string{"KEYBOARD", "CAMERA"},
+		method: &ChoiceScreen{
+			Title:   title,
+			Lead:    "Choose input method",
+			Choices: []string{"KEYBOARD", "CAMERA"},
+		},
 	}
 	return s
 }
 
-func NewSeedScreen(desc urtypes.OutputDescriptor, m bip39.Mnemonic) *SeedScreen {
+func NewSeedScreen(m bip39.Mnemonic) *SeedScreen {
 	return &SeedScreen{
-		Descriptor: desc,
-		Mnemonic:   m,
+		Mnemonic: m,
 	}
 }
 
 type SeedScreen struct {
-	Descriptor urtypes.OutputDescriptor
-	Mnemonic   bip39.Mnemonic
-	selected   int
-	scroll     int
-	method     *ChoiceScreen
-	seedlen    *ChoiceScreen
-	input      *WordKeyboardScreen
-	scanner    *ScanScreen
-	engrave    *EngraveScreen
-	cancel     *ConfirmWarningScreen
-	confirm    *ConfirmWarningScreen
-	warning    *ErrorScreen
+	Mnemonic bip39.Mnemonic
+	selected int
+	scroll   int
+	method   *ChoiceScreen
+	seedlen  *ChoiceScreen
+	input    *WordKeyboardScreen
+	scanner  *ScanScreen
+	cancel   *ConfirmWarningScreen
+	warning  *ErrorScreen
 }
 
 func (s *SeedScreen) empty() bool {
@@ -1490,7 +1506,7 @@ func emptyMnemonic(nwords int) bip39.Mnemonic {
 	return m
 }
 
-func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) bool {
+func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) (bip39.Mnemonic, Result) {
 	var complete bool
 	for {
 		complete = len(s.Mnemonic) > 0
@@ -1507,7 +1523,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			switch status {
 			case ResultNone:
 				dialog.Add(ops)
-				return false
+				return nil, ResultNone
 			}
 			s.scanner = nil
 			switch status {
@@ -1538,34 +1554,34 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			s.method = nil
 			s.Mnemonic = seed
 			continue
-		case s.seedlen != nil:
-			choice, done := s.seedlen.Layout(ctx, ops.Begin(), th, dims, true)
+		case s.seedlen != nil && s.input == nil:
+			choice, status := s.seedlen.Layout(ctx, ops.Begin(), th, dims, true)
 			dialog := ops.End()
-			if !done {
+			if status == ResultNone {
 				dialog.Add(ops)
-				return false
+				return nil, ResultNone
 			}
-			s.seedlen = nil
-			if choice == -1 {
+			if status == ResultCancelled {
+				s.seedlen = nil
 				continue
 			}
-			s.method = nil
 			nwords := []int{12, 24}[choice]
 			s.Mnemonic = emptyMnemonic(nwords)
 			s.input = &WordKeyboardScreen{
 				Mnemonic: s.Mnemonic,
 			}
 			continue
-		case s.method != nil && s.warning == nil:
-			choice, done := s.method.Layout(ctx, ops.Begin(), th, dims, s.warning == nil)
+		case s.method != nil && s.input == nil && s.warning == nil:
+			choice, status := s.method.Layout(ctx, ops.Begin(), th, dims, s.warning == nil)
 			dialog := ops.End()
-			if !done {
+			switch status {
+			case ResultNone:
 				dialog.Add(ops)
-				return false
+				return nil, ResultNone
+			case ResultCancelled:
+				return nil, ResultCancelled
 			}
 			switch choice {
-			case -1:
-				return true
 			case 0:
 				s.seedlen = &ChoiceScreen{
 					Title:   "Input Seed",
@@ -1580,52 +1596,29 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			}
 			continue
 		case s.input != nil:
-			done := s.input.Layout(ctx, ops.Begin(), th, dims)
+			status := s.input.Layout(ctx, ops.Begin(), th, dims)
 			dialog := ops.End()
-			if !done {
-				dialog.Add(ops)
-				return false
-			}
-			s.input = nil
-			if s.empty() {
-				return true
-			}
-			continue
-		case s.engrave != nil:
-			res := s.engrave.Layout(ctx, ops.Begin(), dims)
-			dialog := ops.End()
-			switch res {
+			switch status {
 			case ResultNone:
 				dialog.Add(ops)
-				return false
-			case ResultComplete:
-				return true
+				return nil, ResultNone
+			case ResultCancelled:
+				if s.empty() {
+					s.input = nil
+					continue
+				}
 			}
-			s.engrave = nil
+			s.seedlen = nil
+			s.input = nil
+			s.method = nil
 			continue
 		case s.cancel != nil:
 			result := s.cancel.Update(ctx)
 			switch result {
 			case ConfirmYes:
-				return true
+				return nil, ResultCancelled
 			case ConfirmNo:
 				s.cancel = nil
-				continue
-			}
-		case s.confirm != nil:
-			result := s.confirm.Update(ctx)
-			switch result {
-			case ConfirmYes:
-				s.confirm = nil
-				eng, err := NewEngraveScreen(ctx, s.Descriptor, 0, s.Mnemonic)
-				if err != nil {
-					s.warning = NewErrorScreen(err)
-					continue
-				}
-				s.engrave = eng
-				continue
-			case ConfirmNo:
-				s.confirm = nil
 				continue
 			}
 		case s.warning != nil:
@@ -1645,7 +1638,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				break
 			}
 			if s.empty() {
-				return true
+				return nil, ResultCancelled
 			}
 			s.cancel = &ConfirmWarningScreen{
 				Title: "Discard Seed?",
@@ -1680,33 +1673,7 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				}
 				break
 			}
-			keyIdx, ok := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
-			if !ok {
-				// Passphrase protected seeds don't match the descriptor, so
-				// allow the user to ignore the mismatch. Don't allow this for
-				// multisig descriptors where we can't know which key the seed belongs
-				// to.
-				if len(s.Descriptor.Keys) == 1 {
-					s.confirm = &ConfirmWarningScreen{
-						Title: "Unknown Share",
-						Body:  "Long press to confirm the share has a passphrase.\n\nPress back otherwise.",
-						Icon:  assets.IconCheckmark,
-					}
-				} else {
-					s.warning = &ErrorScreen{
-						Title: "Unknown Share",
-						Body:  "The share is not part of the wallet or is passphrase protected.",
-					}
-				}
-				break
-			}
-			eng, err := NewEngraveScreen(ctx, s.Descriptor, keyIdx, s.Mnemonic)
-			if err != nil {
-				s.warning = NewErrorScreen(err)
-				break
-			}
-			s.engrave = eng
-			continue
+			return s.Mnemonic, ResultComplete
 		case input.Down:
 			if e.Pressed && s.selected < len(s.Mnemonic)-1 {
 				s.selected++
@@ -1781,14 +1748,11 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 	case s.cancel != nil:
 		s.cancel.Layout(ctx, ops.Begin(), th, dims)
 		ops.End().Add(ops)
-	case s.confirm != nil:
-		s.confirm.Layout(ctx, ops.Begin(), th, dims)
-		ops.End().Add(ops)
 	case s.warning != nil:
 		s.warning.Layout(ctx, ops.Begin(), th, dims)
 		ops.End().Add(ops)
 	}
-	return false
+	return nil, ResultNone
 }
 
 const scrollFadeDist = 16
@@ -1875,7 +1839,7 @@ type WordKeyboardScreen struct {
 	kbd      *Keyboard
 }
 
-func (s *WordKeyboardScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) bool {
+func (s *WordKeyboardScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) Result {
 	if s.kbd == nil {
 		s.kbd = NewKeyboard(ctx)
 	}
@@ -1888,7 +1852,7 @@ func (s *WordKeyboardScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims i
 		switch e.Button {
 		case input.Button1:
 			if e.Click {
-				return true
+				return ResultCancelled
 			}
 		case input.Button2:
 			if !e.Click {
@@ -1903,7 +1867,7 @@ func (s *WordKeyboardScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims i
 			for {
 				s.selected++
 				if s.selected == len(s.Mnemonic) {
-					return true
+					return ResultComplete
 				}
 				if s.Mnemonic[s.selected] == -1 {
 					break
@@ -1949,7 +1913,7 @@ func (s *WordKeyboardScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims i
 	if complete {
 		layoutNavigation(ctx, ops, th, dims, NavButton{Button: input.Button2, Style: StylePrimary, Icon: assets.IconCheckmark})
 	}
-	return false
+	return ResultNone
 }
 
 var kbdKeys = [...][]rune{
@@ -2263,7 +2227,7 @@ type ChoiceScreen struct {
 	choice  int
 }
 
-func (s *ChoiceScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, active bool) (int, bool) {
+func (s *ChoiceScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, active bool) (int, Result) {
 	for active {
 		e, ok := ctx.Next(input.Button1, input.Button3, input.Center, input.Up, input.Down)
 		if !ok {
@@ -2272,11 +2236,11 @@ func (s *ChoiceScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.P
 		switch e.Button {
 		case input.Button1:
 			if e.Click {
-				return -1, true
+				return 0, ResultCancelled
 			}
 		case input.Button3, input.Center:
 			if e.Click {
-				return s.choice, true
+				return s.choice, ResultComplete
 			}
 		case input.Up:
 			if e.Pressed {
@@ -2351,17 +2315,21 @@ func (s *ChoiceScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.P
 			NavButton{Button: input.Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
 		)
 	}
-	return 0, false
+	return 0, ResultNone
 }
 
 type MainScreen struct {
-	mnemonic bip39.Mnemonic
-	page     program
-	scanner  *ScanScreen
-	desc     *DescriptorScreen
-	warning  *ErrorScreen
-	error    Warning
-	sdcard   struct {
+	mnemonic   bip39.Mnemonic
+	page       program
+	scanner    *ScanScreen
+	desc       *DescriptorScreen
+	descriptor *urtypes.OutputDescriptor
+	method     *ChoiceScreen
+	seed       *SeedScreen
+	engrave    *EngraveScreen
+	warning    *ErrorScreen
+	error      Warning
+	sdcard     struct {
 		warning *ConfirmWarningScreen
 		shown   bool
 	}
@@ -2370,10 +2338,7 @@ type MainScreen struct {
 func (s *MainScreen) Select(ctx *Context) {
 	switch s.page {
 	case backupWallet:
-		s.scanner = &ScanScreen{
-			Title: "Scan",
-			Lead:  "Wallet Output Descriptor",
-		}
+		s.seed = NewEmptySeedScreen("Input Seed")
 	}
 }
 
@@ -2391,6 +2356,38 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			th = &descriptorTheme
 		}
 		switch {
+		case s.seed != nil:
+			m, status := s.seed.Layout(ctx, ops.Begin(), th, dims)
+			dialog := ops.End()
+			if status == ResultNone {
+				dialog.Add(ops)
+				return
+			}
+			s.mnemonic = m
+			s.seed = nil
+			switch status {
+			case ResultCancelled:
+				continue
+			}
+			valid := s.descriptor != nil
+			if valid {
+				_, ok := descriptorKeyIdx(*s.descriptor, s.mnemonic, "")
+				valid = valid && ok
+			}
+			if valid {
+				s.method = &ChoiceScreen{
+					Title:   "Descriptor",
+					Lead:    "Choose input method",
+					Choices: []string{"SCAN", "RE-USE"},
+				}
+			} else {
+				s.method = &ChoiceScreen{
+					Title:   "Descriptor",
+					Lead:    "Choose input method",
+					Choices: []string{"SCAN"},
+				}
+			}
+			continue
 		case s.scanner != nil:
 			res, status := s.scanner.Layout(ctx, ops.Begin(), dims)
 			dialog := ops.End()
@@ -2404,6 +2401,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			case ResultCancelled:
 				continue
 			}
+			s.method = nil
 			desc, ok := res.(urtypes.OutputDescriptor)
 			if !ok {
 				if b, isbytes := res.([]byte); isbytes {
@@ -2419,18 +2417,75 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				continue
 			}
 			desc.Title = backup.TitleString(&constant.Font, desc.Title)
+			s.descriptor = &desc
 			s.desc = &DescriptorScreen{
 				Descriptor: desc,
+				Mnemonic:   s.mnemonic,
 			}
 			continue
-		case s.desc != nil:
-			done := s.desc.Layout(ctx, ops.Begin(), dims)
+		case s.method != nil:
+			choice, status := s.method.Layout(ctx, ops.Begin(), th, dims, s.warning == nil)
 			dialog := ops.End()
-			if !done {
+			switch status {
+			case ResultNone:
 				dialog.Add(ops)
 				return
 			}
+			if status == ResultCancelled {
+				s.seed = NewSeedScreen(s.mnemonic)
+				continue
+			}
+			switch choice {
+			case 0: //Scan
+				s.scanner = &ScanScreen{
+					Title: "Scan",
+					Lead:  "Wallet Output Descriptor",
+				}
+			case 1: //Re-use
+				s.method = nil
+				s.desc = &DescriptorScreen{
+					Descriptor: *s.descriptor,
+					Mnemonic:   s.mnemonic,
+				}
+			}
+			continue
+		case s.desc != nil:
+			keyIdx, status := s.desc.Layout(ctx, ops.Begin(), dims)
+			dialog := ops.End()
+			if status == ResultNone {
+				dialog.Add(ops)
+				return
+			}
+			if status == ResultCancelled {
+				s.desc = nil
+				s.seed = NewSeedScreen(s.mnemonic)
+				continue
+			}
 			s.desc = nil
+			eng, err := NewEngraveScreen(ctx, *s.descriptor, keyIdx, s.mnemonic)
+			if err != nil {
+				s.warning = NewErrorScreen(err)
+				break
+			}
+			s.engrave = eng
+			continue
+		case s.engrave != nil:
+			res := s.engrave.Layout(ctx, ops.Begin(), dims)
+			dialog := ops.End()
+			switch res {
+			case ResultNone:
+				dialog.Add(ops)
+				return
+			}
+			s.engrave = nil
+			if res == ResultComplete {
+				continue
+			}
+			s.desc = &DescriptorScreen{
+				Descriptor: *s.descriptor,
+				Mnemonic:   s.mnemonic,
+			}
+			continue
 		case s.warning != nil:
 			dismissed := s.warning.Update(ctx)
 			if dismissed {
