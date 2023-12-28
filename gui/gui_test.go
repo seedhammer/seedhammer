@@ -504,6 +504,20 @@ type testPlatform struct {
 	sdcard     chan bool
 }
 
+type testLCD struct{}
+
+func (t *testPlatform) Display() (LCD, error) {
+	return testLCD{}, nil
+}
+
+func (testLCD) Framebuffer() draw.RGBA64Image {
+	return rgb565.New(image.Rect(0, 0, 1, 1))
+}
+
+func (testLCD) Dirty(sr image.Rectangle) error {
+	return nil
+}
+
 func (t *testPlatform) SDCard() <-chan bool {
 	if t.sdcard == nil {
 		t.sdcard = make(chan bool, 1)
@@ -628,17 +642,13 @@ func newRunner(t *testing.T) *runner {
 	r := &runner{
 		p: newPlatform(),
 	}
-	r.app = NewApp(r.p, r, "")
+	a, err := NewApp(r.p, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.app = a
 	r.app.ctx.NoSDCard = true
 	return r
-}
-
-func (r *runner) Framebuffer() draw.RGBA64Image {
-	return rgb565.New(image.Rect(0, 0, 1, 1))
-}
-
-func (r *runner) Dirty(sr image.Rectangle) error {
-	return nil
 }
 
 func (r *runner) String(t *testing.T, str string) {

@@ -8,7 +8,6 @@ import (
 	"os"
 
 	"seedhammer.com/gui"
-	"seedhammer.com/lcd"
 )
 
 func main() {
@@ -25,12 +24,10 @@ func run() error {
 	if err := Init(); err != nil {
 		return err
 	}
-	lcd, err := lcd.Open()
+	a, err := gui.NewApp(newPlatform(), version)
 	if err != nil {
 		return err
 	}
-	defer lcd.Close()
-	a := gui.NewApp(newPlatform(), lcd, version)
 	a.Debug = Debug
 	for {
 		a.Frame()

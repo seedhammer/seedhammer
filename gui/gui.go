@@ -2718,6 +2718,7 @@ type Platform interface {
 	Dump(path string, r io.Reader) error
 	Now() time.Time
 	SDCard() <-chan bool
+	Display() (LCD, error)
 }
 
 type LCD interface {
@@ -2742,17 +2743,21 @@ type App struct {
 	screenshotCounter int
 }
 
-func NewApp(pl Platform, lcd LCD, version string) *App {
+func NewApp(pl Platform, version string) (*App, error) {
 	btns := make(chan input.Event, 10)
 	ctx := NewContext(pl)
 	ctx.Version = version
+	d, err := pl.Display()
+	if err != nil {
+		return nil, err
+	}
 	a := &App{
 		ctx:  ctx,
 		err:  pl.Input(btns),
 		btns: WakeupChan(ctx, btns),
-		lcd:  lcd,
+		lcd:  d,
 	}
-	return a
+	return a, nil
 }
 
 const idleTimeout = 3 * time.Minute

@@ -1,5 +1,5 @@
-// package lcd implements a display on top of dumb DRM devices.
-package lcd
+// package drm implements a display on top of dumb DRM devices.
+package drm
 
 import (
 	"errors"

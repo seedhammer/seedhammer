@@ -1,3 +1,5 @@
+//go:build linux && arm
+
 package main
 
 import (
@@ -10,6 +12,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+	"seedhammer.com/driver/drm"
+	"seedhammer.com/gui"
 )
 
 func Init() error {
@@ -19,6 +23,10 @@ func Init() error {
 		log.Printf("debug: %v", err)
 	}
 	return initSDCardNotifier()
+}
+
+func (p *Platform) Display() (gui.LCD, error) {
+	return drm.Open()
 }
 
 func initSDCardNotifier() error {
