@@ -49,7 +49,7 @@ func (p *Image) At(x, y int) color.Color {
 		return color.RGBA{}
 	}
 	px := p.Pix[p.PixOffset(x, y)]
-	r, g, b := rgb565ToRGB888(px)
+	r, g, b := RGB565ToRGB888(px)
 	return color.RGBA{A: 0xff, R: r, G: g, B: b}
 }
 
@@ -57,7 +57,7 @@ func (p *Image) SetRGBA64(x, y int, c color.RGBA64) {
 	if !(image.Point{x, y}).In(p.Rect) {
 		return
 	}
-	rgb16 := rgb888ToRGB565(uint8(c.R>>8), uint8(c.G>>8), uint8(c.B>>8))
+	rgb16 := RGB888ToRGB565(uint8(c.R>>8), uint8(c.G>>8), uint8(c.B>>8))
 	p.Pix[p.PixOffset(x, y)] = rgb16
 }
 
@@ -66,7 +66,7 @@ func (p *Image) RGBA64At(x, y int) color.RGBA64 {
 		return color.RGBA64{}
 	}
 	px := p.Pix[p.PixOffset(x, y)]
-	r, g, b := rgb565ToRGB888(px)
+	r, g, b := RGB565ToRGB888(px)
 	r16 := uint16(r)
 	r16 |= r16 << 8
 	g16 := uint16(g)
@@ -95,7 +95,7 @@ func (p *Image) DrawOver(dr image.Rectangle, src image.Image, sp image.Point) {
 			for x := 0; x < dr.Dx(); x++ {
 				col := src.GrayAt(sp.X+x, sp.Y+y)
 				po := p.PixOffset(dr.Min.X+x, dr.Min.Y+y)
-				p.Pix[po] = rgb888ToRGB565(col.Y, col.Y, col.Y)
+				p.Pix[po] = RGB888ToRGB565(col.Y, col.Y, col.Y)
 			}
 		}
 		return
@@ -107,15 +107,15 @@ func (p *Image) DrawOver(dr image.Rectangle, src image.Image, sp image.Point) {
 
 func colorToRGB565(c color.Color) Color {
 	r, g, b, _ := c.RGBA()
-	return rgb888ToRGB565(uint8(r>>8), uint8(g>>8), uint8(b>>8))
+	return RGB888ToRGB565(uint8(r>>8), uint8(g>>8), uint8(b>>8))
 }
 
-func rgb888ToRGB565(r, g, b uint8) Color {
+func RGB888ToRGB565(r, g, b uint8) Color {
 	u16 := uint16(b)>>3 | uint16(g&0xFC)<<3 | uint16(r&0xF8)<<8
 	return Color{byte(u16), byte(u16 >> 8)}
 }
 
-func rgb565ToRGB888(rgb Color) (r, g, b uint8) {
+func RGB565ToRGB888(rgb Color) (r, g, b uint8) {
 	c := uint16(rgb[1])<<8 | uint16(rgb[0])
 	r = uint8(c>>8) & 0xf8
 	r |= r >> 5

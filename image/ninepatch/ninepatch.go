@@ -13,15 +13,14 @@ type Template struct {
 	src     image.RGBA64Image
 }
 
-func New(src image.Image) *Template {
-	src64 := src.(image.RGBA64Image)
-	inner := nineBounds(src64, 0, 0)
+func New(src image.RGBA64Image) *Template {
+	inner := nineBounds(src, 0, 0)
 	b := src.Bounds()
-	padding := nineBounds(src64, b.Max.Y-1, b.Max.X-1)
+	padding := nineBounds(src, b.Max.Y-1, b.Max.X-1)
 	np := &Template{
 		inner:   inner,
 		padding: padding,
-		src:     src64,
+		src:     src,
 	}
 	return np
 }

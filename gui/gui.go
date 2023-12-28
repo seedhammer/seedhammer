@@ -1040,8 +1040,8 @@ func NewEngraveScreen(ctx *Context, desc urtypes.OutputDescriptor, keyIdx int, m
 		buf := new(bytes.Buffer)
 		tmpl.Execute(buf, args)
 		s.instructions[i].resolvedBody = buf.String()
-		// As a special case, the SH01 image is a placeholder for the plate-specific image.
-		if ins.Image == assets.SH01 {
+		// As a special case, the Sh01 image is a placeholder for the plate-specific image.
+		if ins.Image == assets.Sh01 {
 			s.instructions[i].Image = plateImage(s.plate.Size)
 		}
 	}
@@ -1292,7 +1292,7 @@ loop:
 		switch ins.Type {
 		case EngraveInstruction:
 		case ConnectInstruction:
-			icn := assets.IconHammer
+			icn := image.RGBA64Image(assets.IconHammer)
 			if s.confirm.Running() {
 				icn = ProgressImage{
 					Progress: progress,
@@ -1318,11 +1318,11 @@ loop:
 func plateImage(p backup.PlateSize) image.RGBA64Image {
 	switch p {
 	case backup.SmallPlate:
-		return assets.SH01
+		return assets.Sh01
 	case backup.SquarePlate:
-		return assets.SH02
+		return assets.Sh02
 	case backup.LargePlate:
-		return assets.SH03
+		return assets.Sh03
 	default:
 		panic("unsupported plate")
 	}
@@ -1375,7 +1375,7 @@ var (
 		},
 		{
 			Body:  "Place 2 x {{.Name}}\non top of each other.",
-			Image: assets.SH01,
+			Image: assets.Sh01,
 			Lead:  "seedhammer.com/tip#4",
 		},
 		{
@@ -1417,7 +1417,7 @@ var (
 		},
 		{
 			Body:  "Place 2 x {{.Name}}\non top of each other.",
-			Image: assets.SH01,
+			Image: assets.Sh01,
 			Lead:  "seedhammer.com/tip#4",
 		},
 		{
@@ -1943,8 +1943,9 @@ type Keyboard struct {
 func NewKeyboard(ctx *Context) *Keyboard {
 	k := new(Keyboard)
 	_, k.widest = ctx.Styles.keyboard.Layout(math.MaxInt, "W")
-	bssz := assets.KeyBackspace.Bounds().Size()
-	k.backspace = image.Pt(bssz.X, k.widest.Y)
+	bsb := assets.KeyBackspace.Bounds()
+	bsWidth := bsb.Min.X*2 + bsb.Dx()
+	k.backspace = image.Pt(bsWidth, k.widest.Y)
 	k.bginact = assets.Key.For(image.Rectangle{Max: k.widest})
 	k.bgact = assets.KeyActive.For(image.Rectangle{Max: k.widest})
 	k.bsinact = assets.Key.For(image.Rectangle{Max: k.backspace})
@@ -2186,7 +2187,6 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 			bgsz := k.widest
 			if key == '⌫' {
 				bg = k.bsinact
-				bgsz = k.backspace
 			}
 			bgcol := th.Text
 			style := ctx.Styles.keyboard
@@ -2204,8 +2204,9 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 			}
 			var sz image.Point
 			if key == '⌫' {
+				bgsz = k.backspace
 				icn := assets.KeyBackspace
-				sz = icn.Bounds().Size()
+				sz = image.Pt(k.backspace.X, icn.Bounds().Dy())
 				op.MaskOp(ops.Begin(), icn)
 				op.ColorOp(ops, col)
 			} else {
