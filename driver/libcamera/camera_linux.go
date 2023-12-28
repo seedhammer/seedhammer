@@ -1,8 +1,6 @@
-//go:build arm
-
-// package camera implements an interface to the libcamera2
+// package libcamera implements an interface to the libcamera2
 // camera driver.
-package camera
+package libcamera
 
 /*
 
@@ -21,20 +19,30 @@ import (
 	"image"
 	"runtime/cgo"
 	"syscall"
+
+	"seedhammer.com/gui"
 )
 
 type Camera struct {
-	frames    chan Frame
-	out       <-chan Frame
+	frames    chan gui.Frame
+	out       <-chan gui.Frame
 	bufs      chan C.size_t
 	destroyed chan struct{}
 	closed    chan struct{}
 }
 
 type Frame struct {
-	Err    error
-	Image  image.Image
+	err    error
+	image  image.Image
 	bufIdx C.size_t
+}
+
+func (f Frame) Image() image.Image {
+	return f.image
+}
+
+func (f Frame) Error() error {
+	return f.err
 }
 
 func (c *Camera) Close() {
@@ -62,7 +70,7 @@ func requestCallback(handle C.uintptr_t, bufIdx C.size_t) {
 	}
 }
 
-func Open(dims image.Point, frames chan Frame, out <-chan Frame) (func(), error) {
+func Open(dims image.Point, frames chan gui.Frame, out <-chan gui.Frame) func() {
 	c := &Camera{
 		frames:    frames,
 		out:       out,
@@ -73,13 +81,19 @@ func Open(dims image.Point, frames chan Frame, out <-chan Frame) (func(), error)
 	select {
 	case singleton <- struct{}{}:
 	default:
-		return nil, errors.New("camera: only a single camera can be open simultaneously")
+		go func() {
+			frames <- Frame{err: errors.New("camera: only a single camera can be open simultaneously")}
+		}()
+		return func() {}
 	}
 	if err := c.setup(dims); err != nil {
 		<-singleton
-		return nil, fmt.Errorf("camera: %w", err)
+		go func() {
+			frames <- Frame{err: fmt.Errorf("camera: %w", err)}
+		}()
+		return func() {}
 	}
-	return c.Close, nil
+	return c.Close
 }
 
 func (c *Camera) setup(dims image.Point) error {
@@ -104,7 +118,7 @@ func (c *Camera) setup(dims image.Point) error {
 			case <-c.closed:
 				return errClosed
 			case f := <-c.out:
-				if res := C.queue_request(f.bufIdx); res != 0 {
+				if res := C.queue_request(f.(Frame).bufIdx); res != 0 {
 					return fmt.Errorf("queue_request: %d", res)
 				}
 				return nil
@@ -112,7 +126,7 @@ func (c *Camera) setup(dims image.Point) error {
 		}
 		if res := C.start_camera(C.uint(dims.X), C.uint(dims.Y)); res != 0 {
 			err := fmt.Errorf("camera: start_camera: %d", res)
-			deliverFrame(Frame{Err: err})
+			deliverFrame(Frame{err: err})
 			return
 		}
 		format := C.frame_format()
@@ -121,7 +135,7 @@ func (c *Camera) setup(dims image.Point) error {
 			desc := C.buffer_at(C.size_t(i))
 			buf, err := syscall.Mmap(int(desc.fd), int64(desc.offset), int(desc.length), syscall.PROT_READ, syscall.MAP_SHARED)
 			if err != nil {
-				deliverFrame(Frame{Err: err})
+				deliverFrame(Frame{err: err})
 				return
 			}
 			defer syscall.Munmap(buf)
@@ -144,12 +158,12 @@ func (c *Camera) setup(dims image.Point) error {
 				return
 			case bufIdx := <-c.bufs:
 				f := Frame{
-					Image:  imgs[bufIdx],
+					image:  imgs[bufIdx],
 					bufIdx: bufIdx,
 				}
 				if err := deliverFrame(f); err != nil {
 					if !errors.Is(err, errClosed) {
-						deliverFrame(Frame{Err: fmt.Errorf("camera: %w", err)})
+						deliverFrame(Frame{err: fmt.Errorf("camera: %w", err)})
 					}
 					return
 				}

@@ -18,7 +18,6 @@ import (
 	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
-	"seedhammer.com/camera"
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/op"
@@ -283,7 +282,7 @@ func TestScanScreenError(t *testing.T) {
 	scr.Layout(ctx, op.Ctx{}, image.Point{})
 	go func() {
 		<-p.camera.init
-		p.camera.in <- camera.Frame{Err: errors.New("error during streaming")}
+		p.camera.in <- testFrame{Err: errors.New("error during streaming")}
 	}()
 	for scr.camera.err == nil {
 		scr.Layout(ctx, op.Ctx{}, image.Point{})
@@ -488,8 +487,8 @@ type testPlatform struct {
 	}
 
 	camera struct {
-		in      chan<- camera.Frame
-		out     <-chan camera.Frame
+		in      chan<- Frame
+		out     <-chan Frame
 		init    chan struct{}
 		connErr error
 	}
@@ -615,14 +614,30 @@ func (p *testPlatform) Engraver() (io.ReadWriteCloser, error) {
 	return &wrappedEngraver{sim, p.engrave.closed, p.engrave.ioErr}, nil
 }
 
-func (p *testPlatform) Camera(dims image.Point, frames chan camera.Frame, out <-chan camera.Frame) (func(), error) {
+func (p *testPlatform) Camera(dims image.Point, frames chan Frame, out <-chan Frame) func() {
 	if err := p.camera.connErr; err != nil {
-		return nil, err
+		go func() {
+			frames <- testFrame{Err: err}
+		}()
+		return func() {}
 	}
 	p.camera.in = frames
 	p.camera.out = out
 	close(p.camera.init)
-	return func() {}, nil
+	return func() {}
+}
+
+type testFrame struct {
+	Err error
+	Img image.Image
+}
+
+func (t testFrame) Image() image.Image {
+	return t.Img
+}
+
+func (t testFrame) Error() error {
+	return t.Err
 }
 
 type runner struct {
@@ -697,7 +712,7 @@ func wait[T any](t *testing.T, r *runner, out <-chan T) {
 	}
 }
 
-func qrFrame(t *testing.T, content string) camera.Frame {
+func qrFrame(t *testing.T, content string) Frame {
 	qr, err := qrcode.New(content, qrcode.Low)
 	if err != nil {
 		t.Fatal(err)
@@ -712,8 +727,8 @@ func qrFrame(t *testing.T, content string) camera.Frame {
 			frameImg.Y[off] = uint8(r >> 8)
 		}
 	}
-	return camera.Frame{
-		Image: frameImg,
+	return testFrame{
+		Img: frameImg,
 	}
 }
 

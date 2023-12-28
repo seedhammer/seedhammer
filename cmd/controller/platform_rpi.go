@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"image"
 	"log"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"seedhammer.com/driver/drm"
+	"seedhammer.com/driver/libcamera"
 	"seedhammer.com/gui"
 )
 
@@ -27,6 +29,10 @@ func Init() error {
 
 func (p *Platform) Display() (gui.LCD, error) {
 	return drm.Open()
+}
+
+func (p *Platform) Camera(dims image.Point, frames chan gui.Frame, out <-chan gui.Frame) func() {
+	return libcamera.Open(dims, frames, out)
 }
 
 func initSDCardNotifier() error {

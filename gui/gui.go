@@ -29,7 +29,6 @@ import (
 	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
-	"seedhammer.com/camera"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/assets"
 	"seedhammer.com/gui/layout"
@@ -535,8 +534,8 @@ type ScanScreen struct {
 	nsdecoder nonstandard.Decoder
 	feed      *image.Gray
 	camera    struct {
-		out  chan<- camera.Frame
-		in   <-chan camera.Frame
+		out  chan<- Frame
+		in   <-chan Frame
 		quit chan struct{}
 		err  error
 	}
@@ -552,22 +551,13 @@ func (s *ScanScreen) close() {
 func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, Result) {
 	const cameraFrameScale = 3
 	if s.camera.quit == nil && s.camera.err == nil {
-		frames := make(chan camera.Frame, 1)
-		out := make(chan camera.Frame)
+		frames := make(chan Frame, 1)
+		out := make(chan Frame)
 		quit := make(chan struct{})
 		go func() {
 			defer close(quit)
 			defer close(frames)
-			closer, err := ctx.Platform.Camera(dims.Mul(cameraFrameScale), frames, out)
-			if err != nil {
-				log.Println(err)
-				select {
-				case frames <- camera.Frame{Err: err}:
-					<-quit
-				case <-quit:
-				}
-				return
-			}
+			closer := ctx.Platform.Camera(dims.Mul(cameraFrameScale), frames, out)
 			defer closer()
 			<-quit
 		}()
@@ -597,16 +587,16 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, Re
 	}
 	select {
 	case frame := <-s.camera.in:
-		if frame.Err != nil {
+		if frame.Error() != nil {
 			s.camera.quit <- struct{}{}
 			<-s.camera.quit
-			s.camera.err = frame.Err
+			s.camera.err = frame.Error()
 			s.camera.quit = nil
 			s.camera.in = nil
 			s.camera.out = nil
 			break
 		}
-		ycbcr := frame.Image.(*image.YCbCr)
+		ycbcr := frame.Image().(*image.YCbCr)
 		gray := &image.Gray{Pix: ycbcr.Y, Stride: ycbcr.YStride, Rect: ycbcr.Bounds()}
 
 		scaleRot(s.feed, gray, ctx.RotateCamera)
@@ -2714,11 +2704,16 @@ func (s *MainScreen) layoutPager(ops op.Ctx, th *Colors) image.Point {
 type Platform interface {
 	Input(ch chan<- input.Event) error
 	Engraver() (io.ReadWriteCloser, error)
-	Camera(size image.Point, frames chan camera.Frame, out <-chan camera.Frame) (func(), error)
+	Camera(size image.Point, frames chan Frame, out <-chan Frame) func()
 	Dump(path string, r io.Reader) error
 	Now() time.Time
 	SDCard() <-chan bool
 	Display() (LCD, error)
+}
+
+type Frame interface {
+	Error() error
+	Image() image.Image
 }
 
 type LCD interface {

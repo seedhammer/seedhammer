@@ -1,17 +1,10 @@
 package main
 
 import (
-	"image"
 	"time"
-
-	"seedhammer.com/camera"
 )
 
 var sdcard = make(chan bool, 1)
-
-func (p *Platform) Camera(dims image.Point, frames chan camera.Frame, out <-chan camera.Frame) (func(), error) {
-	return camera.Open(dims, frames, out)
-}
 
 func (p *Platform) Now() time.Time {
 	return time.Now()

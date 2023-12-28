@@ -1,5 +1,3 @@
-//go:build arm
-
 #include <iostream>
 #include <libcamera/libcamera.h>
 
