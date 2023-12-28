@@ -17,6 +17,7 @@ import (
 	"seedhammer.com/driver/libcamera"
 	"seedhammer.com/driver/wshat"
 	"seedhammer.com/gui"
+	"seedhammer.com/zbar"
 )
 
 func Init() error {
@@ -30,6 +31,10 @@ func Init() error {
 
 func inputOpen(ch chan<- gui.Event) error {
 	return wshat.Open(ch)
+}
+
+func (p *Platform) ScanQR(img *image.Gray) ([][]byte, error) {
+	return zbar.Scan(img)
 }
 
 func (p *Platform) Display() (gui.LCD, error) {

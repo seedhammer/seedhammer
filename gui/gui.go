@@ -39,7 +39,6 @@ import (
 	"seedhammer.com/mjolnir"
 	"seedhammer.com/nonstandard"
 	"seedhammer.com/seedqr"
-	"seedhammer.com/zbar"
 )
 
 const nbuttons = 8
@@ -597,7 +596,7 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, Re
 		// Re-create image (but not backing store) to ensure redraw.
 		copy := *s.feed
 		s.feed = &copy
-		results, err := zbar.Scan(gray)
+		results, err := ctx.Platform.ScanQR(gray)
 		s.camera.out <- frame
 		if err != nil {
 			break
@@ -2703,6 +2702,7 @@ type Platform interface {
 	Now() time.Time
 	SDCard() <-chan bool
 	Display() (LCD, error)
+	ScanQR(qr *image.Gray) ([][]byte, error)
 }
 
 type Frame interface {

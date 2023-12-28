@@ -314,7 +314,7 @@ func ctxQR(t *testing.T, p *testPlatform, frame func(), qrs ...string) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("camera never turned on")
 		}
-		p.camera.in <- qrFrame(t, qr)
+		p.camera.in <- qrFrame(t, p, qr)
 		delivered := make(chan struct{})
 		go func() {
 			<-p.camera.out
@@ -500,9 +500,17 @@ type testPlatform struct {
 
 	timeOffset time.Duration
 	sdcard     chan bool
+	qrImages   map[*uint8][]byte
 }
 
 type testLCD struct{}
+
+func (t *testPlatform) ScanQR(img *image.Gray) ([][]byte, error) {
+	if content, ok := t.qrImages[&img.Pix[0]]; ok {
+		return [][]byte{content}, nil
+	}
+	return nil, errors.New("no QR code")
+}
 
 func (t *testPlatform) Display() (LCD, error) {
 	return testLCD{}, nil
@@ -711,7 +719,7 @@ func wait[T any](t *testing.T, r *runner, out <-chan T) {
 	}
 }
 
-func qrFrame(t *testing.T, content string) Frame {
+func qrFrame(t *testing.T, p *testPlatform, content string) Frame {
 	qr, err := qrcode.New(content, qrcode.Low)
 	if err != nil {
 		t.Fatal(err)
@@ -726,6 +734,10 @@ func qrFrame(t *testing.T, content string) Frame {
 			frameImg.Y[off] = uint8(r >> 8)
 		}
 	}
+	if p.qrImages == nil {
+		p.qrImages = make(map[*byte][]byte)
+	}
+	p.qrImages[&frameImg.Y[0]] = []byte(content)
 	return testFrame{
 		Img: frameImg,
 	}
@@ -735,7 +747,7 @@ func (r *runner) QR(t *testing.T, qrs ...string) {
 	t.Helper()
 	wait(t, r, r.p.camera.init)
 	for _, qr := range qrs {
-		frame := qrFrame(t, qr)
+		frame := qrFrame(t, r.p, qr)
 		deliver(t, r, r.p.camera.in, frame)
 		delivered := make(chan struct{})
 		go func() {

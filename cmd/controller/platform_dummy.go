@@ -28,3 +28,7 @@ func (p *Platform) Display() (gui.LCD, error) {
 func (p *Platform) Camera(dims image.Point, frames chan gui.Frame, out <-chan gui.Frame) func() {
 	return func() {}
 }
+
+func (p *Platform) ScanQR(img *image.Gray) ([][]byte, error) {
+	return nil, errors.New("ScanQR not implemented")
+}
