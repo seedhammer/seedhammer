@@ -17,6 +17,10 @@ func Init() error {
 	return nil
 }
 
+func inputOpen(ch chan<- gui.Event) error {
+	return nil
+}
+
 func (p *Platform) Display() (gui.LCD, error) {
 	return nil, errors.New("Display not implemented")
 }

@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 	"seedhammer.com/driver/drm"
 	"seedhammer.com/driver/libcamera"
+	"seedhammer.com/driver/wshat"
 	"seedhammer.com/gui"
 )
 
@@ -25,6 +26,10 @@ func Init() error {
 		log.Printf("debug: %v", err)
 	}
 	return initSDCardNotifier()
+}
+
+func inputOpen(ch chan<- gui.Event) error {
+	return wshat.Open(ch)
 }
 
 func (p *Platform) Display() (gui.LCD, error) {

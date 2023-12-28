@@ -9,7 +9,7 @@ import (
 	"runtime/pprof"
 	"strings"
 
-	"seedhammer.com/input"
+	"seedhammer.com/gui"
 	"seedhammer.com/mjolnir"
 )
 
@@ -17,11 +17,11 @@ const Debug = true
 
 type Platform struct{}
 
-var inputCh chan<- input.Event
+var inputCh chan<- gui.Event
 
-func (p *Platform) Input(ch chan<- input.Event) error {
+func (p *Platform) Input(ch chan<- gui.Event) error {
 	inputCh = ch
-	return input.Open(ch)
+	return inputOpen(ch)
 }
 
 func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
@@ -32,12 +32,12 @@ func newPlatform() *Platform {
 	return new(Platform)
 }
 
-func click(btn input.Button) {
-	inputCh <- input.Event{
+func click(btn gui.Button) {
+	inputCh <- gui.Event{
 		Button:  btn,
 		Pressed: true,
 	}
-	inputCh <- input.Event{
+	inputCh <- gui.Event{
 		Button:  btn,
 		Pressed: false,
 	}
@@ -49,38 +49,38 @@ func debugCommand(cmd string) error {
 		cmd = strings.ToUpper(cmd[len("runes "):])
 		for _, r := range cmd {
 			if r == ' ' {
-				click(input.Button2)
+				click(gui.Button2)
 				continue
 			}
-			inputCh <- input.Event{
-				Button:  input.Rune,
+			inputCh <- gui.Event{
+				Button:  gui.Rune,
 				Rune:    r,
 				Pressed: true,
 			}
 		}
-		click(input.Button2)
+		click(gui.Button2)
 	case strings.HasPrefix(cmd, "input "):
 		cmd = cmd[len("input "):]
 		for _, name := range strings.Split(cmd, " ") {
 			name = strings.TrimSpace(name)
-			var btn input.Button
+			var btn gui.Button
 			switch name {
 			case "up":
-				btn = input.Up
+				btn = gui.Up
 			case "down":
-				btn = input.Down
+				btn = gui.Down
 			case "left":
-				btn = input.Left
+				btn = gui.Left
 			case "right":
-				btn = input.Right
+				btn = gui.Right
 			case "center":
-				btn = input.Center
+				btn = gui.Center
 			case "b1":
-				btn = input.Button1
+				btn = gui.Button1
 			case "b2":
-				btn = input.Button2
+				btn = gui.Button2
 			case "b3":
-				btn = input.Button3
+				btn = gui.Button3
 			default:
 				log.Printf("debug: unknown button: %s", name)
 				continue
@@ -90,8 +90,8 @@ func debugCommand(cmd string) error {
 	case cmd == "goroutines":
 		pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 	case cmd == "screenshot":
-		inputCh <- input.Event{
-			Button:  input.Screenshot,
+		inputCh <- gui.Event{
+			Button:  gui.Screenshot,
 			Pressed: true,
 		}
 	default:

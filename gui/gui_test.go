@@ -22,7 +22,6 @@ import (
 	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/op"
 	"seedhammer.com/image/rgb565"
-	"seedhammer.com/input"
 	"seedhammer.com/mjolnir"
 )
 
@@ -53,7 +52,7 @@ func TestDescriptorScreenError(t *testing.T) {
 			scr := &DescriptorScreen{
 				Descriptor: test.desc,
 			}
-			ctxButton(ctx, input.Button3)
+			ctxButton(ctx, Button3)
 			scr.Layout(ctx, op.Ctx{}, image.Point{})
 			if scr.warning == nil {
 				t.Fatal("DescriptorScreen accepted invalid descriptor")
@@ -112,7 +111,7 @@ func TestMainScreen(t *testing.T) {
 		scr.Layout(ctx, op.Ctx{}, image.Point{}, nil)
 	}
 	// Test sd card warning.
-	ctxButton(ctx, input.Button3)
+	ctxButton(ctx, Button3)
 	frame()
 	if scr.sdcard.warning == nil {
 		t.Fatal("MainScreen ignored SD card present")
@@ -123,7 +122,7 @@ func TestMainScreen(t *testing.T) {
 		t.Fatal("MainScreen ignored SD card ejected")
 	}
 	// Input method camera
-	ctxButton(ctx, input.Down, input.Button3)
+	ctxButton(ctx, Down, Button3)
 	frame()
 	// Scan xpub as descriptor.
 	ctxQR(t, p, frame, "xpub6F148LnjUhGrHfEN6Pa8VkwF8L6FJqYALxAkuHfacfVhMLVY4MRuUVMxr9pguAv67DHx1YFxqoKN8s4QfZtD9sR2xRCffTqi9E8FiFLAYk8")
@@ -146,7 +145,7 @@ func TestNonParticipatingSeed(t *testing.T) {
 	ctx := NewContext(newPlatform())
 
 	// Accept descriptor.
-	ctxButton(ctx, input.Button3)
+	ctxButton(ctx, Button3)
 
 	scr.Layout(ctx, op.Ctx{}, image.Point{})
 	if scr.warning == nil || scr.warning.Title != "Unknown Share" {
@@ -163,9 +162,9 @@ func TestEngraveScreenCancel(t *testing.T) {
 	}
 
 	// Back.
-	ctxButton(ctx, input.Button1)
+	ctxButton(ctx, Button1)
 	// Hold confirm.
-	ctxPress(ctx, input.Button3)
+	ctxPress(ctx, Button3)
 	res := scr.Layout(ctx, op.Ctx{}, image.Point{})
 	if res != ResultNone {
 		t.Error("exited screen without confirmation")
@@ -225,11 +224,11 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	}
 	// Press next until connect is reached.
 	for scr.instructions[scr.step].Type != ConnectInstruction {
-		ctxButton(ctx, input.Button3)
+		ctxButton(ctx, Button3)
 		scr.Layout(ctx, op.Ctx{}, image.Point{})
 	}
 	// Hold connect.
-	ctxPress(ctx, input.Button3)
+	ctxPress(ctx, Button3)
 	if res := scr.Layout(ctx, op.Ctx{}, image.Point{}); res != ResultNone {
 		t.Error("exited screen without confirmation")
 	}
@@ -239,12 +238,12 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 		t.Fatal("engraver error did not propagate to screen")
 	}
 	// Dismiss error.
-	ctxButton(ctx, input.Button3)
+	ctxButton(ctx, Button3)
 	// Successfully connect, but fail during engraving.
 	p.engrave.connErr = nil
 	p.engrave.ioErr = errors.New("error during engraving")
 	// Hold connect.
-	ctxPress(ctx, input.Button3)
+	ctxPress(ctx, Button3)
 	if res := scr.Layout(ctx, op.Ctx{}, image.Point{}); res != ResultNone {
 		t.Error("exited screen without confirmation")
 	}
@@ -257,7 +256,7 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 		scr.Layout(ctx, op.Ctx{}, image.Point{})
 	}
 	// Dismiss error and verify screen exits.
-	ctxButton(ctx, input.Button3)
+	ctxButton(ctx, Button3)
 	scr.Layout(ctx, op.Ctx{}, image.Point{})
 	if scr.engrave.warning != nil {
 		t.Fatal("screen didn't exit after fatal engraver error")
@@ -296,7 +295,7 @@ func TestWordKeyboardScreen(t *testing.T) {
 			Mnemonic: make(bip39.Mnemonic, 1),
 		}
 		ctxString(ctx, strings.ToUpper(w))
-		ctxButton(ctx, input.Button2)
+		ctxButton(ctx, Button2)
 		res := scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 		if res == ResultNone {
 			t.Errorf("keyboard did not accept %q", w)
@@ -341,7 +340,7 @@ func TestSeedScreenScan(t *testing.T) {
 		scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	}
 	// Select camera.
-	ctxButton(ctx, input.Down, input.Button3)
+	ctxButton(ctx, Down, Button3)
 	frame()
 	ctxQR(t, p, frame, "011513251154012711900771041507421289190620080870026613431420201617920614089619290300152408010643")
 	want, err := bip39.ParseMnemonic("attack pizza motion avocado network gather crop fresh patrol unusual wild holiday candy pony ranch winter theme error hybrid van cereal salon goddess expire")
@@ -362,7 +361,7 @@ func TestSeedScreenScanInvalid(t *testing.T) {
 		scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	}
 	// Select camera.
-	ctxButton(ctx, input.Down, input.Button3)
+	ctxButton(ctx, Down, Button3)
 	frame()
 	ctxQR(t, p, frame, "UR:CRYPTO-SEED/OYADGDIYWLAMAEJSZSWDWYTLTIFEENFTLNMNWKBDHNSSRO")
 	if scr.warning == nil {
@@ -378,18 +377,18 @@ func TestSeedScreenInvalidSeed(t *testing.T) {
 	// Invalidate seed.
 	scr.Mnemonic[0] = 0
 	// Accept seed.
-	ctxButton(ctx, input.Button3)
+	ctxButton(ctx, Button3)
 	_, res := scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	if res != ResultNone || scr.warning == nil {
 		t.Fatal("invalid seed accepted")
 	}
 	// Dismiss error.
-	ctxButton(ctx, input.Button3)
+	ctxButton(ctx, Button3)
 
 	// Back.
-	ctxButton(ctx, input.Button1)
+	ctxButton(ctx, Button1)
 	// Hold confirm.
-	ctxPress(ctx, input.Button3)
+	ctxPress(ctx, Button3)
 	_, res = scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	if res != ResultNone {
 		t.Error("exited screen without confirmation")
@@ -410,12 +409,12 @@ func TestMulti(t *testing.T) {
 	r := newRunner(t)
 
 	//Seed input method, keyboad input, select 12 words.
-	r.Button(t, input.Button3, input.Button3, input.Button3)
+	r.Button(t, Button3, Button3, Button3)
 
 	mnemonic := twoOfThree.Mnemonic
 	for _, word := range mnemonic {
 		r.String(t, strings.ToUpper(bip39.LabelFor(word)))
-		r.Button(t, input.Button2)
+		r.Button(t, Button2)
 	}
 	r.Frame(t)
 	r.Frame(t)
@@ -428,14 +427,14 @@ func TestMulti(t *testing.T) {
 	}
 
 	// Accept seed, go to descriptor scan.
-	r.Button(t, input.Button3, input.Button3)
+	r.Button(t, Button3, Button3)
 
 	r.QR(t, twoOfThreeUR...)
 	for r.app.scr.desc == nil {
 		r.Frame(t)
 	}
 	// Accept descriptor, go to engrave.
-	r.Button(t, input.Button3)
+	r.Button(t, Button3)
 
 	for r.app.scr.engrave == nil {
 		r.Frame(t)
@@ -482,7 +481,7 @@ func fillDescriptor(t *testing.T, desc urtypes.OutputDescriptor, path urtypes.Pa
 
 type testPlatform struct {
 	input struct {
-		in   chan<- input.Event
+		in   chan<- Event
 		init chan struct{}
 	}
 
@@ -536,8 +535,8 @@ func (t *testPlatform) Dump(path string, r io.Reader) error {
 func ctxString(ctx *Context, str string) {
 	for _, r := range str {
 		ctx.Events(
-			input.Event{
-				Button:  input.Rune,
+			Event{
+				Button:  Rune,
 				Rune:    r,
 				Pressed: true,
 			},
@@ -545,10 +544,10 @@ func ctxString(ctx *Context, str string) {
 	}
 }
 
-func ctxPress(ctx *Context, bs ...input.Button) {
+func ctxPress(ctx *Context, bs ...Button) {
 	for _, b := range bs {
 		ctx.Events(
-			input.Event{
+			Event{
 				Button:  b,
 				Pressed: true,
 			},
@@ -556,14 +555,14 @@ func ctxPress(ctx *Context, bs ...input.Button) {
 	}
 }
 
-func ctxButton(ctx *Context, bs ...input.Button) {
+func ctxButton(ctx *Context, bs ...Button) {
 	for _, b := range bs {
 		ctx.Events(
-			input.Event{
+			Event{
 				Button:  b,
 				Pressed: true,
 			},
-			input.Event{
+			Event{
 				Button:  b,
 				Pressed: false,
 			},
@@ -571,7 +570,7 @@ func ctxButton(ctx *Context, bs ...input.Button) {
 	}
 }
 
-func (p *testPlatform) Input(ch chan<- input.Event) error {
+func (p *testPlatform) Input(ch chan<- Event) error {
 	p.input.in = ch
 	close(p.input.init)
 	return nil
@@ -670,8 +669,8 @@ func (r *runner) String(t *testing.T, str string) {
 	t.Helper()
 	wait(t, r, r.p.input.init)
 	for _, c := range str {
-		evt := input.Event{
-			Button:  input.Rune,
+		evt := Event{
+			Button:  Rune,
 			Rune:    c,
 			Pressed: true,
 		}
@@ -747,26 +746,26 @@ func (r *runner) QR(t *testing.T, qrs ...string) {
 	}
 }
 
-func (r *runner) Button(t *testing.T, bs ...input.Button) {
+func (r *runner) Button(t *testing.T, bs ...Button) {
 	t.Helper()
 	wait(t, r, r.p.input.init)
 	for _, b := range bs {
-		deliver(t, r, r.p.input.in, input.Event{
+		deliver(t, r, r.p.input.in, Event{
 			Button:  b,
 			Pressed: true,
 		})
-		deliver(t, r, r.p.input.in, input.Event{
+		deliver(t, r, r.p.input.in, Event{
 			Button:  b,
 			Pressed: false,
 		})
 	}
 }
 
-func (r *runner) Press(t *testing.T, bs ...input.Button) {
+func (r *runner) Press(t *testing.T, bs ...Button) {
 	t.Helper()
 	wait(t, r, r.p.input.init)
 	for _, b := range bs {
-		deliver(t, r, r.p.input.in, input.Event{
+		deliver(t, r, r.p.input.in, Event{
 			Button:  b,
 			Pressed: true,
 		})
@@ -793,10 +792,10 @@ func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, desc urtypes.Out
 				break done
 			case ConnectInstruction:
 				// Hold connect.
-				r.Press(t, input.Button3)
+				r.Press(t, Button3)
 				r.p.timeOffset += confirmDelay
 			default:
-				r.Button(t, input.Button3)
+				r.Button(t, Button3)
 			}
 		}
 	received:

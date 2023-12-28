@@ -1,6 +1,6 @@
 // package input implements an input driver for the joystick and buttons on
 // the Waveshare 1.3" 240x240 HAT.
-package input
+package wshat
 
 import (
 	"fmt"
@@ -9,47 +9,25 @@ import (
 	"periph.io/x/conn/v3/gpio"
 	"periph.io/x/host/v3"
 	"periph.io/x/host/v3/bcm283x"
+	"seedhammer.com/gui"
 )
 
-type Event struct {
-	Button  Button
-	Pressed bool
-	// Rune is only valid if Button is Rune.
-	Rune rune
-}
-
-type Button int
-
-const (
-	Up Button = iota
-	Down
-	Left
-	Right
-	Center
-	Button1
-	Button2
-	Button3
-	// Synthetic keys only generated in debug mode.
-	Rune       // Enter rune.
-	Screenshot // Dump a screenshot to the SD card.
-)
-
-func Open(ch chan<- Event) error {
+func Open(ch chan<- gui.Event) error {
 	if _, err := host.Init(); err != nil {
 		return err
 	}
 	buttons := []struct {
-		Button Button
+		Button gui.Button
 		Pin    gpio.PinIn
 	}{
-		{Up, bcm283x.GPIO6},
-		{Down, bcm283x.GPIO19},
-		{Left, bcm283x.GPIO5},
-		{Right, bcm283x.GPIO26},
-		{Center, bcm283x.GPIO13},
-		{Button1, bcm283x.GPIO21},
-		{Button2, bcm283x.GPIO20},
-		{Button3, bcm283x.GPIO16},
+		{gui.Up, bcm283x.GPIO6},
+		{gui.Down, bcm283x.GPIO19},
+		{gui.Left, bcm283x.GPIO5},
+		{gui.Right, bcm283x.GPIO26},
+		{gui.Center, bcm283x.GPIO13},
+		{gui.Button1, bcm283x.GPIO21},
+		{gui.Button2, bcm283x.GPIO20},
+		{gui.Button3, bcm283x.GPIO16},
 	}
 	for _, btn := range buttons {
 		if err := btn.Pin.In(gpio.PullUp, gpio.BothEdges); err != nil {
@@ -73,7 +51,7 @@ func Open(ch chan<- Event) error {
 					// Debounce timeout; ok to send event.
 					if newPressed != pressed {
 						pressed = newPressed
-						ch <- Event{Button: btn.Button, Pressed: pressed}
+						ch <- gui.Event{Button: btn.Button, Pressed: pressed}
 					}
 				}
 			}

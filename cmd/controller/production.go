@@ -6,7 +6,7 @@ import (
 	"errors"
 	"io"
 
-	"seedhammer.com/input"
+	"seedhammer.com/gui"
 	"seedhammer.com/mjolnir"
 )
 
@@ -18,8 +18,8 @@ func dbgInit() error {
 
 type Platform struct{}
 
-func (p *Platform) Input(ch chan<- input.Event) error {
-	return input.Open(ch)
+func (p *Platform) Input(ch chan<- gui.Event) error {
+	return inputOpen(ch)
 }
 
 func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
