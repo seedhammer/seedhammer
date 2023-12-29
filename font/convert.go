@@ -204,9 +204,13 @@ func parseChars(face *sfont.Face, d *xml.Decoder, adv, ascent int) error {
 
 func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, offy int) error {
 	encode := func(op sfont.SegmentOp, args ...image.Point) {
-		face.Segments = append(face.Segments, uint32(op))
+		face.Segments = append(face.Segments, byte(op))
 		for _, a := range args {
-			face.Segments = append(face.Segments, uint32(a.X), uint32(a.Y))
+			x, y := int8(a.X), int8(a.Y)
+			if int(x) != a.X || int(y) != a.Y {
+				panic(fmt.Errorf("coordinates out of range: %v", a))
+			}
+			face.Segments = append(face.Segments, byte(x), byte(y))
 		}
 	}
 	switch n := e.Name.Local; n {

@@ -622,10 +622,14 @@ func engraveConstantRune(p Program, face *font.Face, em int, r rune) image.Point
 		panic(fmt.Errorf("unsupported rune: %s", string(r)))
 	}
 	pos := image.Pt(0, m.Ascent*em/m.Height)
-	for _, seg := range segs {
+	for {
+		seg, ok := segs.Next()
+		if !ok {
+			break
+		}
 		p1 := image.Point{
-			X: seg.Args[0].X * em / m.Height,
-			Y: seg.Args[0].Y * em / m.Height,
+			X: seg.Arg.X * em / m.Height,
+			Y: seg.Arg.Y * em / m.Height,
 		}
 		switch seg.Op {
 		case font.SegmentOpMoveTo:
@@ -1013,17 +1017,18 @@ func (s *StringCmd) engrave(p Program) image.Point {
 			panic(fmt.Errorf("unsupported rune: %s", string(r)))
 		}
 		if p != nil {
-			// var p0 image.Point
-			for _, seg := range segs {
+			for {
+				seg, ok := segs.Next()
+				if !ok {
+					break
+				}
 				switch seg.Op {
 				case font.SegmentOpMoveTo:
-					p1 := addScale(pos, seg.Args[0])
+					p1 := addScale(pos, seg.Arg)
 					p.Move(p1)
-					// p0 = p1
 				case font.SegmentOpLineTo:
-					p1 := addScale(pos, seg.Args[0])
+					p1 := addScale(pos, seg.Arg)
 					p.Line(p1)
-					// p0 = p1
 				default:
 					panic(errors.New("unsupported segment"))
 				}
