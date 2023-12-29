@@ -5,8 +5,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
+	"seedhammer.com/font/bitmap"
 )
 
 type Line struct {
@@ -16,7 +16,7 @@ type Line struct {
 }
 
 type Style struct {
-	Face          font.Face
+	Face          *bitmap.Face
 	Alignment     Alignment
 	LineHeight    float32
 	LetterSpacing int
@@ -65,6 +65,7 @@ func (l Style) Layout(maxWidth int, txt string) ([]Line, image.Point) {
 		a, ok := l.Face.GlyphAdvance(c)
 		if !ok {
 			prevC = -1
+			idx += n
 			continue
 		}
 		softnl := unicode.IsSpace(c)

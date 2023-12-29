@@ -5,7 +5,6 @@ import (
 	"image/color"
 	"math"
 
-	"golang.org/x/image/math/fixed"
 	"seedhammer.com/gui/op"
 	"seedhammer.com/gui/text"
 )
@@ -20,7 +19,7 @@ func LabelW(ops op.Ctx, l text.Style, width int, col color.NRGBA, txt string) im
 		(&op.TextOp{
 			Src:           image.NewUniform(col),
 			Face:          l.Face,
-			Dot:           fixed.P(line.Dot.X, line.Dot.Y),
+			Dot:           image.Pt(line.Dot.X, line.Dot.Y),
 			Txt:           line.Text,
 			LetterSpacing: l.LetterSpacing,
 		}).Add(ops)

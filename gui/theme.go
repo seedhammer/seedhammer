@@ -69,54 +69,50 @@ func init() {
 }
 
 func NewStyles() Styles {
-	p := poppins.Regular()
-	pBold := poppins.Bold()
-	cmfBold := comfortaa.Bold()
-
 	return Styles{
 		title: text.Style{
-			Face:          mustFace(pBold, 23),
+			Face:          poppins.Bold23,
 			Alignment:     text.AlignCenter,
 			LetterSpacing: -1,
 			LineHeight:    0.75,
 		},
 		body: text.Style{
-			Face:       mustFace(p, 16),
+			Face:       poppins.Regular16,
 			LineHeight: 0.75,
 		},
 		debug: text.Style{
-			Face: mustFace(pBold, 10),
+			Face: poppins.Bold10,
 		},
 		warning: text.Style{
-			Face:       mustFace(pBold, 23),
+			Face:       poppins.Bold23,
 			LineHeight: 0.75,
 			Alignment:  text.AlignCenter,
 		},
 		lead: text.Style{
-			Face:       mustFace(p, 16),
+			Face:       poppins.Regular16,
 			LineHeight: 0.9,
 			Alignment:  text.AlignCenter,
 		},
 		subtitle: text.Style{
-			Face:       mustFace(pBold, 16),
+			Face:       poppins.Bold16,
 			LineHeight: 0.9,
 		},
 		nav: text.Style{
-			Face: mustFace(pBold, 24),
+			Face: poppins.Bold23,
 		},
 		button: text.Style{
-			Face:       mustFace(pBold, 20),
+			Face:       poppins.Bold20,
 			Alignment:  text.AlignCenter,
 			LineHeight: 0.70,
 		},
 		word: text.Style{
-			Face: mustFace(cmfBold, 17),
+			Face: comfortaa.Bold17,
 		},
 		keyboard: text.Style{
-			Face: mustFace(pBold, 16),
+			Face: poppins.Bold16,
 		},
 		progress: text.Style{
-			Face:          mustFace(pBold, 45),
+			Face:          poppins.Boldprogress45,
 			Alignment:     text.AlignCenter,
 			LetterSpacing: -1,
 		},

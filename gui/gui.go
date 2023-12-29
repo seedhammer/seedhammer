@@ -19,10 +19,6 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/opentype"
-	"golang.org/x/image/font/sfnt"
-	"golang.org/x/image/math/fixed"
 	"seedhammer.com/address"
 	"seedhammer.com/backup"
 	"seedhammer.com/bc/ur"
@@ -198,7 +194,7 @@ func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA,
 		(&op.TextOp{
 			Src:  image.NewUniform(col),
 			Face: style.Face,
-			Dot:  fixed.P(line.Dot.X, doty),
+			Dot:  image.Pt(line.Dot.X, doty),
 			Txt:  line.Text,
 		}).Add(ops.Begin())
 		r.Lines = append(r.Lines, linePos{ops.End(), doty})
@@ -2861,34 +2857,6 @@ func (a *App) saveScreen() {
 			a.lcd.Dirty(frame.Bounds())
 		}
 	}
-}
-
-func mustFace(fnt *sfnt.Font, ppem int) font.Face {
-	face, err := opentype.NewFace(fnt, &opentype.FaceOptions{
-		Size:    float64(ppem),
-		DPI:     72, // Size is in pixels.
-		Hinting: font.HintingFull,
-	})
-	if err != nil {
-		panic(err)
-	}
-	return face
-}
-
-func face(ttf []byte, ppem int) font.Face {
-	f, err := opentype.Parse(ttf)
-	if err != nil {
-		panic(err)
-	}
-	face, err := opentype.NewFace(f, &opentype.FaceOptions{
-		Size:    float64(ppem),
-		DPI:     72, // Size is in pixels.
-		Hinting: font.HintingFull,
-	})
-	if err != nil {
-		panic(err)
-	}
-	return face
 }
 
 func rgb(c uint32) color.NRGBA {

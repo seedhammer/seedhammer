@@ -5,8 +5,8 @@ import (
 	"image/color"
 
 	"golang.org/x/image/draw"
-	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
+	"seedhammer.com/font/bitmap"
 	"seedhammer.com/image/ninepatch"
 	"seedhammer.com/image/rgb565"
 )
@@ -316,8 +316,8 @@ type drawOp interface {
 
 type TextOp struct {
 	Src           image.Image
-	Face          font.Face
-	Dot           fixed.Point26_6
+	Face          *bitmap.Face
+	Dot           image.Point
 	Txt           string
 	LetterSpacing int
 }
@@ -342,22 +342,24 @@ func (t TextOp) drawBounds(dst draw.Image, dr image.Rectangle, mask image.Image,
 		tpos = maskp
 	}
 	prevC := rune(-1)
-	dot := t.Dot
+	dot := fixed.I(t.Dot.X)
 	var bounds image.Rectangle
 	for _, c := range t.Txt {
 		if prevC >= 0 {
-			dot.X += t.Face.Kern(prevC, c)
+			dot += t.Face.Kern(prevC, c)
 		}
-		gdr, mask, maskp, advance, ok := t.Face.Glyph(dot, c)
+		mask, advance, ok := t.Face.Glyph(c)
 		if !ok {
 			continue
 		}
+		off := image.Pt(dot.Round(), t.Dot.Y)
+		gdr := mask.Bounds().Add(off)
 		advance += fixed.I(t.LetterSpacing)
 		bounds = bounds.Union(gdr)
 		if dst != nil {
-			drawMask(dst, dr, src, tpos, mask, pos.Add(maskp).Sub(gdr.Min))
+			drawMask(dst, dr, src, tpos, mask, pos.Sub(off))
 		}
-		dot.X += advance
+		dot += advance
 		prevC = c
 	}
 	if orig != nil {
