@@ -23,6 +23,7 @@ import (
 	"seedhammer.com/gui/op"
 	"seedhammer.com/image/rgb565"
 	"seedhammer.com/mjolnir"
+	"seedhammer.com/nonstandard"
 )
 
 func TestDescriptorScreenError(t *testing.T) {
@@ -401,45 +402,59 @@ func TestSeedScreenInvalidSeed(t *testing.T) {
 }
 
 func TestMulti(t *testing.T) {
-	twoOfThreeUR := []string{
-		"UR:CRYPTO-OUTPUT/1347-2/LPCFAHFXAOCFADIOCYCMSWIDBYHDQZCYHNOEDWSBMUAMWYOTAHPFFXNECKNBNTHKDEADHLVLJKLYCMAHTAADEHOEADAEAOAEAMTAADDYOTADLOCSDYYKAEYKAEYKAOYKAOCYUTGWPMWYAXAAAYCYCPMTMUKTTAADDLOLAOWKAXHDCLAOZOJPGDLBSABTUYPTDTMEPAKEGRQZIYBWBKTAFTLOJTJKCHGDEORKFXVLRFKSHTJNAAHDCXMDQDGABWMULBONWNSWCXHPGMHPREKIVYGYKODAVTFELNREMDRNISVDBWIDTEWESKAHTAADEHOEADAEAOAEAMTAADDYOTADLOCSDYYKAEYKAEYKAOYKAOCYNDPSTLRTAXAAAYCYMSWPETYTAEVDTLISPT",
-		"UR:CRYPTO-OUTPUT/1355-2/LPCFAHGRAOCFADIOCYCMSWIDBYHDQZSRHSEOYKSGAAOXWSOYATEONYNNEHAMNEPMDNHKKEVTTNROHHDRSRGLPDSRFRJSJEHFTOLGBAHLCFJTMHLUDWTEESVWJPTYPFMOTLHTJPJZPTRPCNURVTCMNLTPNTENGMATUYTBTIHPVEWTVTKKCEJKZOHEPLGHKIYLGSESMDKICLTPCMCMTETPBDDRJLJKBZGDECIDFWTECTKKTDKPEEPMCXHNQDRFBYIYKIRSPYTODKROGYHERYIODSWEMELGESFYPTBWMSGEJERSEYHNWZKGISSTLNURDIFSVSDMJPKOMTLABYBGTBTEFNBBYTJPKOCTPYIORDURLRASSKFMTTMKCNFLLNVWWPTSBAGWTTPYMUOELP",
+	const oneOfTwoDesc = "wsh(sortedmulti(1,[94631f99/48h/0h/0h/2h]xpub6ENfRaMWq2UoFy5FrLRMwiEkdgFdMgjEoikR34RBGzhsx8JzAkn7fyQeR5odirEwERvmxhSEv7rsmV7nuzjSKKKJHBP2aQZVu3R2d5ERgcw,[4bbaa801/48h/0h/0h/2h]xpub6E8mpiqJiVKuJZqxtu5SbHQnwUWWPQpZEy9CVtvfU1gxXZnbb9DG2AvZyMHvyVRtUPAEmu6BuRCy4LK2rKMeNr7jQKXsCyFfr1osgFCMYpc))"
+	mnemonics := []string{
+		"doll clerk nice coast caught valid shallow taxi buyer economy lunch roof",
+		"road lend lyrics shift rabbit amazing fetch impulse provide reopen sphere network",
 	}
 
-	r := newRunner(t)
+	for i, mnemonic := range mnemonics {
+		r := newRunner(t)
 
-	//Seed input method, keyboad input, select 12 words.
-	r.Button(t, Button3, Button3, Button3)
+		//Seed input method, keyboad input, select 12 words.
+		r.Button(t, Button3, Button3, Button3)
 
-	mnemonic := twoOfThree.Mnemonic
-	for _, word := range mnemonic {
-		r.String(t, strings.ToUpper(bip39.LabelFor(word)))
-		r.Button(t, Button2)
-	}
-	r.Frame(t)
-	r.Frame(t)
-	if sc := r.app.scr.seed; sc == nil || !sc.Mnemonic.Valid() {
-		t.Fatalf("got invalid seed %v, wanted %v", sc.Mnemonic, mnemonic)
-
-	}
-	if got := r.app.scr.seed.Mnemonic; !reflect.DeepEqual(got, mnemonic) {
-		t.Fatalf("got seed %v, wanted %v", got, mnemonic)
-	}
-
-	// Accept seed, go to descriptor scan.
-	r.Button(t, Button3, Button3)
-
-	r.QR(t, twoOfThreeUR...)
-	for r.app.scr.desc == nil {
+		m, err := bip39.ParseMnemonic(mnemonic)
+		if err != nil {
+			t.Fatal(err)
+		}
 		r.Frame(t)
-	}
-	// Accept descriptor, go to engrave.
-	r.Button(t, Button3)
-
-	for r.app.scr.engrave == nil {
 		r.Frame(t)
+
+		for _, word := range m {
+			r.String(t, strings.ToUpper(bip39.LabelFor(word)))
+			r.Button(t, Button2)
+		}
+		r.Frame(t)
+		r.Frame(t)
+
+		if sc := r.app.scr.seed; sc == nil || !sc.Mnemonic.Valid() {
+			t.Fatalf("got invalid seed %v, wanted %v", sc.Mnemonic, m)
+
+		}
+		if got := r.app.scr.seed.Mnemonic; !reflect.DeepEqual(got, m) {
+			t.Fatalf("got seed %v, wanted %v", got, m)
+		}
+
+		// Accept seed, go to descriptor scan.
+		r.Button(t, Button3, Button3)
+
+		r.QR(t, oneOfTwoDesc)
+		for r.app.scr.desc == nil {
+			r.Frame(t)
+		}
+
+		// Accept descriptor, go to engrave.
+		r.Button(t, Button3)
+		oneOfTwo, err := nonstandard.OutputDescriptor([]byte(oneOfTwoDesc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for r.app.scr.engrave == nil {
+			r.Frame(t)
+		}
+		testEngraving(t, r, r.app.scr.engrave, oneOfTwo, m, i)
 	}
-	testEngraving(t, r, r.app.scr.engrave, twoOfThree.Descriptor, mnemonic, 0)
 }
 
 func fillDescriptor(t *testing.T, desc urtypes.OutputDescriptor, path urtypes.Path, seedlen int, keyIdx int) bip39.Mnemonic {
