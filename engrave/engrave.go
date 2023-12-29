@@ -19,7 +19,7 @@ import (
 	"github.com/srwiley/rasterx"
 	"golang.org/x/image/math/f32"
 	"golang.org/x/image/math/fixed"
-	"seedhammer.com/font"
+	"seedhammer.com/font/vector"
 )
 
 type Command interface {
@@ -615,35 +615,35 @@ type constantRune struct {
 	path []image.Point
 }
 
-func engraveConstantRune(p Program, face *font.Face, em int, r rune) image.Point {
-	m := face.Metrics
+func engraveConstantRune(p Program, face *vector.Face, em int, r rune) image.Point {
+	m := face.Metrics()
 	adv, segs, found := face.Decode(r)
 	if !found {
 		panic(fmt.Errorf("unsupported rune: %s", string(r)))
 	}
-	pos := image.Pt(0, m.Ascent*em/m.Height)
+	pos := image.Pt(0, int(m.Ascent)*em/int(m.Height))
 	for {
 		seg, ok := segs.Next()
 		if !ok {
 			break
 		}
 		p1 := image.Point{
-			X: seg.Arg.X * em / m.Height,
-			Y: seg.Arg.Y * em / m.Height,
+			X: seg.Arg.X * em / int(m.Height),
+			Y: seg.Arg.Y * em / int(m.Height),
 		}
 		switch seg.Op {
-		case font.SegmentOpMoveTo:
+		case vector.SegmentOpMoveTo:
 			p.Move(pos.Add(p1))
-		case font.SegmentOpLineTo:
+		case vector.SegmentOpLineTo:
 			p.Line(pos.Add(p1))
 		default:
 			panic("constant rune has unsupported segment type")
 		}
 	}
-	return image.Pt(adv*em/m.Height, em)
+	return image.Pt(adv*em/int(m.Height), em)
 }
 
-func NewConstantStringer(face *font.Face, em int, shortest, longest int) *ConstantStringer {
+func NewConstantStringer(face *vector.Face, em int, shortest, longest int) *ConstantStringer {
 	var runes []*collectProgram
 	cs := &ConstantStringer{
 		longest: longest,
@@ -971,7 +971,7 @@ func (c *pattern) instruct(p image.Point, line bool) {
 	c.end = p
 }
 
-func String(face *font.Face, em int, txt string) *StringCmd {
+func String(face *vector.Face, em int, txt string) *StringCmd {
 	return &StringCmd{
 		LineHeight: 1,
 		face:       face,
@@ -983,7 +983,7 @@ func String(face *font.Face, em int, txt string) *StringCmd {
 type StringCmd struct {
 	LineHeight int
 
-	face *font.Face
+	face *vector.Face
 	em   int
 	txt  string
 }
@@ -997,12 +997,12 @@ func (s *StringCmd) Measure() image.Point {
 }
 
 func (s *StringCmd) engrave(p Program) image.Point {
-	m := s.face.Metrics
-	pos := image.Pt(0, (m.Ascent*s.em+m.Height-1)/m.Height)
+	m := s.face.Metrics()
+	pos := image.Pt(0, (int(m.Ascent)*s.em+int(m.Height)-1)/int(m.Height))
 	addScale := func(p1, p2 image.Point) image.Point {
 		return image.Point{
-			X: p1.X + p2.X*s.em/m.Height,
-			Y: p1.Y + p2.Y*s.em/m.Height,
+			X: p1.X + p2.X*s.em/int(m.Height),
+			Y: p1.Y + p2.Y*s.em/int(m.Height),
 		}
 	}
 	height := s.em * s.LineHeight
@@ -1023,10 +1023,10 @@ func (s *StringCmd) engrave(p Program) image.Point {
 					break
 				}
 				switch seg.Op {
-				case font.SegmentOpMoveTo:
+				case vector.SegmentOpMoveTo:
 					p1 := addScale(pos, seg.Arg)
 					p.Move(p1)
-				case font.SegmentOpLineTo:
+				case vector.SegmentOpLineTo:
 					p1 := addScale(pos, seg.Arg)
 					p.Line(p1)
 				default:
@@ -1034,7 +1034,7 @@ func (s *StringCmd) engrave(p Program) image.Point {
 				}
 			}
 		}
-		pos.X += adv * s.em / m.Height
+		pos.X += adv * s.em / int(m.Height)
 	}
 	return image.Pt(pos.X, height)
 }

@@ -1,21 +1,22 @@
 // package font converts an OpenType font into a form usable for engraving.
-package font
+package vector
 
 import (
+	"encoding/binary"
 	"image"
 	"unicode"
 )
 
 type Face struct {
-	Metrics Metrics
-	// Index maps a character to its segment range.
-	Index [unicode.MaxASCII]Glyph
-	// Segments encoded as opcode, args, opcode, args...
-	Segments []byte
+	data []byte
+}
+
+func NewFace(data []byte) *Face {
+	return &Face{data}
 }
 
 type Glyph struct {
-	Advance    int
+	Advance    int8
 	Start, End uint16
 }
 
@@ -46,7 +47,7 @@ type Segment struct {
 }
 
 type Metrics struct {
-	Ascent, Height int
+	Ascent, Height int8
 }
 
 type SegmentOp uint32
@@ -56,14 +57,36 @@ const (
 	SegmentOpLineTo
 )
 
+const (
+	indexLen      = unicode.MaxASCII
+	IndexElemSize = 1 + 2 + 2
+
+	offAscent   = 0
+	offHeight   = offAscent + 1
+	offIndex    = offHeight + 1
+	OffSegments = offIndex + indexLen*IndexElemSize
+)
+
+var bo = binary.LittleEndian
+
+func (f *Face) Metrics() Metrics {
+	return Metrics{
+		Ascent: int8(f.data[offAscent]),
+		Height: int8(f.data[offHeight]),
+	}
+}
+
 func (f *Face) Decode(ch rune) (int, Segments, bool) {
-	if int(ch) >= len(f.Index) {
+	if int(ch) >= indexLen {
 		return 0, Segments{}, false
 	}
-	glyph := f.Index[ch]
-	if glyph == (Glyph{}) {
-		return 0, Segments{}, false
+	index := f.data[offIndex:OffSegments]
+	gdata := index[ch*IndexElemSize : (ch+1)*IndexElemSize]
+	g := Glyph{
+		Advance: int8(gdata[0]),
+		Start:   bo.Uint16(gdata[1:]),
+		End:     bo.Uint16(gdata[1+2:]),
 	}
-	enc := f.Segments[glyph.Start:glyph.End]
-	return glyph.Advance, Segments{segs: enc}, true
+	segs := f.data[g.Start:g.End]
+	return int(g.Advance), Segments{segs: segs}, g.Advance > 0
 }

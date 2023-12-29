@@ -16,7 +16,7 @@ import (
 	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bip39"
 	"seedhammer.com/engrave"
-	"seedhammer.com/font"
+	"seedhammer.com/font/vector"
 	"seedhammer.com/seedqr"
 )
 
@@ -60,7 +60,7 @@ type PlateDesc struct {
 	Descriptor urtypes.OutputDescriptor
 	KeyIdx     int
 	Mnemonic   bip39.Mnemonic
-	Font       *font.Face
+	Font       *vector.Face
 }
 
 type Plate struct {
@@ -80,7 +80,7 @@ const MaxTitleLen = 18
 const outerMargin float32 = 3
 const innerMargin float32 = 10
 
-func TitleString(face *font.Face, s string) string {
+func TitleString(face *vector.Face, s string) string {
 	s = strings.ToUpper(s)
 	res := ""
 	for _, r := range s {
@@ -367,7 +367,7 @@ func frontSide(scale func(float32) int, constant *engrave.ConstantStringer, stro
 	return cmds, nil
 }
 
-func wordColumn(constant *engrave.ConstantStringer, font *font.Face, fontSize int, mnemonic bip39.Mnemonic, start, end int) engrave.Command {
+func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize int, mnemonic bip39.Mnemonic, start, end int) engrave.Command {
 	var cmds engrave.Commands
 	y := 0
 	for i := start; i < end; i++ {
@@ -385,7 +385,7 @@ func wordColumn(constant *engrave.ConstantStringer, font *font.Face, fontSize in
 	return cmds
 }
 
-func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, urs []string, size PlateSize, plateDims image.Point) (engrave.Command, error) {
+func descriptorSide(scale func(float32) int, strokeWidth int, fnt *vector.Face, urs []string, size PlateSize, plateDims image.Point) (engrave.Command, error) {
 	var cmds engrave.Commands
 	cmd := func(c engrave.Command) {
 		cmds = append(cmds, c)
@@ -400,7 +400,7 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, ur
 	if !ok {
 		panic("W not in font")
 	}
-	charWidth := int(float32(charWidthf*fontSize) / float32(fnt.Metrics.Height))
+	charWidth := int(float32(charWidthf*fontSize) / float32(fnt.Metrics().Height))
 	margin := scale(outerMargin)
 	innerMargin := scale(innerMargin)
 	if size == LargePlate {
@@ -465,7 +465,7 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, ur
 	return cmds, nil
 }
 
-func seedBackSide(scale func(float32) int, constant *engrave.ConstantStringer, title string, font *font.Face, plate bip39.Mnemonic, size image.Point) engrave.Command {
+func seedBackSide(scale func(float32) int, constant *engrave.ConstantStringer, title string, font *vector.Face, plate bip39.Mnemonic, size image.Point) engrave.Command {
 	var cmds engrave.Commands
 	cmd := func(c engrave.Command) {
 		cmds = append(cmds, c)

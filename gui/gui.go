@@ -986,7 +986,7 @@ func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (
 		Descriptor: desc,
 		Mnemonic:   m,
 		KeyIdx:     keyIdx,
-		Font:       &constant.Font,
+		Font:       constant.Font,
 	}
 	return backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
 }
@@ -2401,7 +2401,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				}
 				continue
 			}
-			desc.Title = backup.TitleString(&constant.Font, desc.Title)
+			desc.Title = backup.TitleString(constant.Font, desc.Title)
 			s.descriptor = &desc
 			s.desc = &DescriptorScreen{
 				Descriptor: desc,

@@ -47,7 +47,7 @@ func TestConstantQR(t *testing.T) {
 }
 
 func TestConstantString(t *testing.T) {
-	s := NewConstantStringer(&constant.Font, 1000, bip39.Shortest, bip39.Longest)
+	s := NewConstantStringer(constant.Font, 1000, bip39.Shortest, bip39.Longest)
 	for _, w := range bip39.Wordlist {
 		w := strings.ToUpper(w)
 		cmd := s.String(w)

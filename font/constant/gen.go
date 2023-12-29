@@ -2,4 +2,4 @@
 // words.
 package constant
 
-//go:generate go run ../convert.go -package constant constant.svg constant.go
+//go:generate go run ../vector/convert.go -package constant constant.svg constant

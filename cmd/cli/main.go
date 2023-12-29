@@ -112,7 +112,7 @@ func run() error {
 		return errors.New("seed is not among the descriptor keys")
 	}
 	plate := backup.PlateDesc{
-		Font:       &constant.Font,
+		Font:       constant.Font,
 		Descriptor: desc,
 		KeyIdx:     keyIdx,
 		Mnemonic:   m,

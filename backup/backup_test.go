@@ -225,7 +225,7 @@ func TestTitleString(t *testing.T) {
 		{"$€#,", "#,"},
 	}
 	for _, test := range tests {
-		s := TitleString(&constant.Font, test.test)
+		s := TitleString(constant.Font, test.test)
 		if s != test.title {
 			t.Fatalf("got %q, wanted %q", s, test.title)
 		}
@@ -271,7 +271,7 @@ func genTestPlate(t *testing.T, desc urtypes.OutputDescriptor, path []uint32, se
 		}
 	}
 	return PlateDesc{
-		Font:       &constant.Font,
+		Font:       constant.Font,
 		KeyIdx:     keyIdx,
 		Mnemonic:   mnemonic,
 		Descriptor: desc,
