@@ -400,7 +400,7 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *font.Face, ur
 	if !ok {
 		panic("W not in font")
 	}
-	charWidth := int(charWidthf * float32(fontSize) / fnt.Metrics.Height)
+	charWidth := int(float32(charWidthf*fontSize) / float32(fnt.Metrics.Height))
 	margin := scale(outerMargin)
 	innerMargin := scale(innerMargin)
 	if size == LargePlate {

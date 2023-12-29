@@ -9,19 +9,14 @@ import (
 	"flag"
 	"fmt"
 	"go/format"
+	"image"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode"
 
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/sfnt"
-	"golang.org/x/image/math/f32"
-	"golang.org/x/image/math/fixed"
-	"seedhammer.com/affine"
 	sfont "seedhammer.com/font"
 )
 
@@ -65,12 +60,6 @@ func main() {
 
 func convert(ext string, data []byte) (*sfont.Face, error) {
 	switch ext {
-	case ".ttf":
-		face, err := sfnt.Parse(data)
-		if err != nil {
-			return nil, err
-		}
-		return convertFont(face)
 	case ".svg":
 		face, err := convertSVG(data)
 		if err != nil {
@@ -83,7 +72,7 @@ func convert(ext string, data []byte) (*sfont.Face, error) {
 }
 
 type MetaData struct {
-	Advance, Height, Baseline float64
+	Advance, Height, Baseline int
 }
 
 func convertSVG(svg []byte) (*sfont.Face, error) {
@@ -106,11 +95,11 @@ func convertSVG(svg []byte) (*sfont.Face, error) {
 			return nil, err
 		}
 		ascent := meta.Baseline
-		face.Metrics.Ascent = float32(ascent)
-		face.Metrics.Height = float32(meta.Height)
+		face.Metrics.Ascent = ascent
+		face.Metrics.Height = meta.Height
 		adv := meta.Advance
 		face.Index[' '] = sfont.Glyph{
-			Advance: float32(adv),
+			Advance: adv,
 		}
 		err = parseChars(&face, d, adv, ascent)
 		return &face, err
@@ -137,11 +126,11 @@ func parseMeta(data []byte) (*MetaData, error) {
 	for _, line := range svg.Lines {
 		switch line.ID {
 		case "advance":
-			meta.Advance = line.X2 - line.X1
+			meta.Advance = mustInt(line.X2 - line.X1)
 		case "height":
-			meta.Height = line.Y2 - line.Y1
+			meta.Height = mustInt(line.Y2 - line.Y1)
 		case "baseline":
-			meta.Baseline = line.Y1
+			meta.Baseline = mustInt(line.Y1)
 		}
 	}
 	return &meta, nil
@@ -156,8 +145,16 @@ func findAttr(e xml.StartElement, name string) (string, bool) {
 	return "", false
 }
 
-func parseChars(face *sfont.Face, d *xml.Decoder, adv, ascent float64) error {
-	offx := 0.
+func mustInt(v float64) int {
+	i := int(v)
+	if float64(i) != v {
+		panic("non-integer floating point number")
+	}
+	return i
+}
+
+func parseChars(face *sfont.Face, d *xml.Decoder, adv, ascent int) error {
+	offx := 0
 	for {
 		t, err := d.Token()
 		if err != nil {
@@ -196,7 +193,7 @@ func parseChars(face *sfont.Face, d *xml.Decoder, adv, ascent float64) error {
 		}
 		idxEnd := len(face.Segments)
 		face.Index[r] = sfont.Glyph{
-			Advance: float32(adv),
+			Advance: adv,
 			Start:   uint16(idxStart),
 			End:     uint16(idxEnd),
 		}
@@ -205,11 +202,11 @@ func parseChars(face *sfont.Face, d *xml.Decoder, adv, ascent float64) error {
 	return nil
 }
 
-func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, offy float64) error {
-	encode := func(op sfont.SegmentOp, args ...f32.Vec2) {
+func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, offy int) error {
+	encode := func(op sfont.SegmentOp, args ...image.Point) {
 		face.Segments = append(face.Segments, uint32(op))
 		for _, a := range args {
-			face.Segments = append(face.Segments, math.Float32bits(a[0]), math.Float32bits(a[1]))
+			face.Segments = append(face.Segments, uint32(a.X), uint32(a.Y))
 		}
 	}
 	switch n := e.Name.Local; n {
@@ -238,12 +235,8 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, o
 		if err := d.DecodeElement(&line, &e); err != nil {
 			return err
 		}
-		line.X1 = line.X1 + offx
-		line.Y1 = line.Y1 + offy
-		line.X2 = line.X2 + offx
-		line.Y2 = line.Y2 + offy
-		encode(sfont.SegmentOpMoveTo, f32.Vec2{float32(line.X1), float32(line.Y1)})
-		encode(sfont.SegmentOpLineTo, f32.Vec2{float32(line.X2), float32(line.Y2)})
+		encode(sfont.SegmentOpMoveTo, image.Pt(mustInt(line.X1)+offx, mustInt(line.Y1)+offy))
+		encode(sfont.SegmentOpLineTo, image.Pt(mustInt(line.X2)+offx, mustInt(line.Y2)+offy))
 		return nil
 	case "polyline":
 		points, ok := findAttr(e, "points")
@@ -257,13 +250,11 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, o
 			if _, err := fmt.Sscanf(c, "%f,%f", &x, &y); err != nil {
 				return fmt.Errorf("invalid coordinates %q in <polyline>:", c)
 			}
-			x = x + offx
-			y = y + offy
 			op := sfont.SegmentOpLineTo
 			if i == 0 {
 				op = sfont.SegmentOpMoveTo
 			}
-			encode(op, f32.Vec2{float32(x), float32(y)})
+			encode(op, image.Pt(mustInt(x)+offx, mustInt(y)+offy))
 		}
 		return d.Skip()
 	case "path":
@@ -272,7 +263,7 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, o
 			return errors.New("missing d attribute for <path>")
 		}
 		cmds = strings.TrimSpace(cmds)
-		pen := f32.Vec2{float32(offx), float32(offy)}
+		pen := image.Pt(offx, offy)
 		initPoint := pen
 		ctrl2 := pen
 		for {
@@ -295,7 +286,7 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, o
 			default:
 				return fmt.Errorf("unknown <path> command %s in %q", string(op), orig)
 			}
-			var coords []float64
+			var coords []int
 			for {
 				cmds = strings.TrimLeft(cmds, " ,\t\n")
 				if len(cmds) == 0 {
@@ -306,18 +297,18 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, o
 					break
 				}
 				cmds = cmds[n:]
-				coords = append(coords, x)
+				coords = append(coords, mustInt(x))
 			}
 			rel := unicode.IsLower(op)
 			newPen := pen
 			switch unicode.ToLower(op) {
 			case 'h':
 				for _, x := range coords {
-					p := f32.Vec2{float32(x), pen[1]}
+					p := image.Pt(x, pen.Y)
 					if rel {
-						p[0] += pen[0]
+						p.X += pen.X
 					} else {
-						p[0] += float32(offx)
+						p.X += offx
 					}
 					encode(sfont.SegmentOpLineTo, p)
 					newPen = p
@@ -327,11 +318,11 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, o
 				continue
 			case 'v':
 				for _, y := range coords {
-					p := f32.Vec2{pen[0], float32(y)}
+					p := image.Pt(pen.X, y)
 					if rel {
-						p[1] += pen[1]
+						p.Y += pen.Y
 					} else {
-						p[1] += float32(offy)
+						p.Y += offy
 					}
 					encode(sfont.SegmentOpLineTo, p)
 					newPen = p
@@ -343,18 +334,17 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, o
 			if len(coords)%2 != 0 {
 				return fmt.Errorf("odd number of coordinates in <path> data: %q", orig)
 			}
-			var off f32.Vec2
+			var off image.Point
 			if rel {
 				// Relative command.
 				off = pen
 			} else {
-				off[0] = float32(offx)
-				off[1] = float32(offy)
+				off = image.Pt(offx, offy)
 			}
-			var points []f32.Vec2
+			var points []image.Point
 			for i := 0; i < len(coords); i += 2 {
-				p := f32.Vec2{float32(coords[i]), float32(coords[i+1])}
-				p = affine.Add(p, off)
+				p := image.Pt(coords[i], coords[i+1])
+				p = p.Add(off)
 				points = append(points, p)
 			}
 			newCtrl2 := ctrl2
@@ -371,22 +361,8 @@ func parseSegments(face *sfont.Face, d *xml.Decoder, e xml.StartElement, offx, o
 				if op == 'm' {
 					initPoint = newPen
 				}
-			case 'c':
-				for i := 0; i < len(points); i += 3 {
-					p1, p2, p3 := points[i], points[i+1], points[i+2]
-					encode(sfont.SegmentOpCubeTo, p1, p2, p3)
-					newPen = p3
-					newCtrl2 = p2
-				}
-			case 's':
-				for i := 0; i < len(points); i += 2 {
-					p2, p3 := points[i], points[i+1]
-					// Compute p1 by reflecting p2 on to the line that contains pen and p2.
-					p1 := affine.Sub(affine.Scale(pen, 2), ctrl2)
-					encode(sfont.SegmentOpCubeTo, p1, p2, p3)
-					newPen = p3
-					newCtrl2 = p2
-				}
+			case 'c', 's':
+				return errors.New("cubic splines not supported")
 			}
 			pen = newPen
 			ctrl2 = newCtrl2
@@ -473,65 +449,4 @@ func mapChar(id string) (rune, bool) {
 		}
 	}
 	return r, true
-}
-
-func convertFont(f *sfnt.Font) (*sfont.Face, error) {
-	const prec = 1 << 15
-	ppem := fixed.I(prec)
-	var buf sfnt.Buffer
-	metrics, err := f.Metrics(&buf, ppem, font.HintingFull)
-	if err != nil {
-		return nil, err
-	}
-
-	tof := func(v fixed.Int26_6) float32 {
-		return float32(v.Round()) / prec
-	}
-	face := &sfont.Face{
-		Metrics: sfont.Metrics{
-			Ascent: tof(metrics.Ascent),
-			Height: tof(metrics.Height),
-		},
-	}
-	encode := func(op sfont.SegmentOp, args ...fixed.Point26_6) {
-		face.Segments = append(face.Segments, uint32(op))
-		for _, a := range args {
-			x, y := tof(a.X), tof(a.Y)
-			face.Segments = append(face.Segments, math.Float32bits(x), math.Float32bits(y))
-		}
-	}
-	for ch := range face.Index {
-		gidx, err := f.GlyphIndex(&buf, rune(ch))
-		if err != nil {
-			return nil, err
-		}
-		segs, err := f.LoadGlyph(&buf, gidx, ppem, nil)
-		if err != nil {
-			return nil, err
-		}
-		idxStart := len(face.Segments)
-		for _, seg := range segs {
-			switch seg.Op {
-			case sfnt.SegmentOpMoveTo:
-				encode(sfont.SegmentOpMoveTo, seg.Args[:1]...)
-			case sfnt.SegmentOpLineTo:
-				encode(sfont.SegmentOpLineTo, seg.Args[:1]...)
-			case sfnt.SegmentOpQuadTo:
-				encode(sfont.SegmentOpQuadTo, seg.Args[:2]...)
-			case sfnt.SegmentOpCubeTo:
-				encode(sfont.SegmentOpCubeTo, seg.Args[:3]...)
-			}
-		}
-		idxEnd := len(face.Segments)
-		adv, err := f.GlyphAdvance(&buf, gidx, ppem, font.HintingFull)
-		if err != nil {
-			return nil, err
-		}
-		face.Index[ch] = sfont.Glyph{
-			Advance: tof(adv),
-			Start:   uint16(idxStart),
-			End:     uint16(idxEnd),
-		}
-	}
-	return face, nil
 }

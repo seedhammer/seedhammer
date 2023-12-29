@@ -2,10 +2,8 @@
 package font
 
 import (
-	"math"
+	"image"
 	"unicode"
-
-	"golang.org/x/image/math/f32"
 )
 
 type Face struct {
@@ -17,18 +15,18 @@ type Face struct {
 }
 
 type Glyph struct {
-	Advance    float32
+	Advance    int
 	Start, End uint16
 }
 
-// Segment is like sfnt.Segment but with float32 coordinates.
+// Segment is like sfnt.Segment but with integer coordinates.
 type Segment struct {
 	Op   SegmentOp
-	Args [3]f32.Vec2
+	Args [3]image.Point
 }
 
 type Metrics struct {
-	Ascent, Height float32
+	Ascent, Height int
 }
 
 type SegmentOp uint32
@@ -36,11 +34,9 @@ type SegmentOp uint32
 const (
 	SegmentOpMoveTo SegmentOp = iota
 	SegmentOpLineTo
-	SegmentOpQuadTo
-	SegmentOpCubeTo
 )
 
-func (f *Face) Decode(ch rune) (float32, []Segment, bool) {
+func (f *Face) Decode(ch rune) (int, []Segment, bool) {
 	if int(ch) >= len(f.Index) {
 		return 0, nil, false
 	}
@@ -50,11 +46,11 @@ func (f *Face) Decode(ch rune) (float32, []Segment, bool) {
 	}
 	enc := f.Segments[glyph.Start:glyph.End]
 	var segs []Segment
-	decPoint := func() f32.Vec2 {
-		x := math.Float32frombits(enc[0])
-		y := math.Float32frombits(enc[1])
+	decPoint := func() image.Point {
+		x := int(int32(enc[0]))
+		y := int(int32(enc[1]))
 		enc = enc[2:]
-		return f32.Vec2{x, y}
+		return image.Pt(x, y)
 	}
 	for len(enc) > 0 {
 		seg := Segment{
@@ -64,13 +60,6 @@ func (f *Face) Decode(ch rune) (float32, []Segment, bool) {
 		switch seg.Op {
 		case SegmentOpMoveTo, SegmentOpLineTo:
 			seg.Args[0] = decPoint()
-		case SegmentOpQuadTo:
-			seg.Args[0] = decPoint()
-			seg.Args[1] = decPoint()
-		case SegmentOpCubeTo:
-			seg.Args[0] = decPoint()
-			seg.Args[1] = decPoint()
-			seg.Args[2] = decPoint()
 		}
 		segs = append(segs, seg)
 	}

@@ -19,7 +19,6 @@ import (
 	"github.com/srwiley/rasterx"
 	"golang.org/x/image/math/f32"
 	"golang.org/x/image/math/fixed"
-	"seedhammer.com/affine"
 	"seedhammer.com/font"
 )
 
@@ -66,13 +65,6 @@ func (o *offsetProgram) Move(p image.Point) {
 
 func (o *offsetProgram) Line(p image.Point) {
 	o.prog.Line(p.Add(o.off))
-}
-
-func roundCoord(p f32.Vec2) image.Point {
-	return image.Point{
-		X: int(math.Round(float64(p[0]))),
-		Y: int(math.Round(float64(p[1]))),
-	}
 }
 
 type transform [6]int
@@ -629,21 +621,11 @@ func engraveConstantRune(p Program, face *font.Face, em int, r rune) image.Point
 	if !found {
 		panic(fmt.Errorf("unsupported rune: %s", string(r)))
 	}
-	mustInt := func(v float32) int {
-		i := int(v)
-		if float32(i) != v {
-			panic("constant rune is defined by non-integer value")
-		}
-		return i
-	}
-	iadv := mustInt(adv)
-	iasc := mustInt(m.Ascent)
-	iheight := mustInt(m.Height)
-	pos := image.Pt(0, iasc*em/iheight)
+	pos := image.Pt(0, m.Ascent*em/m.Height)
 	for _, seg := range segs {
 		p1 := image.Point{
-			X: mustInt(seg.Args[0][0]) * em / iheight,
-			Y: mustInt(seg.Args[0][1]) * em / iheight,
+			X: seg.Args[0].X * em / m.Height,
+			Y: seg.Args[0].Y * em / m.Height,
 		}
 		switch seg.Op {
 		case font.SegmentOpMoveTo:
@@ -654,7 +636,7 @@ func engraveConstantRune(p Program, face *font.Face, em int, r rune) image.Point
 			panic("constant rune has unsupported segment type")
 		}
 	}
-	return image.Pt(iadv*em/iheight, em)
+	return image.Pt(adv*em/m.Height, em)
 }
 
 func NewConstantStringer(face *font.Face, em int, shortest, longest int) *ConstantStringer {
@@ -995,7 +977,7 @@ func String(face *font.Face, em int, txt string) *StringCmd {
 }
 
 type StringCmd struct {
-	LineHeight float32
+	LineHeight int
 
 	face *font.Face
 	em   int
@@ -1012,18 +994,14 @@ func (s *StringCmd) Measure() image.Point {
 
 func (s *StringCmd) engrave(p Program) image.Point {
 	m := s.face.Metrics
-	em := float32(s.em) / m.Height
-	ceil := func(v float32) int {
-		return int(math.Ceil(float64(v)))
-	}
-	pos := image.Pt(0, ceil(m.Ascent*em))
-	addScale := func(p1 image.Point, p2 f32.Vec2) f32.Vec2 {
-		return f32.Vec2{
-			float32(p1.X) + p2[0]*em,
-			float32(p1.Y) + p2[1]*em,
+	pos := image.Pt(0, (m.Ascent*s.em+m.Height-1)/m.Height)
+	addScale := func(p1, p2 image.Point) image.Point {
+		return image.Point{
+			X: p1.X + p2.X*s.em/m.Height,
+			Y: p1.Y + p2.Y*s.em/m.Height,
 		}
 	}
-	height := ceil(float32(s.em) * s.LineHeight)
+	height := s.em * s.LineHeight
 	for _, r := range s.txt {
 		if r == '\n' {
 			pos.X = 0
@@ -1035,55 +1013,25 @@ func (s *StringCmd) engrave(p Program) image.Point {
 			panic(fmt.Errorf("unsupported rune: %s", string(r)))
 		}
 		if p != nil {
-			var p0 f32.Vec2
+			// var p0 image.Point
 			for _, seg := range segs {
 				switch seg.Op {
 				case font.SegmentOpMoveTo:
 					p1 := addScale(pos, seg.Args[0])
-					p.Move(roundCoord(p1))
-					p0 = p1
+					p.Move(p1)
+					// p0 = p1
 				case font.SegmentOpLineTo:
 					p1 := addScale(pos, seg.Args[0])
-					p.Line(roundCoord(p1))
-					p0 = p1
-				case font.SegmentOpQuadTo:
-					p12 := addScale(pos, seg.Args[0])
-					p3 := addScale(pos, seg.Args[1])
-					// Expand to cubic.
-					p1 := mix(p12, p0, 1.0/3.0)
-					p2 := mix(p12, p3, 1.0/3.0)
-					approxCubeBezier(p.Line, p0, p1, p2, p3)
-					p0 = p3
-				case font.SegmentOpCubeTo:
-					p1 := addScale(pos, seg.Args[0])
-					p2 := addScale(pos, seg.Args[1])
-					p3 := addScale(pos, seg.Args[2])
-					approxCubeBezier(p.Line, p0, p1, p2, p3)
-					p0 = p3
+					p.Line(p1)
+					// p0 = p1
 				default:
 					panic(errors.New("unsupported segment"))
 				}
 			}
 		}
-		pos.X += int(adv * em)
+		pos.X += adv * s.em / m.Height
 	}
 	return image.Pt(pos.X, height)
-}
-
-// approxCubeBezier uses de Casteljau subdivision to approximate a cubic Bézier
-// curve with line segments.
-//
-// See "Piecewise Linear Approximation of Bézier Curves" by Kaspar Fischer, October 16, 2000,
-// http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.86.162&rep=rep1&type=pdf.
-func approxCubeBezier(move func(to image.Point), p0, p1, p2, p3 f32.Vec2) {
-	if isFlat(p0, p1, p2, p3) {
-		move(roundCoord(p3))
-	} else {
-		l0, l1, l2, l3 := subdivideCubeBezier(0, .5, p0, p1, p2, p3)
-		approxCubeBezier(move, l0, l1, l2, l3)
-		r0, r1, r2, r3 := subdivideCubeBezier(.5, 1, p0, p1, p2, p3)
-		approxCubeBezier(move, r0, r1, r2, r3)
-	}
 }
 
 type Rasterizer struct {
@@ -1177,41 +1125,4 @@ func Measure(c Command) image.Rectangle {
 		b = image.Rectangle{}
 	}
 	return b
-}
-
-func subdivideCubeBezier(t0, t1 float32, p0, p1, p2, p3 f32.Vec2) (s0, s1, s2, s3 f32.Vec2) {
-	u0 := 1 - t0
-	u1 := 1 - t1
-	s0[0] = u0*u0*u0*p0[0] + (t0*u0*u0+u0*t0*u0+u0*u0*t0)*p1[0] + (t0*t0*u0+u0*t0*t0+t0*u0*t0)*p2[0] + t0*t0*t0*p3[0]
-	s0[1] = u0*u0*u0*p0[1] + (t0*u0*u0+u0*t0*u0+u0*u0*t0)*p1[1] + (t0*t0*u0+u0*t0*t0+t0*u0*t0)*p2[1] + t0*t0*t0*p3[1]
-	s1[0] = u0*u0*u1*p0[0] + (t0*u0*u1+u0*t0*u1+u0*u0*t1)*p1[0] + (t0*t0*u1+u0*t0*t1+t0*u0*t1)*p2[0] + t0*t0*t1*p3[0]
-	s1[1] = u0*u0*u1*p0[1] + (t0*u0*u1+u0*t0*u1+u0*u0*t1)*p1[1] + (t0*t0*u1+u0*t0*t1+t0*u0*t1)*p2[1] + t0*t0*t1*p3[1]
-	s2[0] = u0*u1*u1*p0[0] + (t0*u1*u1+u0*t1*u1+u0*u1*t1)*p1[0] + (t0*t1*u1+u0*t1*t1+t0*u1*t1)*p2[0] + t0*t1*t1*p3[0]
-	s2[1] = u0*u1*u1*p0[1] + (t0*u1*u1+u0*t1*u1+u0*u1*t1)*p1[1] + (t0*t1*u1+u0*t1*t1+t0*u1*t1)*p2[1] + t0*t1*t1*p3[1]
-	s3[0] = u1*u1*u1*p0[0] + (t1*u1*u1+u1*t1*u1+u1*u1*t1)*p1[0] + (t1*t1*u1+u1*t1*t1+t1*u1*t1)*p2[0] + t1*t1*t1*p3[0]
-	s3[1] = u1*u1*u1*p0[1] + (t1*u1*u1+u1*t1*u1+u1*u1*t1)*p1[1] + (t1*t1*u1+u1*t1*t1+t1*u1*t1)*p2[1] + t1*t1*t1*p3[1]
-	return
-}
-
-func isFlat(p0, p1, p2, p3 f32.Vec2) bool {
-	const tolerance = .2
-	ux := 3.0*p1[0] - 2.0*p0[0] - p3[0]
-	uy := 3.0*p1[1] - 2.0*p0[1] - p3[1]
-	vx := 3.0*p2[0] - 2.0*p3[0] - p0[0]
-	vy := 3.0*p2[1] - 2.0*p3[1] - p0[1]
-	ux *= ux
-	uy *= uy
-	vx *= vx
-	vy *= vy
-	if ux < vx {
-		ux = vx
-	}
-	if uy < vy {
-		uy = vy
-	}
-	return ux+uy <= 16*tolerance*tolerance
-}
-
-func mix(p1, p2 f32.Vec2, a float32) f32.Vec2 {
-	return affine.Add(affine.Scale(p1, 1.-a), affine.Scale(p2, a))
 }
