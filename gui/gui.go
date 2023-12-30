@@ -428,14 +428,14 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (i
 				// to.
 				if len(s.Descriptor.Keys) == 1 {
 					s.confirm = &ConfirmWarningScreen{
-						Title: "Unknown Share",
-						Body:  "Long press to confirm the share has a passphrase.\n\nPress back otherwise.",
+						Title: "Unknown Wallet",
+						Body:  "The wallet does not match the seed.\n\nIf it is passphrase protected, long press to confirm.",
 						Icon:  assets.IconCheckmark,
 					}
 				} else {
 					s.warning = &ErrorScreen{
-						Title: "Unknown Share",
-						Body:  "The share is not part of the wallet or is passphrase protected.",
+						Title: "Unknown Wallet",
+						Body:  "The wallet does not match the seed or is passphrase protected.",
 					}
 				}
 				continue

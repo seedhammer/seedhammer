@@ -149,7 +149,7 @@ func TestNonParticipatingSeed(t *testing.T) {
 	ctxButton(ctx, Button3)
 
 	scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if scr.warning == nil || scr.warning.Title != "Unknown Share" {
+	if scr.warning == nil || scr.warning.Title != "Unknown Wallet" {
 		t.Fatal("a non-participating seed was accepted")
 	}
 }
