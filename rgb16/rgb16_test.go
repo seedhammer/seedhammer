@@ -7,7 +7,7 @@ import (
 
 func TestRoundtrip(t *testing.T) {
 	for c := 0; c <= math.MaxUint16; c++ {
-		rgb16 := uint16(c)
+		rgb16 := RGB565{byte(c >> 8), byte(c)}
 		r, g, b := rgb565ToRGB888(rgb16)
 		got := rgb888ToRGB565(r, g, b)
 		if rgb16 != got {

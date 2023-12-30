@@ -3,21 +3,22 @@
 package rgb16
 
 import (
-	"encoding/binary"
 	"image"
 	"image/color"
 	"image/draw"
 )
 
 type Image struct {
-	Pix    []byte
+	Pix    []RGB565
 	Stride int
 	Rect   image.Rectangle
 }
 
+type RGB565 [2]byte
+
 func New(r image.Rectangle) *Image {
 	return &Image{
-		Pix:    make([]byte, r.Dx()*r.Dy()*2),
+		Pix:    make([]RGB565, r.Dx()*r.Dy()),
 		Stride: r.Dx(),
 		Rect:   r,
 	}
@@ -35,38 +36,36 @@ func (p *Image) Set(x, y int, c color.Color) {
 	if !(image.Point{x, y}).In(p.Rect) {
 		return
 	}
-	bo.PutUint16(p.Pix[p.PixOffset(x, y):], colorToRGB565(c))
+	p.Pix[p.PixOffset(x, y)] = colorToRGB565(c)
 }
 
 func (p *Image) PixOffset(x, y int) int {
 	off := image.Pt(x, y).Sub(p.Rect.Min)
-	return off.Y*p.Stride + off.X*2
+	return off.Y*p.Stride + off.X
 }
 
 func (p *Image) At(x, y int) color.Color {
 	if !(image.Point{x, y}).In(p.Rect) {
 		return color.RGBA{}
 	}
-	px := bo.Uint16(p.Pix[p.PixOffset(x, y):])
+	px := p.Pix[p.PixOffset(x, y)]
 	r, g, b := rgb565ToRGB888(px)
 	return color.RGBA{A: 0xff, R: r, G: g, B: b}
 }
-
-var bo = binary.BigEndian
 
 func (p *Image) SetRGBA64(x, y int, c color.RGBA64) {
 	if !(image.Point{x, y}).In(p.Rect) {
 		return
 	}
 	rgb16 := rgb888ToRGB565(uint8(c.R>>8), uint8(c.G>>8), uint8(c.B>>8))
-	bo.PutUint16(p.Pix[p.PixOffset(x, y):], rgb16)
+	p.Pix[p.PixOffset(x, y)] = rgb16
 }
 
 func (p *Image) RGBA64At(x, y int) color.RGBA64 {
 	if !(image.Point{x, y}).In(p.Rect) {
 		return color.RGBA64{}
 	}
-	px := bo.Uint16(p.Pix[p.PixOffset(x, y):])
+	px := p.Pix[p.PixOffset(x, y)]
 	r, g, b := rgb565ToRGB888(px)
 	r16 := uint16(r)
 	r16 |= r16 << 8
@@ -86,8 +85,7 @@ func (p *Image) DrawOver(dr image.Rectangle, src image.Image, sp image.Point) {
 			rgb := colorToRGB565(src.C)
 			for y := 0; y < dr.Dy(); y++ {
 				for x := 0; x < dr.Dx(); x++ {
-					po := p.PixOffset(dr.Min.X+x, dr.Min.Y+y)
-					bo.PutUint16(p.Pix[po:], rgb)
+					p.Pix[p.PixOffset(dr.Min.X+x, dr.Min.Y+y)] = rgb
 				}
 			}
 			return
@@ -97,8 +95,7 @@ func (p *Image) DrawOver(dr image.Rectangle, src image.Image, sp image.Point) {
 			for x := 0; x < dr.Dx(); x++ {
 				col := src.GrayAt(sp.X+x, sp.Y+y)
 				po := p.PixOffset(dr.Min.X+x, dr.Min.Y+y)
-				rgb16 := rgb888ToRGB565(col.Y, col.Y, col.Y)
-				bo.PutUint16(p.Pix[po:], rgb16)
+				p.Pix[po] = rgb888ToRGB565(col.Y, col.Y, col.Y)
 			}
 		}
 		return
@@ -108,23 +105,23 @@ func (p *Image) DrawOver(dr image.Rectangle, src image.Image, sp image.Point) {
 	draw.Draw(p, dr, src, sp, draw.Over)
 }
 
-func colorToRGB565(c color.Color) uint16 {
+func colorToRGB565(c color.Color) RGB565 {
 	r, g, b, _ := c.RGBA()
 	return rgb888ToRGB565(uint8(r>>8), uint8(g>>8), uint8(b>>8))
 }
 
-func rgb888ToRGB565(r, g, b uint8) uint16 {
+func rgb888ToRGB565(r, g, b uint8) RGB565 {
 	u16 := uint16(b)>>3 | uint16(g&0xFC)<<3 | uint16(r&0xF8)<<8
-	return ((u16 & 0xff) << 8) | (u16 >> 8)
+	return RGB565{byte(u16), byte(u16 >> 8)}
 }
 
-func rgb565ToRGB888(rgb uint16) (r, g, b uint8) {
-	rgb = ((rgb & 0xff) << 8) | (rgb >> 8)
-	r = uint8(rgb>>8) & 0xf8
+func rgb565ToRGB888(rgb RGB565) (r, g, b uint8) {
+	c := uint16(rgb[1])<<8 | uint16(rgb[0])
+	r = uint8(c>>8) & 0xf8
 	r |= r >> 5
-	g = uint8(rgb>>3) & 0xfc
+	g = uint8(c>>3) & 0xfc
 	g |= g >> 6
-	b = uint8(rgb << 3)
+	b = uint8(c << 3)
 	b |= b | b>>5
 	return
 }
