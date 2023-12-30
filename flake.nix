@@ -368,15 +368,19 @@
                 nukeReferences
               ];
 
-              buildPhase = ''
-                export HOME="$PWD/gohome"
-                export GOMODCACHE=${self.packages.${system}.go-deps}
+              CGO_CXXFLAGS="-I${libcamera}/include";
+              CGO_LDFLAGS="-L${libcamera}/lib -static-libstdc++ -static-libgcc";
+              CGO_ENABLED="1";
+              GOOS="linux";
+              GOARCH="arm";
+              GOARM="6";
+              # -buildmode=pie is required by musl.
+              GOFLAGS="-buildmode=pie -tags=${tags}";
 
-                # -buildmode=pie is required by musl.
-                CGO_CXXFLAGS="-I${libcamera}/include" \
-                  CGO_LDFLAGS="-L${libcamera}/lib -static-libstdc++ -static-libgcc" \
-                  CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=6 \
-                  go build -trimpath -buildmode pie -tags ${tags} -ldflags="-s -w" ./cmd/controller
+              buildPhase = ''
+                HOME="$PWD/gohome" \
+                GOMODCACHE=${self.packages.${system}.go-deps} \
+                  go build -trimpath -ldflags="-s -w" ./cmd/controller
               '';
 
               installPhase = ''

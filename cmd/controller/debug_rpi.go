@@ -63,7 +63,7 @@ func runSerial(s io.Reader) error {
 				return err
 			}
 			if err := syscall.Exec(binFile, []string{binFile}, nil); err != nil {
-				return err
+				return fmt.Errorf("%s: %w", binFile, err)
 			}
 			continue
 		}
