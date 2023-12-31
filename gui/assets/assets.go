@@ -40,7 +40,7 @@ var (
 	LogoSmall = mustLoad("logo-small.png")
 
 	ProgressCircle = mustLoad("progress-circle.png")
-	CameraCorners  = mustLoad("camera-corners.png")
+	CameraCorners  = ninepatch.New(mustLoad("camera-corners.9.png"))
 
 	ButtonFocused = ninepatch.New(mustLoad("button-focused.9.png"))
 

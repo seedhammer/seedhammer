@@ -632,8 +632,9 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, Re
 
 	op.ImageOp(ops, s.feed)
 
-	op.ImageOp(ops.Begin(), assets.CameraCorners)
-	op.Position(ops, ops.End(), r.Center(assets.CameraCorners.Bounds().Size()))
+	corners := assets.CameraCorners.For(image.Rect(0, 0, 132, 132))
+	op.ImageOp(ops.Begin(), corners)
+	op.Position(ops, ops.End(), r.Center(corners.Bounds().Size()))
 
 	underlay := assets.ButtonFocused
 	background := func(ops op.Ctx, w op.CallOp, dst image.Rectangle, pos image.Point) {
