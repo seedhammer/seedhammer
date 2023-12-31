@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/draw"
 	"io"
 	"log"
 	"os"
@@ -62,6 +63,11 @@ func Init() (*Platform, error) {
 	if err := wshat.Open(p.events); err != nil {
 		return nil, err
 	}
+	d, err := drm.Open()
+	if err != nil {
+		return nil, err
+	}
+	p.display = d
 	return p, nil
 }
 
@@ -108,6 +114,18 @@ func (p *Platform) Events() []gui.Event {
 	}
 }
 
+func (p *Platform) DisplaySize() image.Point {
+	return p.display.Size()
+}
+
+func (p *Platform) Dirty(r image.Rectangle) error {
+	return p.display.Dirty(r)
+}
+
+func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
+	return p.display.NextChunk()
+}
+
 func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
 	if engraverHook != nil {
 		return engraverHook(), nil
@@ -117,15 +135,6 @@ func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
 
 func (p *Platform) ScanQR(img *image.Gray) ([][]byte, error) {
 	return zbar.Scan(img)
-}
-
-func (p *Platform) Display() (gui.LCD, error) {
-	d, err := drm.Open()
-	if err != nil {
-		return nil, err
-	}
-	p.display = d
-	return d, nil
 }
 
 func (p *Platform) CameraFrame(dims image.Point) {

@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"image"
+	"image/draw"
 	"io"
 
 	"seedhammer.com/gui"
@@ -20,8 +21,16 @@ func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
 	return nil, errors.New("Engraver not implemented")
 }
 
-func (p *Platform) Display() (gui.LCD, error) {
-	return nil, errors.New("Display not implemented")
+func (p *Platform) DisplaySize() image.Point {
+	return image.Pt(1, 1)
+}
+
+func (p *Platform) Dirty(r image.Rectangle) error {
+	return nil
+}
+
+func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
+	return nil, false
 }
 
 func (p *Platform) Wakeup() {

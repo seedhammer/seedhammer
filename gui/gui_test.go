@@ -22,7 +22,6 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/op"
-	"seedhammer.com/image/rgb565"
 	"seedhammer.com/nonstandard"
 )
 
@@ -487,8 +486,6 @@ type testPlatform struct {
 	qrImages   map[*uint8][]byte
 }
 
-type testLCD struct{}
-
 func (t *testPlatform) ScanQR(img *image.Gray) ([][]byte, error) {
 	if content, ok := t.qrImages[&img.Pix[0]]; ok {
 		return [][]byte{content}, nil
@@ -496,16 +493,16 @@ func (t *testPlatform) ScanQR(img *image.Gray) ([][]byte, error) {
 	return nil, errors.New("no QR code")
 }
 
-func (t *testPlatform) Display() (LCD, error) {
-	return testLCD{}, nil
+func (*testPlatform) DisplaySize() image.Point {
+	return image.Pt(1, 1)
 }
 
-func (testLCD) Framebuffer() draw.RGBA64Image {
-	return rgb565.New(image.Rect(0, 0, 1, 1))
-}
-
-func (testLCD) Dirty(sr image.Rectangle) error {
+func (*testPlatform) Dirty(r image.Rectangle) error {
 	return nil
+}
+
+func (*testPlatform) NextChunk() (draw.RGBA64Image, bool) {
+	return nil, false
 }
 
 func (t *testPlatform) Now() time.Time {

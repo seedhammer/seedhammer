@@ -2681,7 +2681,12 @@ type Platform interface {
 	Engraver() (io.ReadWriteCloser, error)
 	CameraFrame(size image.Point)
 	Now() time.Time
-	Display() (LCD, error)
+	DisplaySize() image.Point
+	// Dirty begins a refresh of the content
+	// specified by r.
+	Dirty(r image.Rectangle) error
+	// NextChunk returns the next chunk of the refresh.
+	NextChunk() (draw.RGBA64Image, bool)
 	ScanQR(qr *image.Gray) ([][]byte, error)
 	Debug() bool
 }
@@ -2690,11 +2695,6 @@ type FrameEvent interface {
 	Error() error
 	Image() image.Image
 	Event
-}
-
-type LCD interface {
-	Framebuffer() draw.RGBA64Image
-	Dirty(sr image.Rectangle) error
 }
 
 type Event interface {
@@ -2731,7 +2731,6 @@ const (
 type App struct {
 	root op.Ops
 	ctx  *Context
-	lcd  LCD
 	err  error
 	scr  MainScreen
 	idle struct {
@@ -2744,12 +2743,7 @@ type App struct {
 func NewApp(pl Platform, version string) (*App, error) {
 	ctx := NewContext(pl)
 	ctx.Version = version
-	d, err := pl.Display()
-	if err != nil {
-		return nil, err
-	}
 	a := &App{
-		lcd: d,
 		ctx: ctx,
 	}
 	a.idle.start = pl.Now()
@@ -2779,32 +2773,36 @@ func (a *App) Frame() {
 			a.idle.state = saver.State{}
 		} else {
 			a.ctx.Buttons = [nbuttons]bool{}
+			// The screen saver has invalidated the cached
+			// frame content.
+			a.root = op.Ops{}
 		}
 	}
+	if a.idle.active {
+		a.idle.state.Draw(a.ctx.Platform)
+		return
+	}
+	dims := a.ctx.Platform.DisplaySize()
 	start := time.Now()
 	ops := a.root.Reset()
-	frame := a.lcd.Framebuffer()
-	dims := frame.Bounds().Size()
-	if !a.idle.active {
-		a.scr.Layout(a.ctx, ops, dims, a.err)
-	}
+	a.scr.Layout(a.ctx, ops, dims, a.err)
+	dirty := a.root.Clip(image.Rectangle{Max: dims})
 	layoutTime := time.Now()
-	var dirty image.Rectangle
-	if !a.idle.active {
-		dirty = a.root.Draw(frame)
-	} else {
-		saver.Draw(&a.idle.state, frame)
-		// The screen saver has invalidated the cached
-		// frame content.
-		dirty = frame.Bounds()
-		a.root = op.Ops{}
-	}
 	renderTime := time.Now()
-	a.lcd.Dirty(dirty)
+	if err := a.ctx.Platform.Dirty(dirty); err != nil {
+		panic(err)
+	}
+	for {
+		fb, ok := a.ctx.Platform.NextChunk()
+		if !ok {
+			break
+		}
+		a.root.Draw(fb)
+	}
 	drawTime := time.Now()
 	if a.ctx.Platform.Debug() {
-		log.Printf("frame: %v layout: %v render: %v draw: %v %v idle: %v",
-			drawTime.Sub(start), layoutTime.Sub(start), renderTime.Sub(layoutTime), drawTime.Sub(renderTime), dirty, idle)
+		log.Printf("frame: %v layout: %v render: %v draw: %v %v",
+			drawTime.Sub(start), layoutTime.Sub(start), renderTime.Sub(layoutTime), drawTime.Sub(renderTime), dirty)
 	}
 }
 

@@ -55,10 +55,17 @@ static int ioctlDrmModeDirtyFb(int fd, struct drm_mode_fb_dirty_cmd *cmd, __u32 
 import "C"
 
 type LCD struct {
-	fb   draw.RGBA64Image
+	fb   *rgb565.Image
 	dev  *os.File
 	mmap []byte
 	fbId C.__u32
+
+	// Frame state.
+	frame struct {
+		begun bool
+		err   error
+		rect  image.Rectangle
+	}
 }
 
 func (l *LCD) Close() {
@@ -178,7 +185,34 @@ func (l *LCD) Framebuffer() draw.RGBA64Image {
 	return l.fb
 }
 
-func (l *LCD) Dirty(sr image.Rectangle) error {
+func (l *LCD) Size() image.Point {
+	return l.fb.Bounds().Size()
+}
+
+func (l *LCD) Dirty(r image.Rectangle) error {
+	r = r.Intersect(l.fb.Bounds())
+	if r.Empty() || l.frame.err != nil {
+		return l.frame.err
+	}
+	l.frame.rect = r
+	l.frame.begun = true
+	return nil
+}
+
+func (l *LCD) NextChunk() (draw.RGBA64Image, bool) {
+	f := &l.frame
+	if !f.begun {
+		if f.rect != image.ZR {
+			f.err = l.dirty(f.rect)
+			f.rect = image.ZR
+		}
+		return nil, false
+	}
+	f.begun = false
+	return l.fb.SubImage(f.rect).(draw.RGBA64Image), true
+}
+
+func (l *LCD) dirty(sr image.Rectangle) error {
 	sr = sr.Intersect(l.fb.Bounds())
 	if sr.Empty() {
 		return nil

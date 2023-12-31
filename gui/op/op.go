@@ -123,7 +123,7 @@ type drawState struct {
 	maskp image.Point
 }
 
-func (o *Ops) Draw(dst draw.Image) image.Rectangle {
+func (o *Ops) Clip(dst image.Rectangle) image.Rectangle {
 	o.frameOps, o.prevOps = o.prevOps, o.frameOps
 	// Clear for GC.
 	for i := range o.frameOps {
@@ -133,7 +133,7 @@ func (o *Ops) Draw(dst draw.Image) image.Rectangle {
 		o.frame[i] = frameOp{}
 	}
 	o.frame = o.frame[:0]
-	o.serialize(drawState{clip: dst.Bounds()}, 0)
+	o.serialize(drawState{clip: dst}, 0)
 	var clip image.Rectangle
 	for _, op := range o.frame {
 		o.frameOps[op] = true
@@ -146,8 +146,13 @@ func (o *Ops) Draw(dst draw.Image) image.Rectangle {
 	for op := range o.prevOps {
 		clip = clip.Union(op.state.clip)
 	}
+	return clip
+}
+
+func (o *Ops) Draw(dst draw.Image) {
+	b := dst.Bounds()
 	for _, op := range o.frame {
-		clip := clip.Intersect(op.state.clip)
+		clip := b.Intersect(op.state.clip)
 		if clip.Empty() {
 			continue
 		}
@@ -155,7 +160,6 @@ func (o *Ops) Draw(dst draw.Image) image.Rectangle {
 		maskp := clip.Min.Sub(op.state.maskp)
 		op.op.draw(dst, clip, op.state.mask, maskp, pos)
 	}
-	return clip
 }
 
 func (o *Ops) serialize(state drawState, from int) {
@@ -257,7 +261,7 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 	// Optimize special cases.
 	if rgb, ok := dst.(*rgb565.Image); ok {
 		if mask == nil {
-			rgb.DrawOver(dr, src, pos)
+			rgb.Draw(dr, src, pos, draw.Over)
 			return
 		}
 	}

@@ -44,6 +44,20 @@ func (p *Image) PixOffset(x, y int) int {
 	return off.Y*p.Stride + off.X
 }
 
+func (p *Image) SubImage(r image.Rectangle) image.Image {
+	r = r.Intersect(p.Rect)
+	if r.Empty() {
+		return new(Image)
+	}
+	start := p.PixOffset(r.Min.X, r.Min.Y)
+	end := p.PixOffset(r.Max.X, r.Max.Y-1)
+	return &Image{
+		Pix:    p.Pix[start:end],
+		Stride: p.Stride,
+		Rect:   r,
+	}
+}
+
 func (p *Image) At(x, y int) color.Color {
 	if !(image.Point{x, y}).In(p.Rect) {
 		return color.RGBA{}
@@ -76,12 +90,12 @@ func (p *Image) RGBA64At(x, y int) color.RGBA64 {
 	return color.RGBA64{A: 0xffff, R: r16, G: g16, B: b16}
 }
 
-func (p *Image) DrawOver(dr image.Rectangle, src image.Image, sp image.Point) {
+func (p *Image) Draw(dr image.Rectangle, src image.Image, sp image.Point, op draw.Op) {
 	dr = dr.Intersect(p.Rect)
 	// Optimize special cases.
 	switch src := src.(type) {
 	case *image.Uniform:
-		if src.Opaque() {
+		if src.Opaque() || op == draw.Src {
 			rgb := colorToRGB565(src.C)
 			for y := 0; y < dr.Dy(); y++ {
 				for x := 0; x < dr.Dx(); x++ {
@@ -102,7 +116,7 @@ func (p *Image) DrawOver(dr image.Rectangle, src image.Image, sp image.Point) {
 	}
 
 	// General case.
-	draw.Draw(p, dr, src, sp, draw.Over)
+	draw.Draw(p, dr, src, sp, op)
 }
 
 func colorToRGB565(c color.Color) Color {

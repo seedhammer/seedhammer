@@ -7,22 +7,31 @@ import (
 	"math/rand"
 	"time"
 
+	"golang.org/x/image/math/fixed"
 	"seedhammer.com/gui/assets"
+	"seedhammer.com/image/rgb565"
 )
 
 type State struct {
+	before time.Time
+	prev   struct {
+		snake image.Rectangle
+		logo  image.Rectangle
+	}
 	snake []joint
 	food  struct {
 		color int
 		image.Point
 	}
 	dx, dy int
-	shY    float32
-	shV    float32
-	sY     float32
-	sV     float32
+	shY    fixed.Int26_6
+	shV    fixed.Int26_6
+	sY     fixed.Int26_6
+	sV     fixed.Int26_6
+	shTop  int
 	mode   mode
 	delay  int
+	rand   *rand.Rand
 
 	clear struct {
 		x int
@@ -46,34 +55,48 @@ type joint struct {
 const gridSize = 8
 const snakeLen = 5
 
-var colors = []color.RGBA64{
-	rgb64(0xff0000), // Red
-	rgb64(0xffa202), // Orange Peel
-	rgb64(0xffff00), // Yellow
-	rgb64(0x00ff00), // Green
-	rgb64(0x00fff2), // Cyan / Aqua
-	rgb64(0x0097fe), // Azure Radiance
-	rgb64(0xe000ff), // Electric Violet
-	rgb64(0xff00aa), // Hollywood Cerise
+type logo struct {
+	Bounds image.Rectangle
+	Boxes  []image.Point
 }
 
-func resetScreenSaver(s *State, width int, height int) {
+var (
+	tail  = rgb(0xd9d9d9)
+	white = rgb(0xffffff)
+)
+
+var colors = []image.Image{
+	rgb(0xff0000), // Red
+	rgb(0xffa202), // Orange Peel
+	rgb(0xffff00), // Yellow
+	rgb(0x00ff00), // Green
+	rgb(0x00fff2), // Cyan / Aqua
+	rgb(0x0097fe), // Azure Radiance
+	rgb(0xe000ff), // Electric Violet
+	rgb(0xff00aa), // Hollywood Cerise
+}
+
+func logoFor(width int) logo {
+	return buildLogo(width > 400)
+}
+
+func (s *State) reset(dims image.Point) {
 	s.delay = 20
 	s.shY = 0
-	s.shV = -20
+	s.shV = fixed.I(-20)
 	s.sY = 0
 	s.sV = 0
 	s.mode = modeSnake
-	rand.Seed(time.Now().UnixNano())
+	s.rand = rand.New(rand.NewSource(time.Now().UnixNano()))
 	location := image.Point{
-		X: rand.Intn(width / gridSize),
-		Y: rand.Intn(height / gridSize),
+		X: s.rand.Intn(dims.X / gridSize),
+		Y: s.rand.Intn(dims.Y / gridSize),
 	}
-	switch rand.Intn(4) {
+	switch s.rand.Intn(4) {
 	case 0:
 		s.dx = 0
 		s.dy = -1
-		location.Y = height + snakeLen
+		location.Y = dims.Y + snakeLen
 	case 1:
 		s.dx = 1
 		s.dy = 0
@@ -85,7 +108,7 @@ func resetScreenSaver(s *State, width int, height int) {
 	case 3:
 		s.dx = -1
 		s.dy = 0
-		location.X = width + snakeLen
+		location.X = dims.X + snakeLen
 	}
 
 	s.snake = []joint{}
@@ -93,43 +116,37 @@ func resetScreenSaver(s *State, width int, height int) {
 		location.X += s.dx
 		location.Y += s.dy
 		s.snake = append(s.snake, joint{Point: location})
-
 	}
-	placeFood(s, width, height)
+	placeFood(s, dims)
 }
 
-func placeFood(s *State, width int, height int) {
+func placeFood(s *State, dims image.Point) {
 outer:
 	for {
-		s.food.X = rand.Intn(width/gridSize-2*1) + 1
-		s.food.Y = rand.Intn(height/gridSize-2*1) + 1
+		s.food.X = s.rand.Intn(dims.X/gridSize-2*1) + 1
+		s.food.Y = s.rand.Intn(dims.Y/gridSize-2*1) + 1
 		for _, j := range s.snake {
 			if j.Point == s.food.Point {
 				continue outer
 			}
-
 		}
 		break
 	}
 }
 
-func clearScreenSaver(s *State, screen draw.RGBA64Image) {
-	counter := 0
-	for counter < 3 {
-		width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
-		clearBox(screen, s.clear.x*gridSize, s.clear.y*gridSize, rgb64(0x000000))
+func (s *State) stepClear(dims image.Point) {
+	for i := 0; i < 3; i++ {
 		s.snake = append(s.snake, joint{Point: image.Point{
 			s.clear.x,
 			s.clear.y,
 		}})
 		if len(s.snake) > snakeLen {
 			tail := s.snake[0]
-			if tail.Y*gridSize == height {
+			if tail.Y*gridSize == dims.Y {
 				s.mode = modeSnake
-				resetScreenSaver(s, width, height)
+				s.reset(dims)
 				return
 			}
-			clearBox(screen, tail.X*gridSize, tail.Y*gridSize, rgb64(0x000000))
 			s.snake = append(s.snake[:0], s.snake[1:]...)
 		}
 		if s.clear.y%2 == 0 {
@@ -137,27 +154,22 @@ func clearScreenSaver(s *State, screen draw.RGBA64Image) {
 		} else {
 			s.clear.x -= 1
 		}
-		if s.clear.x*gridSize >= width || s.clear.x*gridSize < 0 {
+		if s.clear.x*gridSize >= dims.X || s.clear.x*gridSize < 0 {
 			s.clear.y += 1
 		}
-		counter += 1
 	}
-	drawSnake(screen, s)
 }
 
-func Draw(s *State, screen draw.RGBA64Image) {
+func (s *State) update(dims image.Point) {
 	if s.delay > 0 {
 		s.delay -= 1
 		return
 	}
 	if s.mode == modeClear {
-		clearScreenSaver(s, screen)
+		s.stepClear(dims)
 		return
 	}
 
-	draw.Draw(screen, screen.Bounds(), image.NewUniform(color.Black), image.Point{}, draw.Src)
-
-	width, height := screen.Bounds().Dx(), screen.Bounds().Dy()
 	head := s.snake[len(s.snake)-1]
 	switch {
 	case s.food.X < head.X:
@@ -183,13 +195,13 @@ update:
 	for s.mode == modeSnake {
 		newHead := image.Point{X: head.X + s.dx, Y: head.Y + s.dy}
 		if newHead.X < 0 {
-			newHead.X = width/gridSize - 1
-		} else if newHead.X > width/gridSize-1 {
+			newHead.X = dims.X/gridSize - 1
+		} else if newHead.X > dims.X/gridSize-1 {
 			newHead.X = 0
 		}
 		if newHead.Y < 0 {
-			newHead.Y = height/gridSize - 1
-		} else if newHead.Y > height/gridSize-1 {
+			newHead.Y = dims.Y/gridSize - 1
+		} else if newHead.Y > dims.Y/gridSize-1 {
 			newHead.Y = 0
 		}
 		neck := s.snake[len(s.snake)-2]
@@ -211,9 +223,9 @@ update:
 		}
 		if newHead == s.food.Point {
 			s.snake = append(s.snake, j)
-			placeFood(s, width, height)
+			placeFood(s, dims)
 			for {
-				color := rand.Intn(len(colors))
+				color := s.rand.Intn(len(colors))
 				if color != s.food.color {
 					s.food.color = color
 					break
@@ -225,67 +237,143 @@ update:
 		}
 		break
 	}
-	for s.mode == modeGameOver {
+	if s.mode == modeGameOver {
 		minY := 1000
 		for _, c := range s.snake {
 			if c.Y < minY {
 				minY = c.Y
 			}
 		}
-		const a = 1.7
+		const a = fixed.Int26_6(1.7*10*64) / 10
+		const b = fixed.Int26_6(-3.5*10*64) / 10
 		s.shV += a
 		s.shY += s.shV
-		const b = -3.5
 		s.sV += b
 		if s.sV < 0 {
 			s.sV = 0
 		}
 		s.sY += s.sV
-		sTop := minY*gridSize + int(s.sY)
-		if sTop < int(s.shY) && sTop < height {
-			s.shY = float32(minY)*gridSize + s.sY
+		sTop := fixed.I(minY*gridSize) + s.sY
+		if sTop < s.shY && sTop < fixed.I(dims.Y) {
+			s.shY = fixed.I(minY*gridSize) + s.sY
 			s.sV = s.shV
-			s.shV = -s.shV * 0.8
+			const k = fixed.Int26_6(0.8*10*64) / 10
+			s.shV = -s.shV.Mul(k)
 		}
-		shTop := int(s.shY) - 11*gridSize
-		if shTop > height {
-			resetScreenSaver(s, width, height)
+		l := logoFor(dims.X)
+		s.shTop = s.shY.Round() - l.Bounds.Dy()
+		if s.shTop > dims.Y {
+			s.reset(dims)
+		}
+	}
+}
+
+type Screen interface {
+	DisplaySize() image.Point
+	// Dirty begins a refresh of the content
+	// specified by r.
+	Dirty(r image.Rectangle) error
+	// NextChunk returns the next chunk of the refresh.
+	NextChunk() (draw.RGBA64Image, bool)
+	Now() time.Time
+}
+
+func drawScreen(screen Screen, dr image.Rectangle, f func(chunk draw.RGBA64Image)) {
+	screen.Dirty(dr)
+	for {
+		c, ok := screen.NextChunk()
+		if !ok {
 			break
 		}
-
-		drawSeedHammer(screen, shTop)
-		break
+		imageDraw(c, c.Bounds(), image.NewUniform(color.Black), image.Point{}, draw.Src)
+		f(c)
 	}
-	drawSnake(screen, s)
+}
+
+func imageDraw(dst draw.RGBA64Image, dr image.Rectangle, src image.Image, sp image.Point, op draw.Op) {
+	switch dst := dst.(type) {
+	case *rgb565.Image:
+		dst.Draw(dr, src, sp, op)
+		return
+	}
+	draw.Draw(dst, dr, src, sp, op)
+}
+
+func (s *State) Draw(screen Screen) {
+	// Throttle frame time.
+	now := screen.Now()
+	d := now.Sub(s.before)
+	s.before = now
+	const minFrameTime = 40 * time.Millisecond
+	if sleep := minFrameTime - d; sleep > 0 {
+		time.Sleep(sleep)
+	}
+
+	dims := screen.DisplaySize()
+	s.update(dims)
+	lr := s.prev.logo
+	s.prev.logo = image.Rectangle{}
+	var logo logo
+	if s.mode == modeGameOver {
+		logo = logoFor(dims.X)
+		centerx := (dims.X - logo.Bounds.Dx()) / 2
+		s.prev.logo = logo.Bounds.Add(image.Pt(centerx, s.shTop))
+		lr = lr.Union(s.prev.logo)
+	}
+	drawScreen(screen, lr, func(screen draw.RGBA64Image) {
+		if s.mode == modeGameOver {
+			b := s.prev.logo
+			drawBoxes(screen, logo.Boxes, b.Min.X, b.Min.Y)
+		}
+	})
+	var snake image.Rectangle
+	for _, j := range s.snake {
+		m := image.Pt(j.X*gridSize, j.Y*gridSize+s.sY.Round())
+		snake = snake.Union(image.Rectangle{
+			Min: m,
+			Max: m.Add(image.Pt(boxSize, boxSize)),
+		})
+	}
+	food := assets.LogoSmall.Bounds().Add(image.Pt(s.food.X*gridSize-6, s.food.Y*gridSize-3))
 	if s.mode == modeSnake {
-		draw.DrawMask(
-			screen,
-			assets.LogoSmall.Bounds().Add(image.Pt(s.food.X*gridSize-6, s.food.Y*gridSize-3)),
-			image.NewUniform(colors[s.food.color]),
-			image.Pt(0, 0),
-			assets.LogoSmall,
-			image.Pt(0, 0),
-			draw.Over,
-		)
+		snake = snake.Union(food)
 	}
-
+	drawScreen(screen, snake.Union(s.prev.snake), func(screen draw.RGBA64Image) {
+		s.drawSnake(screen)
+		if s.mode == modeSnake {
+			draw.DrawMask(
+				screen,
+				food,
+				colors[s.food.color],
+				image.Pt(0, 0),
+				assets.LogoSmall,
+				image.Pt(0, 0),
+				draw.Over,
+			)
+		}
+	})
+	s.prev.snake = snake
 }
 
-func drawSnake(screen draw.RGBA64Image, s *State) {
+func (s *State) drawSnake(screen draw.RGBA64Image) {
 	for i, j := range s.snake {
-		color := rgb64(0xd9d9d9)
+		color := tail
 		if i == len(s.snake)-1 {
-			color = rgb64(0xffffff)
+			color = white
 		}
+		dr := image.Rectangle{
+			Min: image.Pt(j.X*gridSize, j.Y*gridSize+s.sY.Round()),
+		}
+		dr.Max = dr.Min.Add(image.Pt(boxSize, boxSize))
 		if j.filled {
-			clearBox(screen, j.X*gridSize, j.Y*gridSize+int(s.sY), color)
+			clearBox(screen, dr.Min.X, dr.Min.Y, color)
 		} else {
-			drawBox(screen, j.X*gridSize, j.Y*gridSize+int(s.sY), color)
+			drawBox(screen, dr.Min.X, dr.Min.Y, color)
 		}
 	}
 }
 
-func drawSeedHammer(screen draw.RGBA64Image, y int) {
+func buildLogo(wide bool) logo {
 	S := []image.Point{
 		{0, 0}, {1, 0}, {2, 0},
 		{0, 1},
@@ -338,65 +426,70 @@ func drawSeedHammer(screen draw.RGBA64Image, y int) {
 		{0, 4}, {3, 4},
 	}
 
-	drawBoxes(screen, S, (0+7)*gridSize, 0*gridSize+y)
-	drawBoxes(screen, E, (4+7)*gridSize, 0*gridSize+y)
-	drawBoxes(screen, E, (8+7)*gridSize, 0*gridSize+y)
-	drawBoxes(screen, D, (12+7)*gridSize, 0*gridSize+y)
-	drawBoxes(screen, H, 0*gridSize, 6*gridSize+y)
-	drawBoxes(screen, A, 5*gridSize, 6*gridSize+y)
-	drawBoxes(screen, M, 10*gridSize, 6*gridSize+y)
-	drawBoxes(screen, M, 16*gridSize, 6*gridSize+y)
-	drawBoxes(screen, E, 22*gridSize, 6*gridSize+y)
-	drawBoxes(screen, R, 26*gridSize, 6*gridSize+y)
+	seedOff := 7
+	hammerOff := image.Pt(0, 6)
 
+	if wide {
+		seedOff = 0
+		hammerOff = image.Pt(12+seedOff+5, 0)
+	}
+	logo := logo{
+		Bounds: image.Rectangle{Min: image.Pt(10000, 10000)},
+	}
+	buildBoxes := func(boxes []image.Point, x, y int) {
+		for _, b := range boxes {
+			b = b.Add(image.Pt(x, y))
+			logo.Bounds = logo.Bounds.Union(image.Rectangle{
+				Min: image.Pt(b.X, b.Y),
+				Max: image.Pt(b.X+1, b.Y+1),
+			})
+			logo.Boxes = append(logo.Boxes, b)
+		}
+	}
+	buildBoxes(S, 0+seedOff, 0)
+	buildBoxes(E, 4+seedOff, 0)
+	buildBoxes(E, 8+seedOff, 0)
+	buildBoxes(D, 12+seedOff, 0)
+
+	buildBoxes(H, 0+hammerOff.X, hammerOff.Y)
+	buildBoxes(A, 5+hammerOff.X, hammerOff.Y)
+	buildBoxes(M, 10+hammerOff.X, hammerOff.Y)
+	buildBoxes(M, 16+hammerOff.X, hammerOff.Y)
+	buildBoxes(E, 22+hammerOff.X, hammerOff.Y)
+	buildBoxes(R, 26+hammerOff.X, hammerOff.Y)
+	logo.Bounds = logo.Bounds.Canon()
+	logo.Bounds = image.Rectangle{
+		Min: logo.Bounds.Min.Mul(gridSize),
+		Max: logo.Bounds.Max.Mul(gridSize),
+	}
+
+	return logo
 }
 
 func drawBoxes(screen draw.RGBA64Image, boxes []image.Point, x, y int) {
 	for _, c := range boxes {
-		drawBox(screen, c.X*gridSize+x, c.Y*gridSize+y, rgb64(0xffffff))
+		drawBox(screen, c.X*gridSize+x, c.Y*gridSize+y, white)
 	}
 }
 
-func clearBox(screen draw.RGBA64Image, x, y int, color color.RGBA64) {
-	const boxSize = gridSize
-	x1 := x
+const boxSize = gridSize
 
-	y1 := y
-	for x < x1+boxSize {
-
-		y = y1
-		for y < y1+boxSize {
-			screen.SetRGBA64(x, y, color)
-			y += 1
-		}
-		x += 1
-	}
+func clearBox(screen draw.RGBA64Image, x, y int, img image.Image) {
+	dr := image.Rect(x, y, x+boxSize, y+boxSize)
+	imageDraw(screen, dr, img, image.Point{}, draw.Src)
 }
 
-func drawBox(screen draw.RGBA64Image, x, y int, color color.RGBA64) {
-	const boxSize = gridSize - 2
-	x1 := x
-
-	y1 := y
-	for x < x1+boxSize {
-
-		y = y1
-		for y < y1+boxSize {
-			screen.SetRGBA64(x+1, y+1, color)
-			y += 1
-		}
-		x += 1
-	}
+func drawBox(screen draw.RGBA64Image, x, y int, img image.Image) {
+	const boxSize = gridSize - 1
+	dr := image.Rect(x+1, y+1, x+boxSize, y+boxSize)
+	imageDraw(screen, dr, img, image.Point{}, draw.Src)
 }
 
-func rgb64(c uint32) color.RGBA64 {
-	r := uint16(c>>16) & 0xff
-	g := uint16(c>>8) & 0xff
-	b := uint16(c) & 0xff
-	return color.RGBA64{
-		A: 0xffff,
-		R: r<<8 | r,
-		G: g<<8 | g,
-		B: b<<8 | b,
-	}
+func rgb(c uint32) image.Image {
+	r := uint8(c >> 16)
+	g := uint8(c >> 8)
+	b := uint8(c)
+	return image.NewUniform(color.RGBA{
+		A: 0xff, R: r, G: g, B: b,
+	})
 }
