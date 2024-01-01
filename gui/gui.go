@@ -1988,8 +1988,8 @@ func (k *Keyboard) updateMask() {
 		return
 	}
 	k.nvalid = 0
-	for ; int(w) < len(bip39.Wordlist); w++ {
-		bip39w := bip39.Wordlist[w]
+	for ; w < bip39.NumWords; w++ {
+		bip39w := bip39.LabelFor(w)
 		if !strings.HasPrefix(bip39w, word) {
 			break
 		}

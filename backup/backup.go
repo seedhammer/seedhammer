@@ -99,7 +99,7 @@ func Engrave(scale, strokeWidth float32, plate PlateDesc) (Plate, error) {
 		return int(math.Round(float64(v * scale)))
 	}
 	sw := scalef(strokeWidth)
-	constant := engrave.NewConstantStringer(plate.Font, scalef(plateFontSize), bip39.Shortest, bip39.Longest)
+	constant := engrave.NewConstantStringer(plate.Font, scalef(plateFontSize), bip39.ShortestWord, bip39.LongestWord)
 	for _, sz := range []PlateSize{SmallPlate, SquarePlate, LargePlate} {
 		p := Plate{Size: sz}
 		seedOnly := plate.Descriptor.Script == urtypes.UnknownScript

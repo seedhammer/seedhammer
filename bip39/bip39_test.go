@@ -159,7 +159,7 @@ var testVectors = []struct {
 }
 
 func TestDiceToWord(t *testing.T) {
-	counts := make([]int, len(Wordlist))
+	counts := make([]int, len(index))
 	dice := Roll{1, 1, 1, 1, 1}
 loop:
 	for {

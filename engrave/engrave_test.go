@@ -47,9 +47,9 @@ func TestConstantQR(t *testing.T) {
 }
 
 func TestConstantString(t *testing.T) {
-	s := NewConstantStringer(constant.Font, 1000, bip39.Shortest, bip39.Longest)
-	for _, w := range bip39.Wordlist {
-		w := strings.ToUpper(w)
+	s := NewConstantStringer(constant.Font, 1000, bip39.ShortestWord, bip39.LongestWord)
+	for i := bip39.Word(0); i < bip39.NumWords; i++ {
+		w := strings.ToUpper(bip39.LabelFor(i))
 		cmd := s.String(w)
 		bounds := image.Rect(0, 0, s.longest*s.dims.X, s.dims.Y)
 		moves := measureMoves(cmd)

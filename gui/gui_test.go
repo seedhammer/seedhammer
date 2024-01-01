@@ -291,10 +291,11 @@ func TestScanScreenError(t *testing.T) {
 
 func TestWordKeyboardScreen(t *testing.T) {
 	ctx := NewContext(newPlatform())
-	for _, w := range bip39.Wordlist {
+	for i := bip39.Word(0); i < bip39.NumWords; i++ {
 		scr := &WordKeyboardScreen{
 			Mnemonic: make(bip39.Mnemonic, 1),
 		}
+		w := bip39.LabelFor(i)
 		ctxString(ctx, strings.ToUpper(w))
 		ctxButton(ctx, Button2)
 		res := scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
