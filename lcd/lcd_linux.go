@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"seedhammer.com/rgb16"
+	"seedhammer.com/image/rgb565"
 )
 
 /*
@@ -153,9 +153,9 @@ func setup(dev *os.File) (*LCD, error) {
 	if err != nil {
 		return nil, fmt.Errorf("framebuffer mmap failed: %w", err)
 	}
-	fb := &rgb16.Image{
-		Pix:    unsafe.Slice((*rgb16.RGB565)(unsafe.Pointer(unsafe.SliceData(mmap))), len(mmap)/int(unsafe.Sizeof(rgb16.RGB565{}))),
-		Stride: int(creq.pitch) / int(unsafe.Sizeof(rgb16.RGB565{})),
+	fb := &rgb565.Image{
+		Pix:    unsafe.Slice((*rgb565.Color)(unsafe.Pointer(unsafe.SliceData(mmap))), len(mmap)/int(unsafe.Sizeof(rgb565.Color{}))),
+		Stride: int(creq.pitch) / int(unsafe.Sizeof(rgb565.Color{})),
 		Rect:   image.Rect(0, 0, int(creq.width), int(creq.height)),
 	}
 	l := &LCD{

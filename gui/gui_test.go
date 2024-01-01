@@ -22,9 +22,9 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/op"
+	"seedhammer.com/image/rgb565"
 	"seedhammer.com/input"
 	"seedhammer.com/mjolnir"
-	"seedhammer.com/rgb16"
 )
 
 func TestDescriptorScreenError(t *testing.T) {
@@ -634,7 +634,7 @@ func newRunner(t *testing.T) *runner {
 }
 
 func (r *runner) Framebuffer() draw.RGBA64Image {
-	return rgb16.New(image.Rect(0, 0, 1, 1))
+	return rgb565.New(image.Rect(0, 0, 1, 1))
 }
 
 func (r *runner) Dirty(sr image.Rectangle) error {

@@ -7,8 +7,8 @@ import (
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
+	"seedhammer.com/image/rgb565"
 	"seedhammer.com/ninepatch"
-	"seedhammer.com/rgb16"
 )
 
 type Ops struct {
@@ -255,7 +255,7 @@ func (im imageOp) draw(dst draw.Image, dr image.Rectangle, mask image.Image, mas
 
 func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Point, mask image.Image, maskOff image.Point) {
 	// Optimize special cases.
-	if rgb, ok := dst.(*rgb16.Image); ok {
+	if rgb, ok := dst.(*rgb565.Image); ok {
 		if mask == nil {
 			rgb.DrawOver(dr, src, pos)
 			return

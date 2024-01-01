@@ -1,6 +1,6 @@
-// package rgb16 contains an image.Image implementation of a 16-bit
-// RGB image.
-package rgb16
+// Package rgb565 contains an [image.RGBA64Image] implementation of a 16-bit
+// RGB565 image.
+package rgb565
 
 import (
 	"image"
@@ -9,16 +9,16 @@ import (
 )
 
 type Image struct {
-	Pix    []RGB565
+	Pix    []Color
 	Stride int
 	Rect   image.Rectangle
 }
 
-type RGB565 [2]byte
+type Color [2]byte
 
 func New(r image.Rectangle) *Image {
 	return &Image{
-		Pix:    make([]RGB565, r.Dx()*r.Dy()),
+		Pix:    make([]Color, r.Dx()*r.Dy()),
 		Stride: r.Dx(),
 		Rect:   r,
 	}
@@ -105,17 +105,17 @@ func (p *Image) DrawOver(dr image.Rectangle, src image.Image, sp image.Point) {
 	draw.Draw(p, dr, src, sp, draw.Over)
 }
 
-func colorToRGB565(c color.Color) RGB565 {
+func colorToRGB565(c color.Color) Color {
 	r, g, b, _ := c.RGBA()
 	return rgb888ToRGB565(uint8(r>>8), uint8(g>>8), uint8(b>>8))
 }
 
-func rgb888ToRGB565(r, g, b uint8) RGB565 {
+func rgb888ToRGB565(r, g, b uint8) Color {
 	u16 := uint16(b)>>3 | uint16(g&0xFC)<<3 | uint16(r&0xF8)<<8
-	return RGB565{byte(u16), byte(u16 >> 8)}
+	return Color{byte(u16), byte(u16 >> 8)}
 }
 
-func rgb565ToRGB888(rgb RGB565) (r, g, b uint8) {
+func rgb565ToRGB888(rgb Color) (r, g, b uint8) {
 	c := uint16(rgb[1])<<8 | uint16(rgb[0])
 	r = uint8(c>>8) & 0xf8
 	r |= r >> 5
