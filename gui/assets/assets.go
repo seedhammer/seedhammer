@@ -5,7 +5,7 @@ import (
 	"image"
 	"image/png"
 
-	"seedhammer.com/ninepatch"
+	"seedhammer.com/image/ninepatch"
 )
 
 var (

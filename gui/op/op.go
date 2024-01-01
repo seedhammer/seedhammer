@@ -7,8 +7,8 @@ import (
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
+	"seedhammer.com/image/ninepatch"
 	"seedhammer.com/image/rgb565"
-	"seedhammer.com/ninepatch"
 )
 
 type Ops struct {
