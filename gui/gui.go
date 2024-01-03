@@ -2411,8 +2411,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			case ResultNone:
 				dialog.Add(ops)
 				return
-			}
-			if status == ResultCancelled {
+			case ResultCancelled:
 				s.seed = NewSeedScreen(s.mnemonic)
 				continue
 			}
@@ -2430,6 +2429,20 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				}
 			}
 			continue
+		case s.engrave != nil:
+			res := s.engrave.Layout(ctx, ops.Begin(), dims)
+			dialog := ops.End()
+			switch res {
+			case ResultNone:
+				dialog.Add(ops)
+				return
+			case ResultCancelled:
+				s.engrave = nil
+				continue
+			}
+			s.desc = nil
+			s.engrave = nil
+			continue
 		case s.desc != nil:
 			keyIdx, status := s.desc.Layout(ctx, ops.Begin(), dims)
 			dialog := ops.End()
@@ -2442,30 +2455,12 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				s.seed = NewSeedScreen(s.mnemonic)
 				continue
 			}
-			s.desc = nil
 			eng, err := NewEngraveScreen(ctx, *s.descriptor, keyIdx, s.mnemonic)
 			if err != nil {
 				s.warning = NewErrorScreen(err)
 				break
 			}
 			s.engrave = eng
-			continue
-		case s.engrave != nil:
-			res := s.engrave.Layout(ctx, ops.Begin(), dims)
-			dialog := ops.End()
-			switch res {
-			case ResultNone:
-				dialog.Add(ops)
-				return
-			}
-			s.engrave = nil
-			if res == ResultComplete {
-				continue
-			}
-			s.desc = &DescriptorScreen{
-				Descriptor: *s.descriptor,
-				Mnemonic:   s.mnemonic,
-			}
 			continue
 		case s.warning != nil:
 			dismissed := s.warning.Update(ctx)
