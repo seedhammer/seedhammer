@@ -13,7 +13,7 @@ import (
 	"strings"
 	"syscall"
 
-	"seedhammer.com/mjolnir"
+	"seedhammer.com/driver/mjolnir"
 )
 
 var (

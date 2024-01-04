@@ -16,9 +16,9 @@ import (
 	"golang.org/x/sys/unix"
 	"seedhammer.com/driver/drm"
 	"seedhammer.com/driver/libcamera"
+	"seedhammer.com/driver/mjolnir"
 	"seedhammer.com/driver/wshat"
 	"seedhammer.com/gui"
-	"seedhammer.com/mjolnir"
 	"seedhammer.com/zbar"
 )
 

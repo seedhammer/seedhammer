@@ -18,11 +18,11 @@ import (
 	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
+	"seedhammer.com/driver/mjolnir"
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/op"
 	"seedhammer.com/image/rgb565"
-	"seedhammer.com/mjolnir"
 	"seedhammer.com/nonstandard"
 )
 

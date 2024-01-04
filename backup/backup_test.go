@@ -16,9 +16,9 @@ import (
 	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
+	"seedhammer.com/driver/mjolnir"
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
-	"seedhammer.com/mjolnir"
 )
 
 var update = flag.Bool("update", false, "update golden files")

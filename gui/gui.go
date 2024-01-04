@@ -24,6 +24,7 @@ import (
 	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
+	"seedhammer.com/driver/mjolnir"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/assets"
 	"seedhammer.com/gui/layout"
@@ -31,7 +32,6 @@ import (
 	"seedhammer.com/gui/saver"
 	"seedhammer.com/gui/text"
 	"seedhammer.com/gui/widget"
-	"seedhammer.com/mjolnir"
 	"seedhammer.com/nonstandard"
 	"seedhammer.com/seedqr"
 )
