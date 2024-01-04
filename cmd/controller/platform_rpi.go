@@ -31,7 +31,10 @@ func Init() error {
 	return initSDCardNotifier()
 }
 
-func inputOpen(ch chan<- gui.Event) error {
+var inputCh chan<- gui.Event
+
+func (p *Platform) Input(ch chan<- gui.Event) error {
+	inputCh = ch
 	return wshat.Open(ch)
 }
 

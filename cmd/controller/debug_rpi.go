@@ -81,7 +81,9 @@ func runSerial(s io.Reader) error {
 			name := fmt.Sprintf("screenshot%d.png", screenshotCounter)
 			dumpImage(name, display.Framebuffer())
 		default:
-			debugCommand(line)
+			for _, e := range debugCommand(line) {
+				inputCh <- e
+			}
 		}
 	}
 }

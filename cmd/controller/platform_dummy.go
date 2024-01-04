@@ -17,7 +17,7 @@ func Init() error {
 	return nil
 }
 
-func inputOpen(ch chan<- gui.Event) error {
+func (p *Platform) Input(ch chan<- gui.Event) error {
 	return nil
 }
 

@@ -15,15 +15,8 @@ import (
 
 type Platform struct{}
 
-var inputCh chan<- gui.Event
-
 func (p *Platform) Debug() bool {
 	return true
-}
-
-func (p *Platform) Input(ch chan<- gui.Event) error {
-	inputCh = ch
-	return inputOpen(ch)
 }
 
 func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
@@ -34,33 +27,36 @@ func newPlatform() *Platform {
 	return new(Platform)
 }
 
-func click(btn gui.Button) {
-	inputCh <- gui.Event{
-		Button:  btn,
-		Pressed: true,
-	}
-	inputCh <- gui.Event{
-		Button:  btn,
-		Pressed: false,
+func click(btn gui.Button) []gui.Event {
+	return []gui.Event{
+		{
+			Button:  btn,
+			Pressed: true,
+		},
+		{
+			Button:  btn,
+			Pressed: false,
+		},
 	}
 }
 
-func debugCommand(cmd string) {
+func debugCommand(cmd string) []gui.Event {
+	var evts []gui.Event
 	switch {
 	case strings.HasPrefix(cmd, "runes "):
 		cmd = strings.ToUpper(cmd[len("runes "):])
 		for _, r := range cmd {
 			if r == ' ' {
-				click(gui.Button2)
+				evts = append(evts, click(gui.Button2)...)
 				continue
 			}
-			inputCh <- gui.Event{
+			evts = append(evts, gui.Event{
 				Button:  gui.Rune,
 				Rune:    r,
 				Pressed: true,
-			}
+			})
 		}
-		click(gui.Button2)
+		evts = append(evts, click(gui.Button2)...)
 	case strings.HasPrefix(cmd, "input "):
 		cmd = cmd[len("input "):]
 		for _, name := range strings.Split(cmd, " ") {
@@ -87,11 +83,12 @@ func debugCommand(cmd string) {
 				log.Printf("debug: unknown button: %s", name)
 				continue
 			}
-			click(btn)
+			evts = append(evts, click(btn)...)
 		}
 	case cmd == "goroutines":
 		pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 	default:
 		log.Printf("debug: unrecognized command: %s", cmd)
 	}
+	return evts
 }
