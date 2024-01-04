@@ -552,7 +552,11 @@ func (t *testPlatform) Now() time.Time {
 	return time.Now().Add(t.timeOffset)
 }
 
-func (t *testPlatform) Dump(path string, r io.Reader) error {
+func (*testPlatform) Debug() bool {
+	return false
+}
+
+func (*testPlatform) Dump(path string, r io.Reader) error {
 	return errors.New("not implemented")
 }
 

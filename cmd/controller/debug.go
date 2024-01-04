@@ -13,11 +13,13 @@ import (
 	"seedhammer.com/mjolnir"
 )
 
-const Debug = true
-
 type Platform struct{}
 
 var inputCh chan<- gui.Event
+
+func (p *Platform) Debug() bool {
+	return true
+}
 
 func (p *Platform) Input(ch chan<- gui.Event) error {
 	inputCh = ch

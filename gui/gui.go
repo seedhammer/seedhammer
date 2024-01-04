@@ -2694,6 +2694,7 @@ type Platform interface {
 	SDCard() <-chan bool
 	Display() (LCD, error)
 	ScanQR(qr *image.Gray) ([][]byte, error)
+	Debug() bool
 }
 
 type Frame interface {
@@ -2731,8 +2732,6 @@ const (
 )
 
 type App struct {
-	Debug bool
-
 	root op.Ops
 	ctx  *Context
 	btns <-chan Event
@@ -2816,7 +2815,7 @@ loop:
 	renderTime := time.Now()
 	a.lcd.Dirty(dirty)
 	drawTime := time.Now()
-	if a.Debug {
+	if a.ctx.Platform.Debug() {
 		if screenshot {
 			a.screenshotCounter++
 			name := fmt.Sprintf("screenshot%d.png", a.screenshotCounter)

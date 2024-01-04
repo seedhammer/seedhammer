@@ -10,13 +10,15 @@ import (
 	"seedhammer.com/mjolnir"
 )
 
-const Debug = false
-
 func dbgInit() error {
 	return nil
 }
 
 type Platform struct{}
+
+func (p *Platform) Debug() bool {
+	return false
+}
 
 func (p *Platform) Input(ch chan<- gui.Event) error {
 	return inputOpen(ch)

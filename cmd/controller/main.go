@@ -28,7 +28,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	a.Debug = Debug
 	for {
 		a.Frame()
 	}
