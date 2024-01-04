@@ -21,14 +21,21 @@ func run() error {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 	version := os.Getenv("sh_version")
 	log.Printf("seedhammer: loading %s...\n", version)
-	if err := Init(); err != nil {
+	p, err := Init()
+	if err != nil {
 		return err
 	}
-	a, err := gui.NewApp(newPlatform(), version)
+	a, err := gui.NewApp(p, version)
 	if err != nil {
 		return err
 	}
 	for {
 		a.Frame()
 	}
+}
+
+var debug = false
+
+func (p *Platform) Debug() bool {
+	return debug
 }

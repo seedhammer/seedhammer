@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -17,24 +18,45 @@ import (
 	"seedhammer.com/driver/libcamera"
 	"seedhammer.com/driver/wshat"
 	"seedhammer.com/gui"
+	"seedhammer.com/mjolnir"
 	"seedhammer.com/zbar"
 )
 
-var display *drm.LCD
+// Debug hooks.
+var (
+	engraverHook func() io.ReadWriteCloser
+	initHook     func(p *Platform) error
+)
 
-func Init() error {
-	// Ignore errors from setting up filesystems; they may already have been.
-	_ = mountFS()
-	if err := dbgInit(); err != nil {
-		log.Printf("debug: %v", err)
-	}
-	return initSDCardNotifier()
+type Platform struct {
+	display *drm.LCD
+	inputCh chan<- gui.Event
 }
 
-var inputCh chan<- gui.Event
+func Init() (*Platform, error) {
+	// Ignore errors from setting up filesystems; they may already have been.
+	_ = mountFS()
+	p := new(Platform)
+	if initHook != nil {
+		if err := initHook(p); err != nil {
+			log.Printf("debug: %v", err)
+		}
+	}
+	if err := initSDCardNotifier(); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
+	if engraverHook != nil {
+		return engraverHook(), nil
+	}
+	return mjolnir.Open("")
+}
 
 func (p *Platform) Input(ch chan<- gui.Event) error {
-	inputCh = ch
+	p.inputCh = ch
 	return wshat.Open(ch)
 }
 
@@ -47,7 +69,7 @@ func (p *Platform) Display() (gui.LCD, error) {
 	if err != nil {
 		return nil, err
 	}
-	display = d
+	p.display = d
 	return d, nil
 }
 

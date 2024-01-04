@@ -5,16 +5,19 @@ package main
 import (
 	"errors"
 	"image"
-	"log"
+	"io"
 
 	"seedhammer.com/gui"
 )
 
-func Init() error {
-	if err := dbgInit(); err != nil {
-		log.Printf("debug: %v", err)
-	}
-	return nil
+type Platform struct{}
+
+func Init() (*Platform, error) {
+	return new(Platform), nil
+}
+
+func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
+	return nil, errors.New("Engraver not implemented")
 }
 
 func (p *Platform) Input(ch chan<- gui.Event) error {

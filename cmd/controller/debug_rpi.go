@@ -17,13 +17,21 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+	"seedhammer.com/mjolnir"
 )
 
 const dmesg = false
 
 var screenshotCounter int
 
-func dbgInit() error {
+func init() {
+	initHook = dbgInit
+	engraverHook = func() io.ReadWriteCloser {
+		return mjolnir.NewSimulator()
+	}
+}
+
+func dbgInit(p *Platform) error {
 	s, err := openSerial("/dev/ttyGS0")
 	if err != nil {
 		return err
@@ -33,7 +41,7 @@ func dbgInit() error {
 	unix.Dup2(int(s.Fd()), syscall.Stdout)
 	go func() {
 		defer s.Close()
-		if err := runSerial(s); err != nil {
+		if err := runSerial(p, s); err != nil {
 			log.Printf("debug: serial communication failed: %v", err)
 		}
 	}()
@@ -50,7 +58,7 @@ func dbgInit() error {
 	return nil
 }
 
-func runSerial(s io.Reader) error {
+func runSerial(p *Platform, s io.Reader) error {
 	r := bufio.NewReader(s)
 	for {
 		line, err := r.ReadString('\n')
@@ -74,15 +82,15 @@ func runSerial(s io.Reader) error {
 		}
 		switch line {
 		case "screenshot":
-			if display == nil {
+			if p.display == nil {
 				break
 			}
 			screenshotCounter++
 			name := fmt.Sprintf("screenshot%d.png", screenshotCounter)
-			dumpImage(name, display.Framebuffer())
+			dumpImage(name, p.display.Framebuffer())
 		default:
 			for _, e := range debugCommand(line) {
-				inputCh <- e
+				p.inputCh <- e
 			}
 		}
 	}

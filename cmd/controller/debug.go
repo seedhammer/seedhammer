@@ -3,28 +3,16 @@
 package main
 
 import (
-	"io"
 	"log"
 	"os"
 	"runtime/pprof"
 	"strings"
 
 	"seedhammer.com/gui"
-	"seedhammer.com/mjolnir"
 )
 
-type Platform struct{}
-
-func (p *Platform) Debug() bool {
-	return true
-}
-
-func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
-	return mjolnir.NewSimulator(), nil
-}
-
-func newPlatform() *Platform {
-	return new(Platform)
+func init() {
+	debug = true
 }
 
 func click(btn gui.Button) []gui.Event {
