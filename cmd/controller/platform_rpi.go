@@ -29,6 +29,7 @@ var (
 )
 
 type Platform struct {
+	sdcard  chan bool
 	display *drm.LCD
 	inputCh chan<- gui.Event
 }
@@ -36,16 +37,24 @@ type Platform struct {
 func Init() (*Platform, error) {
 	// Ignore errors from setting up filesystems; they may already have been.
 	_ = mountFS()
-	p := new(Platform)
+	p := &Platform{
+		sdcard: make(chan bool, 1),
+	}
 	if initHook != nil {
 		if err := initHook(p); err != nil {
 			log.Printf("debug: %v", err)
 		}
 	}
-	if err := initSDCardNotifier(); err != nil {
+	if err := p.initSDCardNotifier(); err != nil {
 		return nil, err
 	}
 	return p, nil
+}
+
+// SDCard returns a channel that is notified whenever
+// an microSD card is inserted or removed.
+func (p *Platform) SDCard() <-chan bool {
+	return p.sdcard
 }
 
 func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
@@ -77,7 +86,7 @@ func (p *Platform) Camera(dims image.Point, frames chan gui.Frame, out <-chan gu
 	return libcamera.Open(dims, frames, out)
 }
 
-func initSDCardNotifier() error {
+func (p *Platform) initSDCardNotifier() error {
 	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
 	if err != nil {
 		return fmt.Errorf("inotify_init1: %w", err)
@@ -94,7 +103,7 @@ func initSDCardNotifier() error {
 	if _, err := os.Stat(filepath.Join(dev, sdcName)); os.IsNotExist(err) {
 		inserted = false
 	}
-	sdcard <- inserted
+	p.sdcard <- inserted
 	go func() {
 		defer f.Close()
 		// Make room for 100 events plus paths and their NUL terminator.
@@ -120,14 +129,14 @@ func initSDCardNotifier() error {
 				if name == sdcName {
 					// Empty sdcard channel.
 					select {
-					case <-sdcard:
+					case <-p.sdcard:
 					default:
 					}
 					switch {
 					case evt.Mask&unix.IN_CREATE != 0:
-						sdcard <- true
+						p.sdcard <- true
 					case evt.Mask&unix.IN_DELETE != 0:
-						sdcard <- false
+						p.sdcard <- false
 					}
 				}
 			}

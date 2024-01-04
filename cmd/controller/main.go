@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"seedhammer.com/gui"
 )
@@ -38,4 +39,8 @@ var debug = false
 
 func (p *Platform) Debug() bool {
 	return debug
+}
+
+func (p *Platform) Now() time.Time {
+	return time.Now()
 }

@@ -24,6 +24,10 @@ func (p *Platform) Input(ch chan<- gui.Event) error {
 	return nil
 }
 
+func (p *Platform) SDCard() <-chan bool {
+	return nil
+}
+
 func (p *Platform) Display() (gui.LCD, error) {
 	return nil, errors.New("Display not implemented")
 }
