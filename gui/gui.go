@@ -2337,7 +2337,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			th = &descriptorTheme
 		}
 		switch {
-		case s.seed != nil:
+		case s.seed != nil && s.method == nil && s.desc == nil:
 			m, status := s.seed.Layout(ctx, ops.Begin(), th, dims)
 			dialog := ops.End()
 			if status == ResultNone {
@@ -2345,9 +2345,9 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				return
 			}
 			s.mnemonic = m
-			s.seed = nil
 			switch status {
 			case ResultCancelled:
+				s.seed = nil
 				continue
 			}
 			valid := s.descriptor != nil
@@ -2382,7 +2382,6 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			case ResultCancelled:
 				continue
 			}
-			s.method = nil
 			desc, ok := res.(urtypes.OutputDescriptor)
 			if !ok {
 				if b, isbytes := res.([]byte); isbytes {
@@ -2397,6 +2396,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				}
 				continue
 			}
+			s.method = nil
 			desc.Title = backup.TitleString(constant.Font, desc.Title)
 			s.descriptor = &desc
 			s.desc = &DescriptorScreen{
@@ -2404,7 +2404,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				Mnemonic:   s.mnemonic,
 			}
 			continue
-		case s.method != nil:
+		case s.method != nil && s.warning == nil:
 			choice, status := s.method.Layout(ctx, ops.Begin(), th, dims, s.warning == nil)
 			dialog := ops.End()
 			switch status {
@@ -2412,7 +2412,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				dialog.Add(ops)
 				return
 			case ResultCancelled:
-				s.seed = NewSeedScreen(s.mnemonic)
+				s.method = nil
 				continue
 			}
 			switch choice {
@@ -2442,6 +2442,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			}
 			s.desc = nil
 			s.engrave = nil
+			s.seed = nil
 			continue
 		case s.desc != nil:
 			keyIdx, status := s.desc.Layout(ctx, ops.Begin(), dims)
@@ -2452,7 +2453,6 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			}
 			if status == ResultCancelled {
 				s.desc = nil
-				s.seed = NewSeedScreen(s.mnemonic)
 				continue
 			}
 			eng, err := NewEngraveScreen(ctx, *s.descriptor, keyIdx, s.mnemonic)
