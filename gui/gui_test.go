@@ -556,10 +556,6 @@ func (*testPlatform) Debug() bool {
 	return false
 }
 
-func (*testPlatform) Dump(path string, r io.Reader) error {
-	return errors.New("not implemented")
-}
-
 func ctxString(ctx *Context, str string) {
 	for _, r := range str {
 		ctx.Events(

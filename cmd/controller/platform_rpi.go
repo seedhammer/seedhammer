@@ -20,6 +20,8 @@ import (
 	"seedhammer.com/zbar"
 )
 
+var display *drm.LCD
+
 func Init() error {
 	// Ignore errors from setting up filesystems; they may already have been.
 	_ = mountFS()
@@ -38,7 +40,12 @@ func (p *Platform) ScanQR(img *image.Gray) ([][]byte, error) {
 }
 
 func (p *Platform) Display() (gui.LCD, error) {
-	return drm.Open()
+	d, err := drm.Open()
+	if err != nil {
+		return nil, err
+	}
+	display = d
+	return d, nil
 }
 
 func (p *Platform) Camera(dims image.Point, frames chan gui.Frame, out <-chan gui.Frame) func() {

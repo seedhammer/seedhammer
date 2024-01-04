@@ -28,10 +28,6 @@ func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
 	return mjolnir.Open("")
 }
 
-func (p *Platform) Dump(path string, r io.Reader) error {
-	return errors.New("not available in production")
-}
-
 func newPlatform() *Platform {
 	return new(Platform)
 }

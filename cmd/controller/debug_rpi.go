@@ -4,7 +4,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"log"
 	"os"
@@ -17,6 +20,8 @@ import (
 )
 
 const dmesg = false
+
+var screenshotCounter int
 
 func dbgInit() error {
 	s, err := openSerial("/dev/ttyGS0")
@@ -67,8 +72,16 @@ func runSerial(s io.Reader) error {
 			}
 			continue
 		}
-		if err := debugCommand(line); err != nil {
-			return err
+		switch line {
+		case "screenshot":
+			if display == nil {
+				break
+			}
+			screenshotCounter++
+			name := fmt.Sprintf("screenshot%d.png", screenshotCounter)
+			dumpImage(name, display.Framebuffer())
+		default:
+			debugCommand(line)
 		}
 	}
 }
@@ -87,7 +100,20 @@ func writeReloader(s io.Reader, binFile string, size int64) (ferr error) {
 	return err
 }
 
-func (p *Platform) Dump(path string, r io.Reader) (ferr error) {
+func dumpImage(name string, img image.Image) {
+	buf := new(bytes.Buffer)
+	if err := png.Encode(buf, img); err != nil {
+		log.Printf("screenshot: failed to encode: %v", err)
+		return
+	}
+	if err := dumpFile(name, buf); err != nil {
+		log.Printf("screenshot: %s: %v", name, err)
+		return
+	}
+	log.Printf("screenshot: dumped %s", name)
+}
+
+func dumpFile(path string, r io.Reader) (ferr error) {
 	const mntDir = "/mnt"
 	if err := os.MkdirAll(mntDir, 0o644); err != nil {
 		return fmt.Errorf("mkdir %s: %w", mntDir, err)

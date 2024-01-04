@@ -45,7 +45,7 @@ func click(btn gui.Button) {
 	}
 }
 
-func debugCommand(cmd string) error {
+func debugCommand(cmd string) {
 	switch {
 	case strings.HasPrefix(cmd, "runes "):
 		cmd = strings.ToUpper(cmd[len("runes "):])
@@ -91,13 +91,7 @@ func debugCommand(cmd string) error {
 		}
 	case cmd == "goroutines":
 		pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
-	case cmd == "screenshot":
-		inputCh <- gui.Event{
-			Button:  gui.Screenshot,
-			Pressed: true,
-		}
 	default:
 		log.Printf("debug: unrecognized command: %s", cmd)
 	}
-	return nil
 }

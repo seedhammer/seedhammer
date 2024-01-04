@@ -8,7 +8,6 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"image/png"
 	"io"
 	"log"
 	"math"
@@ -2689,7 +2688,6 @@ type Platform interface {
 	Input(ch chan<- Event) error
 	Engraver() (io.ReadWriteCloser, error)
 	Camera(size image.Point, frames chan Frame, out <-chan Frame) func()
-	Dump(path string, r io.Reader) error
 	Now() time.Time
 	SDCard() <-chan bool
 	Display() (LCD, error)
@@ -2727,8 +2725,7 @@ const (
 	Button2
 	Button3
 	// Synthetic keys only generated in debug mode.
-	Rune       // Enter rune.
-	Screenshot // Dump a screenshot to the SD card.
+	Rune // Enter rune.
 )
 
 type App struct {
@@ -2742,8 +2739,6 @@ type App struct {
 		eatButton bool
 		timeout   <-chan time.Time
 	}
-
-	screenshotCounter int
 }
 
 func NewApp(pl Platform, version string) (*App, error) {
@@ -2777,16 +2772,11 @@ func (a *App) Frame() {
 		a.root = op.Ops{}
 		a.idle.eatButton = true
 	}
-	screenshot := false
 	a.ctx.Reset()
 loop:
 	for {
 		select {
 		case e := <-a.btns:
-			if e.Button == Screenshot {
-				screenshot = true
-				break
-			}
 			if a.idle.eatButton {
 				a.idle.eatButton = false
 				break
@@ -2816,27 +2806,9 @@ loop:
 	a.lcd.Dirty(dirty)
 	drawTime := time.Now()
 	if a.ctx.Platform.Debug() {
-		if screenshot {
-			a.screenshotCounter++
-			name := fmt.Sprintf("screenshot%d.png", a.screenshotCounter)
-			dumpImage(a.ctx.Platform, name, frame)
-		}
 		log.Printf("frame: %v layout: %v render: %v draw: %v %v",
 			drawTime.Sub(start), layoutTime.Sub(start), renderTime.Sub(layoutTime), drawTime.Sub(renderTime), dirty)
 	}
-}
-
-func dumpImage(p Platform, name string, img image.Image) {
-	buf := new(bytes.Buffer)
-	if err := png.Encode(buf, img); err != nil {
-		log.Printf("screenshot: failed to encode: %v", err)
-		return
-	}
-	if err := p.Dump(name, buf); err != nil {
-		log.Printf("screenshot: %s: %v", name, err)
-		return
-	}
-	log.Printf("screenshot: dumped %s", name)
 }
 
 func (a *App) saveScreen() {
