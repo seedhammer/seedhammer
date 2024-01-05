@@ -603,10 +603,11 @@ func TestSeed(t *testing.T) {
 	if !ok {
 		t.Fatal("failed to derive master key")
 	}
-	mfp, _, err := bip32.Derive(mk, bip32.Path{0})
+	pkey, err := mk.ECPubKey()
 	if err != nil {
 		t.Fatal(err)
 	}
+	mfp := bip32.Fingerprint(pkey)
 	seedDesc := backup.Seed{
 		KeyIdx:            0,
 		Mnemonic:          m,
@@ -717,10 +718,15 @@ func fillDescriptor(t *testing.T, desc *bip380.Descriptor, path bip32.Path, seed
 		if err != nil {
 			t.Fatal(err)
 		}
-		mfp, xpub, err := bip32.Derive(mk, path)
+		xpub, err := bip32.Derive(mk, path)
 		if err != nil {
 			t.Fatal(err)
 		}
+		pkey, err := mk.ECPubKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mfp := bip32.Fingerprint(pkey)
 		pub, err := xpub.ECPubKey()
 		if err != nil {
 			t.Fatal(err)

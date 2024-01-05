@@ -284,10 +284,15 @@ func genTestPlate(t testing.TB, desc *bip380.Descriptor, path []uint32, seedlen 
 			// Ensure the master fingerprint is derived.
 			path = bip32.Path{0}
 		}
-		mfp, xpub, err := bip32.Derive(mk, path)
+		pkey, err := mk.ECPubKey()
 		if err != nil {
 			t.Fatal(err)
 		}
+		xpub, err := bip32.Derive(mk, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mfp := bip32.Fingerprint(pkey)
 		pub, err := xpub.ECPubKey()
 		if err != nil {
 			t.Fatal(err)

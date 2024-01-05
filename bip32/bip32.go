@@ -3,13 +3,16 @@
 package bip32
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 type Path []uint32
@@ -31,15 +34,18 @@ func (p Path) String() string {
 	return d.String()
 }
 
-func Derive(mk *hdkeychain.ExtendedKey, path Path) (mfp uint32, xpub *hdkeychain.ExtendedKey, err error) {
+// Fingerprint is the first 4 bytes of the RIPEMD160(SHA256(pkey)).
+func Fingerprint(pkey *secp256k1.PublicKey) uint32 {
+	mfp := btcutil.Hash160(pkey.SerializeCompressed())[:4]
+	return binary.BigEndian.Uint32(mfp)
+}
+
+func Derive(mk *hdkeychain.ExtendedKey, path Path) (xpub *hdkeychain.ExtendedKey, err error) {
 	key := mk
-	for i, p := range path {
+	for _, p := range path {
 		key, err = key.Derive(p)
 		if err != nil {
 			return
-		}
-		if i == 0 {
-			mfp = key.ParentFingerprint()
 		}
 	}
 	xpub, err = key.Neuter()

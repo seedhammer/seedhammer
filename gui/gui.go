@@ -328,7 +328,7 @@ func descriptorKeyIdx(desc *bip380.Descriptor, m bip39.Mnemonic, pass string) (i
 		return 0, false
 	}
 	for i, k := range desc.Keys {
-		_, xpub, err := bip32.Derive(mk, k.DerivationPath)
+		xpub, err := bip32.Derive(mk, k.DerivationPath)
 		if err != nil {
 			// A derivation that generates an invalid key is by itself very unlikely,
 			// but also means that the seed doesn't match this xpub.
@@ -837,10 +837,11 @@ func masterFingerprintFor(m bip39.Mnemonic, network *chaincfg.Params) (uint32, e
 	if !ok {
 		return 0, errors.New("failed to derive mnemonic master key")
 	}
-	mfp, _, err := bip32.Derive(mk, bip32.Path{0})
+	pkey, err := mk.ECPubKey()
 	if err != nil {
 		return 0, err
 	}
+	mfp := bip32.Fingerprint(pkey)
 	return mfp, nil
 }
 
