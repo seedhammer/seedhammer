@@ -5,10 +5,8 @@
 package ur
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"math/bits"
 	"strings"
 
 	"seedhammer.com/bc/bytewords"
@@ -114,39 +112,6 @@ func Split(data Data, keyIdx int) (urs []string) {
 		urs = append(urs, qr)
 	}
 	return
-}
-
-func Recoverable(data Data) bool {
-	var shares [][]string
-	for k := range data.Shards {
-		shares = append(shares, Split(data, k))
-	}
-	// Count to all bit patterns of n length, choose the ones with
-	// m bits.
-	allPerm := uint64(1)<<data.Shards - 1
-	for c := uint64(1); c <= allPerm; c++ {
-		if bits.OnesCount64(c) != data.Threshold {
-			continue
-		}
-		c := c
-		d := new(Decoder)
-		for c != 0 {
-			share := bits.TrailingZeros64(c)
-			c &^= 1 << share
-			for _, ur := range shares[share] {
-				d.Add(ur)
-			}
-		}
-		_, enc, err := d.Result()
-		if err != nil {
-			return false
-		}
-		if enc == nil {
-			return false
-		}
-		return bytes.Equal(enc, data.Data)
-	}
-	return true
 }
 
 func Encode(_type string, message []byte, seqNum, seqLen int) string {

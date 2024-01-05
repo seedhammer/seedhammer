@@ -1,8 +1,10 @@
 package ur
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
+	"math/bits"
 	"slices"
 	"strings"
 	"testing"
@@ -140,10 +142,43 @@ func TestSplit(t *testing.T) {
 					Threshold: m,
 					Shards:    n,
 				}
-				if !Recoverable(data) {
+				if !recoverable(data) {
 					t.Errorf("%d-of-%d: failed to recover", m, n)
 				}
 			}
 		})
 	}
+}
+
+func recoverable(data Data) bool {
+	var shares [][]string
+	for k := range data.Shards {
+		shares = append(shares, Split(data, k))
+	}
+	// Count to all bit patterns of n length, choose the ones with
+	// m bits.
+	allPerm := uint64(1)<<data.Shards - 1
+	for c := uint64(1); c <= allPerm; c++ {
+		if bits.OnesCount64(c) != data.Threshold {
+			continue
+		}
+		c := c
+		d := new(Decoder)
+		for c != 0 {
+			share := bits.TrailingZeros64(c)
+			c &^= 1 << share
+			for _, ur := range shares[share] {
+				d.Add(ur)
+			}
+		}
+		_, enc, err := d.Result()
+		if err != nil {
+			return false
+		}
+		if enc == nil {
+			return false
+		}
+		return bytes.Equal(enc, data.Data)
+	}
+	return true
 }
