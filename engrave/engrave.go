@@ -3,23 +3,35 @@
 package engrave
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/draw"
 	"iter"
 	"math"
-	"math/rand"
 	"slices"
+	"sort"
+	"time"
+	"unicode/utf8"
 
-	"github.com/seedhammer/kortschak-qr"
-	"seedhammer.com/bresenham"
+	qr "github.com/seedhammer/kortschak-qr"
+	"seedhammer.com/bezier"
+	"seedhammer.com/bspline"
 	"seedhammer.com/font/vector"
 )
+
+// StepperConfig is a configuration for a [Stepper].
+type StepperConfig struct {
+	// Move speed in steps/second.
+	Speed uint
+	// EngraveSpeed in steps/second.
+	EngravingSpeed uint
+	// Acceleration (and deceleration) in steps/second².
+	Acceleration uint
+	// Jerk, the change in acceleration, in steps/second³.
+	Jerk uint
+	// Engraver ticks per second. A tick represents the duration
+	// of a completed pio step.
+	TicksPerSecond uint
+}
 
 // Params decribe the physical characteristics of an
 // engraver.
@@ -28,6 +40,7 @@ type Params struct {
 	StrokeWidth int
 	// A Millimeter measured in machine units.
 	Millimeter int
+	StepperConfig
 }
 
 func (p Params) F(v float32) int {
@@ -38,32 +51,152 @@ func (p Params) I(v int) int {
 	return p.Millimeter * v
 }
 
-// Plan is an iterator over the commands of an engraving.
-type Plan iter.Seq[Command]
+// Engraving is an iterator over the commands of an engraving.
+type Engraving = iter.Seq[Command]
 
 type Command struct {
-	Line  bool
-	Coord image.Point
+	kind cmdKind
+	args [3]uint
 }
 
-func Commands(plans ...Plan) Plan {
-	return func(yield func(Command) bool) {
-		for _, p := range plans {
-			for c := range p {
-				if !yield(c) {
-					return
-				}
-			}
-		}
+// splineKnot represents a control point in a uniform
+// b-spline.
+type splineKnot struct {
+	Engrave      bool
+	Knot         bezier.Point
+	Multiplicity int
+}
+
+type cmdKind uint8
+
+const (
+	moveCmd cmdKind = iota
+	lineCmd
+	delayCmd
+)
+
+func (c Command) AsDelay() (denom, nom uint, ok bool) {
+	switch c.kind {
+	case delayCmd:
+	default:
+		return 0, 0, false
 	}
+	return uint(c.args[0]), uint(c.args[1]), true
+}
+
+func (c Command) AsKnot() (splineKnot, bool) {
+	line := false
+	switch c.kind {
+	case moveCmd:
+	case lineCmd:
+		line = true
+	default:
+		return splineKnot{}, false
+	}
+	return splineKnot{
+		Engrave: line,
+		Knot: bezier.Point{
+			X: int(c.args[0]),
+			Y: int(c.args[1]),
+		},
+		Multiplicity: int(c.args[2]),
+	}, true
+}
+
+type Transform struct {
+	Yield func(Command) bool
+	stack *transformStack
+	slot  int
+	id    int
+}
+
+func NewTransform(yield func(Command) bool) Transform {
+	s := new(transformStack)
+	s.yield = func(c Command) bool {
+		if !s.done {
+			switch c.kind {
+			case moveCmd, lineCmd:
+				p := bezier.Pt(int(c.args[0]), int(c.args[1]))
+				coord := s.transform(p)
+				c.args[0], c.args[1] = uint(coord.X), uint(coord.Y)
+			}
+			s.done = !yield(c)
+		}
+		return !s.done
+	}
+	s.stack = append(s.stack, transformSlot{t: offsetting(0, 0)})
+	return Transform{stack: s, Yield: s.yield}
+}
+
+type transformStack struct {
+	stack []transformSlot
+	id    int
+	yield func(Command) bool
+	done  bool
+}
+
+type transformSlot struct {
+	t  transform
+	id int
+}
+
+func (s *transformStack) transform(p bezier.Point) bezier.Point {
+	var t transform
+	if n := len(s.stack); n > 0 {
+		t = s.stack[n-1].t
+	}
+	return t.transform(p)
+}
+
+func (s *transformStack) push(id, slot int, t transform) Transform {
+	if s.stack[slot].id != id {
+		panic("transform was popped")
+	}
+	t0 := s.stack[slot].t
+	e := transformSlot{
+		id: s.id,
+		t:  t0.Mul(t),
+	}
+	slot++
+	s.stack = append(s.stack[:slot], e)
+	s.id++
+	return Transform{
+		stack: s,
+		slot:  slot,
+		id:    e.id,
+		Yield: s.yield,
+	}
+}
+
+func (t Transform) Scale(sx, sy int) Transform {
+	return t.push(scaling(sx, sy))
+}
+
+func (t Transform) Offset(x, y int) Transform {
+	return t.push(offsetting(x, y))
+}
+
+func (t Transform) Rotate(radians float64) Transform {
+	return t.push(rotating(radians))
+}
+
+func (t Transform) push(tr transform) Transform {
+	return t.stack.push(t.id, t.slot, tr)
 }
 
 type transform [6]int
 
-func (m transform) transform(p image.Point) image.Point {
-	return image.Point{
+func (m transform) transform(p bezier.Point) bezier.Point {
+	return bezier.Point{
 		X: p.X*m[0] + p.Y*m[1] + m[2],
 		Y: p.X*m[3] + p.Y*m[4] + m[5],
+	}
+}
+
+func (m transform) Mul(m2 transform) transform {
+	return transform{
+		m[0]*m2[0] + m[1]*m2[3], m[0]*m2[1] + m[1]*m2[4], m[0]*m2[2] + m[1]*m2[5] + m[2],
+		m[3]*m2[0] + m[4]*m2[3], m[3]*m2[1] + m[4]*m2[4], m[3]*m2[2] + m[4]*m2[5] + m[5],
 	}
 }
 
@@ -90,10 +223,50 @@ func scaling(sx, sy int) transform {
 	}
 }
 
-func transformPlan(t transform, p Plan) Plan {
-	return func(yield func(Command) bool) {
-		for c := range p {
-			c.Coord = t.transform(c.Coord)
+func DelayMove(yield func(Command) bool, conf StepperConfig, t uint, from, to bezier.Point) bool {
+	dur := timeMove(conf, ManhattanDist(from, to))
+	return yield(Delay(dur, t)) &&
+		yield(Move(to))
+}
+
+func Delay(denom, nom uint) Command {
+	c := Command{
+		kind: delayCmd,
+	}
+	c.args[0] = uint(denom)
+	c.args[1] = uint(nom)
+	return c
+}
+
+func ControlPoint(engrave bool, ctrl bezier.Point) Command {
+	c := Command{kind: moveCmd}
+	if engrave {
+		c.kind = lineCmd
+	}
+	c.args[0], c.args[1], c.args[2] = uint(ctrl.X), uint(ctrl.Y), 1
+	return c
+}
+
+func Move(p bezier.Point) Command {
+	c := Command{
+		kind: moveCmd,
+	}
+	c.args[0], c.args[1], c.args[2] = uint(p.X), uint(p.Y), 3
+	return c
+}
+
+func Line(p bezier.Point) Command {
+	c := Command{
+		kind: lineCmd,
+	}
+	c.args[0], c.args[1], c.args[2] = uint(p.X), uint(p.Y), 3
+	return c
+}
+
+func DryRun(s bspline.Curve) bspline.Curve {
+	return func(yield func(bspline.Knot) bool) {
+		for c := range s {
+			c.Engrave = false
 			if !yield(c) {
 				return
 			}
@@ -101,46 +274,11 @@ func transformPlan(t transform, p Plan) Plan {
 	}
 }
 
-func Scale(sx, sy int, cmd Plan) Plan {
-	return transformPlan(scaling(sx, sy), cmd)
-}
-
-func Offset(x, y int, cmd Plan) Plan {
-	return transformPlan(offsetting(x, y), cmd)
-}
-
-func Rotate(radians float64, cmd Plan) Plan {
-	return transformPlan(rotating(radians), cmd)
-}
-
-func Move(p image.Point) Command {
-	return Command{
-		Line:  false,
-		Coord: p,
-	}
-}
-
-func Line(p image.Point) Command {
-	return Command{
-		Line:  true,
-		Coord: p,
-	}
-}
-
-func DryRun(p Plan) Plan {
-	return func(yield func(Command) bool) {
-		for c := range p {
-			c.Line = false
-			if !yield(c) {
-				return
-			}
-		}
-	}
-}
-
-func QR(strokeWidth int, scale int, qr *qr.Code) Plan {
+func QR(strokeWidth int, scale int, qr *qr.Code) Engraving {
 	return func(yield func(Command) bool) {
 		dim := qr.Size
+		cont := true
+		radius := strokeWidth / 2
 		for y := 0; y < dim; y++ {
 			for i := 0; i < scale; i++ {
 				draw := false
@@ -148,16 +286,14 @@ func QR(strokeWidth int, scale int, qr *qr.Code) Plan {
 				line := y*scale + i
 				// Swap direction every other line.
 				rev := line%2 != 0
-				radius := strokeWidth / 2
+				off := radius
 				if rev {
-					radius = -radius
+					off = -off
 				}
 				drawLine := func(endx int) {
-					start := image.Pt(firstx*scale*strokeWidth+radius, line*strokeWidth)
-					end := image.Pt(endx*scale*strokeWidth-radius, line*strokeWidth)
-					if !yield(Move(start)) || !yield(Line(end)) {
-						return
-					}
+					start := bezier.Pt(firstx*scale*strokeWidth+off, line*strokeWidth+radius)
+					end := bezier.Pt(endx*scale*strokeWidth-off, line*strokeWidth+radius)
+					cont = cont && yield(Move(start)) && yield(Line(end))
 					draw = false
 				}
 				for x := -1; x <= dim; x++ {
@@ -181,130 +317,141 @@ func QR(strokeWidth int, scale int, qr *qr.Code) Plan {
 	}
 }
 
-// qrMoves is the exact number of qrMoves before engraving
+// qrMovesPerModule is the exact number of qrMovesPerModule before engraving
 // a constant time QR module.
-const qrMoves = 4
+const qrMovesPerModule = 4
 
-// constantTimeQRModeuls returns the exact number of modules in a constant
-// time QR code, given its version.
+// qrMove represent a move up to [qrMovesPerModule] far.
+type qrMove struct {
+	m uint8
+}
+
+func (m qrMove) Point() bezier.Point {
+	return bezier.Point{
+		X: int(m.m&0b1111) - qrMovesPerModule,
+		Y: int(m.m>>4) - qrMovesPerModule,
+	}
+}
+
+// constantQRMove computes a list of moves from the origin to target.
+func constantQRMove(target bezier.Point) qrMove {
+	m := qrMove{
+		m: (uint8(target.X+qrMovesPerModule) & 0b1111) | uint8(target.Y+qrMovesPerModule)<<4,
+	}
+	if m.Point() != target {
+		panic("move too far")
+	}
+	return m
+}
+
+// constantTimeQRModules returns the exact number of modules in a constant
+// time QR code, given its dimension.
 func constantTimeQRModules(dims int) int {
 	// The numbers below are maximum numbers found through fuzzing.
 	// Add a bit more to account for outliers not yet found.
 	const extra = 5
 	switch dims {
 	case 21:
-		return 163 + extra
+		return 166 + extra
 	case 25:
 		return 261 + extra
 	case 29:
-		return 385 + extra
+		return 386 + extra
+	case 33:
+		return 542 + extra
 	}
 	// Not supported, return a low number to force error.
 	return 0
 }
 
-func constantTimeStartEnd(dim int) (start, end image.Point) {
-	return image.Pt(8+qrMoves, dim-1-qrMoves), image.Pt(dim-1-3, 3)
+func constantTimeStartEnd(dim int) (start, end bezier.Point) {
+	return bezier.Pt(8+qrMovesPerModule, dim-1-qrMovesPerModule), bezier.Pt(dim-1-3, 3)
 }
 
 func bitmapForQR(qr *qr.Code) bitmap {
 	dim := qr.Size
-	bm := NewBitmap(dim, dim)
+	bm := newBitmap(dim, dim)
 	for y := 0; y < dim; y++ {
 		for x := 0; x < dim; x++ {
 			if qr.Black(x, y) {
-				bm.Set(image.Pt(x, y))
+				bm.Set(bezier.Pt(x, y))
 			}
 		}
 	}
 	return bm
 }
 
-func bitmapForQRStatic(dim int) ([]image.Point, []image.Point, bitmap) {
-	engraved := NewBitmap(dim, dim)
+func bitmapForQRStatic(dim int) ([]bezier.Point, []bezier.Point) {
 	// First 3 position markers.
-	posMarkers := []image.Point{
-		{0, 0},
-		{dim - 7, 0},
-		{0, dim - 7},
+	posMarkers := []bezier.Point{
+		{},
+		{X: dim - 7},
+		{Y: dim - 7},
 	}
-	for _, p := range posMarkers {
-		fillMarker(engraved, p, positionMarker)
-	}
-	// Ignore aligment markers.
-	var alignMarkers []image.Point
+	var alignMarkers []bezier.Point
 	switch dim {
 	case 21:
 		// No marker.
-	case 25:
-		alignMarkers = append(alignMarkers, image.Pt(16, 16))
-	case 29:
-		alignMarkers = append(alignMarkers, image.Pt(20, 20))
+	case 25, 29, 33:
+		// Single marker.
+		alignMarkers = append(alignMarkers, bezier.Pt(dim-9, dim-9))
 	default:
 		panic("unsupported qr code version")
 	}
-	for _, p := range alignMarkers {
-		fillMarker(engraved, p, alignmentMarker)
-	}
-	return posMarkers, alignMarkers, engraved
+	return posMarkers, alignMarkers
 }
 
 // ConstantQR is like QR that engraves the QR code in a pattern independent of content,
 // except for the QR code version (size).
-func ConstantQR(strokeWidth, scale int, qrc *qr.Code) (Plan, error) {
-	c, err := constantQR(strokeWidth, scale, qrc)
-	if err != nil {
-		return nil, err
-	}
-	return c.engrave(), nil
-}
-
-func constantQR(strokeWidth, scale int, qrc *qr.Code) (*constantQRCmd, error) {
+func ConstantQR(qrc *qr.Code) (*ConstantQRCmd, error) {
 	dim := qrc.Size
 	qr := bitmapForQR(qrc)
+	engraved := newBitmap(dim, dim)
+	posMarkers, alignMarkers := bitmapForQRStatic(dim)
 	// No need to engrave static features of the QR code.
-	posMarkers, alignMarkers, engraved := bitmapForQRStatic(dim)
+	for _, p := range posMarkers {
+		fillMarker(engraved, p, positionMarker)
+	}
+	for _, p := range alignMarkers {
+		fillMarker(engraved, p, alignmentMarker)
+	}
 	// Start in the lower-left corner.
-	pos := image.Pt(0, dim-1)
+	pos := bezier.Pt(0, dim-1)
 	// Iterating forward.
 	dir := 1
 	start, end := constantTimeStartEnd(dim)
+	needle := start
 	nmod := constantTimeQRModules(dim)
-	modules := make([]image.Point, 0, nmod)
+	modules := make([]qrMove, 0, nmod)
 	waste := 0
-	engrave := func(p image.Point) {
-		modules = append(modules, p)
+	engrave := func(p bezier.Point) {
+		m := constantQRMove(p.Sub(needle))
+		modules = append(modules, m)
+		needle = p
 		if engraved.Get(p) {
 			waste++
 		} else {
 			engraved.Set(p)
 		}
 	}
-	visited := NewBitmap(dim, dim)
-	move := func(p image.Point) error {
-		// Find path to a module close enough to pos.
+	visited := newBitmap(dim, dim)
+	// Find path to a module close enough to p.
+	move := func(p bezier.Point) error {
 		clear(visited.bits)
-		needle := start
-		if len(modules) > 0 {
-			needle = modules[len(modules)-1]
-		}
+		visited.Set(needle)
 		path, ok := findPath(nil, visited, qr, engraved, p, needle)
 		if !ok {
 			return errors.New("QR modules spaced too far for constant time engraving")
 		}
 		for _, m := range path {
-			engrave(m)
+			engrave(needle.Add(m.Point()))
 		}
 		return nil
 	}
 	for pos.Y >= 0 {
 		if qr.Get(pos) && !engraved.Get(pos) {
-			needle := start
-			if len(modules) > 0 {
-				needle = modules[len(modules)-1]
-			}
 			dist := ManhattanDist(pos, needle)
-			if dist > qrMoves {
+			if dist > qrMovesPerModule {
 				if err := move(pos); err != nil {
 					return nil, err
 				}
@@ -323,54 +470,18 @@ func constantQR(strokeWidth, scale int, qrc *qr.Code) (*constantQRCmd, error) {
 	if err := move(end); err != nil {
 		return nil, err
 	}
-	if len(modules) >= nmod {
+	if len(modules) > nmod {
 		return nil, fmt.Errorf("too many dims %d QR modules for constant time engraving n: %d waste: %d",
 			dim, len(modules), waste)
 	}
-	modules = padQRModules(nmod, qrc, modules)
-	cmd := &constantQRCmd{
-		start:       start,
-		end:         end,
-		strokeWidth: strokeWidth,
-		scale:       scale,
-		plan:        modules,
+	cmd := &ConstantQRCmd{
+		Size: dim,
+		plan: modules,
 	}
-	// Verify constant-ness without the static markers.
-	if !isConstantQR(cmd, dim) {
-		panic("constant QR engraving is not constant")
-	}
-	cmd.posMarkers = posMarkers
-	cmd.alignMarkers = alignMarkers
 	return cmd, nil
 }
 
-// padQRModules pads modules with extra engravings up to n modules.
-func padQRModules(n int, qrc *qr.Code, modules []image.Point) []image.Point {
-	// Distribute the extra modules randomly as repeats of existing
-	// modules.
-	extra := n - len(modules)
-	mac := hmac.New(sha256.New, []byte("seedhammer constant qr"))
-	mac.Write(qrc.Bitmap)
-	sum := mac.Sum(nil)
-	seed := int64(binary.BigEndian.Uint64(sum))
-	r := rand.New(rand.NewSource(seed))
-	counts := make([]int, len(modules))
-	for i := 0; i < extra; i++ {
-		idx := r.Intn(len(counts))
-		counts[idx]++
-	}
-	var paddedModules []image.Point
-	for i, m := range modules {
-		// Engrave once plus extra.
-		c := 1 + counts[i]
-		for j := 0; j < c; j++ {
-			paddedModules = append(paddedModules, m)
-		}
-	}
-	return paddedModules
-}
-
-var alignmentMarker = []image.Point{
+var alignmentMarker = []bezier.Point{
 	{X: 0, Y: 0},
 	{X: 1, Y: 0},
 	{X: 2, Y: 0},
@@ -394,7 +505,7 @@ var alignmentMarker = []image.Point{
 	{X: 2, Y: 2},
 }
 
-var positionMarker = []image.Point{
+var positionMarker = []bezier.Point{
 	{X: 0, Y: 0},
 	{X: 1, Y: 0},
 	{X: 2, Y: 0},
@@ -434,29 +545,36 @@ var positionMarker = []image.Point{
 	{X: 4, Y: 4},
 }
 
-func fillMarker(engraved bitmap, off image.Point, points []image.Point) {
+func fillMarker(engraved bitmap, off bezier.Point, points []bezier.Point) {
 	for _, p := range points {
 		p = p.Add(off)
 		engraved.Set(p)
 	}
 }
 
-func findPath(modules []image.Point, visited, qr, engraved bitmap, to, from image.Point) ([]image.Point, bool) {
-	if ManhattanDist(from, to) <= qrMoves {
+func findPath(modules []qrMove, visited, qr, engraved bitmap, to, from bezier.Point) ([]qrMove, bool) {
+	if ManhattanDist(from, to) <= qrMovesPerModule {
 		return modules, true
 	}
-	candidates := make([]image.Point, 0, qrMoves*qrMoves)
-	for y := -qrMoves; y <= qrMoves; y++ {
-		for x := -qrMoves; x <= qrMoves; x++ {
-			p := from.Add(image.Pt(x, y))
+	// The maximum number of positions is the manhattan square reachable
+	// from the starting point. Subtract 1 for the center which is always
+	// marked visible.
+	const nmoves = (2*qrMovesPerModule+1)*(2*qrMovesPerModule+1) - 1
+	candidates := make([]qrMove, 0, nmoves)
+	for y := -qrMovesPerModule; y <= qrMovesPerModule; y++ {
+		for x := -qrMovesPerModule; x <= qrMovesPerModule; x++ {
+			m := constantQRMove(bezier.Pt(x, y))
+			p := from.Add(m.Point())
 			if !qr.Get(p) || visited.Get(p) {
 				continue
 			}
 			visited.Set(p)
-			candidates = append(candidates, p)
+			candidates = append(candidates, m)
 		}
 	}
-	slices.SortFunc(candidates, func(pi, pj image.Point) int {
+	slices.SortFunc(candidates, func(mi, mj qrMove) int {
+		pi := from.Add(mi.Point())
+		pj := from.Add(mj.Point())
 		di, dj := ManhattanDist(pi, to), ManhattanDist(pj, to)
 		if di == dj {
 			// Equal distance; prefer the un-engraved path.
@@ -468,8 +586,9 @@ func findPath(modules []image.Point, visited, qr, engraved bitmap, to, from imag
 		}
 		return di - dj
 	})
-	for _, p := range candidates {
-		path, ok := findPath(append(modules, p), visited, qr, engraved, to, p)
+	for _, m := range candidates {
+		p := from.Add(m.Point())
+		path, ok := findPath(append(modules, m), visited, qr, engraved, to, p)
 		if ok {
 			return path, true
 		}
@@ -477,533 +596,723 @@ func findPath(modules []image.Point, visited, qr, engraved bitmap, to, from imag
 	return nil, false
 }
 
-type constantQRCmd struct {
-	strokeWidth int
-	scale       int
-
-	start, end   image.Point
-	posMarkers   []image.Point
-	alignMarkers []image.Point
-	plan         []image.Point
+// ConstantQRCmd represents the constant time plan for engraving a QR
+// code.
+type ConstantQRCmd struct {
+	// The QR dimension.
+	Size int
+	// The list of moves.
+	plan []qrMove
 }
 
-func (q constantQRCmd) engraveAlignMarker(off image.Point) Plan {
-	return func(yield func(Command) bool) {
-		for _, m := range alignmentMarker {
-			center := q.centerOf(m.Add(off))
-			if !yield(Move(center)) {
-				return
-			}
-			for !q.engraveModule(yield, center) {
-				return
-			}
-		}
-	}
-}
-
-func (q constantQRCmd) engravePositionMarker(off image.Point) Plan {
-	return func(yield func(Command) bool) {
-		for _, m := range positionMarker {
-			center := q.centerOf(m.Add(off))
-			if !yield(Move(center)) {
-				return
-			}
-			if !q.engraveModule(yield, center) {
-				return
-			}
-		}
-	}
-}
-
-func (q constantQRCmd) centerOf(p image.Point) image.Point {
-	sw := q.strokeWidth
+func centerOf(sw, scale int, p bezier.Point) bezier.Point {
 	radius := sw / 2
-	return image.Point{
-		X: radius + (p.X*q.scale+1)*sw,
-		Y: radius + (p.Y*q.scale+1)*sw,
-	}
+	return p.Mul(scale).Add(bezier.Pt(1, 1)).Mul(sw).Add(bezier.Pt(radius, radius))
 }
 
-func (q constantQRCmd) engrave() Plan {
+func (q ConstantQRCmd) Engrave(conf StepperConfig, strokeWidth, scale int) Engraving {
 	return func(yield func(Command) bool) {
 		cont := true
-		for _, off := range q.posMarkers {
-			for c := range q.engravePositionMarker(off) {
-				cont = cont && yield(c)
+		posMarkers, alignMarkers := bitmapForQRStatic(q.Size)
+		start, end := constantTimeStartEnd(q.Size)
+		for _, off := range posMarkers {
+			for _, m := range positionMarker {
+				center := centerOf(strokeWidth, scale, m.Add(off))
+				cont = cont && yield(Move(center)) &&
+					engraveModule(yield, strokeWidth, scale, center)
 			}
 		}
-		for _, off := range q.alignMarkers {
-			for c := range q.engraveAlignMarker(off) {
-				cont = cont && yield(c)
+		for _, off := range alignMarkers {
+			for _, m := range alignmentMarker {
+				center := centerOf(strokeWidth, scale, m.Add(off))
+				cont = cont && yield(Move(center)) &&
+					engraveModule(yield, strokeWidth, scale, center)
 			}
 		}
-		sw := q.strokeWidth
-		prev := q.centerOf(q.start)
-		cont = cont && yield(Move(prev))
-		moveDist := qrMoves * sw * q.scale
-		for _, m := range q.plan {
-			center := q.centerOf(m)
-			cont = cont && constantMove(yield, center, prev, moveDist)
-			prev = center
-			cont = cont && q.engraveModule(yield, center)
-			cont = cont && yield(Line(center))
+		needle := start
+		cont = cont && yield(Move(centerOf(strokeWidth, scale, needle)))
+		maxDur := timeMove(conf, qrMovesPerModule*strokeWidth*scale)
+		nmod := constantTimeQRModules(q.Size)
+		// len(q.plan) is generally less than nmod, the constant number of
+		// modules to engrave. Accumulate fractions in units of 1/nmod where
+		// each q.plan module contributes len(q.plan) fractions. Advance
+		// the plan when the accumulated fraction is >= 1.
+		accum := 0
+		plan := q.plan
+		advance := true
+		for range nmod {
+			var move bezier.Point
+			if advance {
+				move = plan[0].Point()
+			}
+			from := centerOf(strokeWidth, scale, needle)
+			needle = needle.Add(move)
+			to := centerOf(strokeWidth, scale, needle)
+			cont = cont && DelayMove(yield, conf, maxDur, from, to) &&
+				engraveModule(yield, strokeWidth, scale, to) &&
+				yield(Line(to))
+			accum += len(q.plan)
+			advance = accum >= nmod
+			if advance {
+				accum -= nmod
+				plan = plan[1:]
+			}
 		}
-		end := q.centerOf(q.end)
-		cont = cont && constantMove(yield, end, prev, moveDist)
+		// Move to end point.
+		from := centerOf(strokeWidth, scale, needle)
+		needle = end
+		to := centerOf(strokeWidth, scale, needle)
+		cont = cont && DelayMove(yield, conf, maxDur, from, to)
 	}
 }
 
-func (q constantQRCmd) engraveModule(yield cmdYielder, center image.Point) bool {
-	sw := q.strokeWidth
-	switch q.scale {
+func engraveModule(yield func(Command) bool, sw, scale int, center bezier.Point) bool {
+	switch scale {
 	case 3:
-		return yield(Line(center.Add(image.Pt(sw, 0)))) &&
-			yield(Line(center.Add(image.Pt(sw, sw)))) &&
-			yield(Line(center.Add(image.Pt(-sw, sw)))) &&
-			yield(Line(center.Add(image.Pt(-sw, -sw)))) &&
-			yield(Line(center.Add(image.Pt(sw, -sw))))
+		return yield(Line(center.Add(bezier.Pt(sw, 0)))) &&
+			yield(Line(center.Add(bezier.Pt(sw, sw)))) &&
+			yield(Line(center.Add(bezier.Pt(-sw, sw)))) &&
+			yield(Line(center.Add(bezier.Pt(-sw, -sw)))) &&
+			yield(Line(center.Add(bezier.Pt(sw, -sw))))
 	case 4:
-		return yield(Line(center.Add(image.Pt(-sw, 0)))) &&
-			yield(Line(center.Add(image.Pt(-sw, -sw)))) &&
-			yield(Line(center.Add(image.Pt(2*sw, -sw)))) &&
-			yield(Line(center.Add(image.Pt(2*sw, 2*sw)))) &&
-			yield(Line(center.Add(image.Pt(-sw, 2*sw)))) &&
-			yield(Line(center.Add(image.Pt(-sw, sw)))) &&
-			yield(Line(center.Add(image.Pt(sw, sw)))) &&
-			yield(Line(center.Add(image.Pt(sw, 0))))
+		return yield(Line(center.Add(bezier.Pt(-sw, 0)))) &&
+			yield(Line(center.Add(bezier.Pt(-sw, -sw)))) &&
+			yield(Line(center.Add(bezier.Pt(2*sw, -sw)))) &&
+			yield(Line(center.Add(bezier.Pt(2*sw, 2*sw)))) &&
+			yield(Line(center.Add(bezier.Pt(-sw, 2*sw)))) &&
+			yield(Line(center.Add(bezier.Pt(-sw, sw)))) &&
+			yield(Line(center.Add(bezier.Pt(sw, sw)))) &&
+			yield(Line(center.Add(bezier.Pt(sw, 0))))
 	default:
 		panic("unsupported module scale")
 	}
 }
 
-func ManhattanDist(p1, p2 image.Point) int {
+func ManhattanDist(p1, p2 bezier.Point) int {
 	return manhattanLen(p1.Sub(p2))
 }
 
-func manhattanLen(v image.Point) int {
+func manhattanLen(v bezier.Point) int {
 	if v.X < 0 {
 		v.X = -v.X
 	}
 	if v.Y < 0 {
 		v.Y = -v.Y
 	}
-	if v.X > v.Y {
-		return v.X
-	} else {
-		return v.Y
-	}
+	return int(max(v.X, v.Y))
 }
 
 type bitmap struct {
 	w    int
-	bits []uint32
+	bits []uint64
 }
 
-func NewBitmap(w, h int) bitmap {
-	if w > 32 {
+func newBitmap(w, h int) bitmap {
+	if w > 64 {
 		panic("bitset too wide")
 	}
 	return bitmap{
 		w:    w,
-		bits: make([]uint32, h),
+		bits: make([]uint64, h),
 	}
 }
 
-func (b bitmap) Set(p image.Point) {
-	if p.X < 0 || p.Y < 0 || p.X >= b.w || p.Y >= len(b.bits) {
+func (b bitmap) Set(p bezier.Point) {
+	if p.X < 0 || p.Y < 0 || p.X >= b.w || int(p.Y) >= len(b.bits) {
 		panic("out of range")
 	}
 	b.bits[p.Y] |= 1 << p.X
 }
 
-func (b bitmap) Get(p image.Point) bool {
-	if p.X < 0 || p.Y < 0 || p.X >= b.w || p.Y >= len(b.bits) {
+func (b bitmap) Get(p bezier.Point) bool {
+	if p.X < 0 || p.Y < 0 || p.X >= b.w || int(p.Y) >= len(b.bits) {
 		return false
 	}
 	return b.bits[p.Y]&(1<<p.X) != 0
 }
 
-type Rect image.Rectangle
+type Rect bspline.Bounds
 
 func (r Rect) Engrave(yield func(Command) bool) {
 	_ = yield(Move(r.Min)) &&
-		yield(Line(image.Pt(r.Max.X, r.Min.Y))) &&
+		yield(Line(bezier.Point{X: r.Max.X, Y: r.Min.Y})) &&
 		yield(Line(r.Max)) &&
-		yield(Line(image.Pt(r.Min.X, r.Max.Y))) &&
+		yield(Line(bezier.Point{X: r.Min.X, Y: r.Max.Y})) &&
 		yield(Line(r.Min))
 }
 
-const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+const constantAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 // ConstantStringer can engrave text in a timing insensitive way.
 type ConstantStringer struct {
-	moveDist    int
-	finalDist   int
-	engraveDist int
-	longest     int
-	wordStart   image.Point
-	wordEnd     image.Point
-	dims        image.Point
-	alphabet    [len(alphabet)]constantRune
+	face *vector.Face
+	// runeDuration is the duration of the longest rune.
+	runeDuration uint
+	// center is the starting position.
+	center bezier.Point
+	// startEndDist is the longest distance between a rune start and end
+	// points.
+	startEndDist int
+	// advDist is the face advance in steps.
+	advDist int
+	// em is the font size.
+	em       int
+	alphabet []constantRune
+	conf     StepperConfig
 }
 
 type constantRune struct {
-	path []image.Point
+	R    rune
+	Info constantPlan
 }
 
-func engraveConstantRune(yield func(Command), face *vector.Face, em int, r rune) image.Point {
-	m := face.Metrics()
-	adv, segs, found := face.Decode(r)
-	if !found {
-		panic(fmt.Errorf("unsupported rune: %s", string(r)))
-	}
-	pos := image.Pt(0, int(m.Ascent)*em/int(m.Height))
-	for {
-		seg, ok := segs.Next()
-		if !ok {
-			break
-		}
-		p1 := image.Point{
-			X: seg.Arg.X * em / int(m.Height),
-			Y: seg.Arg.Y * em / int(m.Height),
-		}
-		switch seg.Op {
-		case vector.SegmentOpMoveTo:
-			yield(Move(pos.Add(p1)))
-		case vector.SegmentOpLineTo:
-			yield(Line(pos.Add(p1)))
-		default:
-			panic("constant rune has unsupported segment type")
-		}
-	}
-	return image.Pt(adv*em/int(m.Height), em)
+type constantPlan struct {
+	Duration   uint
+	Start, End bezier.Point
 }
 
-func NewConstantStringer(face *vector.Face, em int, shortest, longest int) *ConstantStringer {
-	var runes []*collectProgram
-	cs := &ConstantStringer{
-		longest: longest,
-	}
-	// Collects path for every letter.
-	for _, r := range alphabet {
-		c := new(collectProgram)
-		cs.dims = engraveConstantRune(c.Command, face, em, r)
-		if c.len > cs.engraveDist {
-			cs.engraveDist = c.len
-		}
-		runes = append(runes, c)
-	}
-	// We rely on the advance being even so there is equal
-	// distance from either edge to the center.
-	if cs.dims.X%2 == 1 {
-		cs.dims.X--
-	}
-	// Expand letters to match the longest letter.
-	suffix := longest - shortest
-	// end in the center of the rune between the shortest and
-	// longest string. Minimizes the final movement.
-	cs.finalDist = suffix * cs.dims.X / 2
-	endx := shortest*cs.dims.X + cs.finalDist
-	cs.wordStart = image.Pt(0, cs.dims.Y/2)
-	cs.wordEnd = image.Pt(endx, cs.dims.Y/2)
-	center := image.Pt(cs.dims.X/2, cs.dims.Y/2)
-	for i, r := range alphabet {
-		c := runes[i]
-		path := c.path
-		last := len(path) - 1
-		n := c.len
-		// Trace backwards, starting from the end.
-		idx := last
-		dir := -1
-		for n != cs.engraveDist {
-			idx += dir
-			needle := path[len(path)-1]
-			p := path[idx]
-			dist := ManhattanDist(needle, p)
-			// Shorten path segment if required.
-			if overflow := n + dist - cs.engraveDist; overflow > 0 {
-				d := p.Sub(needle)
-				abs := d
-				if abs.X < 0 {
-					abs.X = -abs.X
-				}
-				if abs.Y < 0 {
-					abs.Y = -abs.Y
-				}
-				if abs.X >= abs.Y {
-					// X determines manhattan distance, shorten it
-					// by overflow.
-					signx := d.X / abs.X
-					d.X -= overflow * signx
-					// Shorten Y proportionally.
-					d.Y -= overflow * d.Y / abs.X
-				} else {
-					// Vice versa.
-					signy := d.Y / abs.Y
-					d.Y -= overflow * signy
-					d.X -= overflow * d.X / abs.Y
-				}
-				p = needle.Add(d)
-				dist -= overflow
-			}
-			n += dist
-			path = append(path, p)
-			if idx == 0 || idx == last {
-				dir = -dir
-			}
-		}
-		cs.alphabet[r-'A'] = constantRune{
-			path: path,
-		}
-		start, end := path[0], path[len(path)-1]
-		if d := ManhattanDist(center, start); d > cs.moveDist {
-			cs.moveDist = d
-		}
-		if d := ManhattanDist(center, end); d > cs.moveDist {
-			cs.moveDist = d
-		}
-	}
-	return cs
+// An scurvePhase is a (duration, distance) tuple of a phase in an [scurve].
+type scurvePhase struct {
+	Duration uint
+	Position uint
 }
 
-func (c *ConstantStringer) String(txt string) Plan {
-	cmd := func(yield func(Command) bool) {
-		needle := c.wordStart
-		if !yield(Move(needle)) {
-			return
-		}
-		repeats := c.longest / len(txt)
-		rest := c.longest - repeats*len(txt)
-		for i, r := range txt {
-			l := c.alphabet[r-'A']
-			extra := 0
-			if rest > 0 {
-				rest--
-				extra = 1
-			}
-			for j := 0; j < repeats+extra; j++ {
-				off := image.Pt(i*c.dims.X, 0)
-				// Move to center. Always equal distance.
-				center := off.Add(image.Pt(c.dims.X/2, c.dims.Y/2))
-				needle = center
-				cont := yield(Move(needle))
-				start := l.path[0].Add(off)
-				cont = cont && constantMove(yield, start, needle, c.moveDist)
-				needle = start
-				for _, pos := range l.path[1:] {
-					needle = pos.Add(off)
-					cont = cont && yield(Line(needle))
-				}
-				cont = cont && constantMove(yield, center, needle, c.moveDist)
-				needle = center
-				end := off.Add(image.Pt(c.dims.X, c.dims.Y/2))
-				cont = cont && yield(Move(end))
-				if !cont {
-					return
-				}
-				needle = end
-			}
-		}
-		// constantMove by itself is correct but risks engraving out of bounds.
-		// To keep movement inside the bounds of the word, move closer so
-		// that the distance is less than half the line height.
-		wantDist := c.finalDist
-		dist := ManhattanDist(c.wordEnd, needle)
-		if d := dist - c.dims.Y/2; d > 0 {
-			dir := c.wordEnd.Sub(needle)
-			mid := needle.Add(dir.Mul(d).Div(dist))
-			wantDist -= ManhattanDist(mid, needle)
-			needle = mid
-			if !yield(Move(needle)) {
-				return
-			}
-		}
-		// Then let constantMove take care of the rest.
-		if !constantMove(yield, c.wordEnd, needle, wantDist) {
-			return
+// computeSCurve computes the phases for traveling dist along a straight
+// line. The waypoints respects machine limits and continuity up to and
+// including acceleration.
+// An S-curve is characterized by 7 phases:
+//
+//  1. Maximum jerk (j = jmax).
+//  2. Zero jerk, constant acceleration (j = 0).
+//  3. Minimum jerk, (j = -jmax).
+//  4. Coasting at constant velocity (j=0).
+//
+// Phases 5, 6 and 7 are mirror images of phases 3, 2, 1, respectively.
+func computeSCurve(smax, vmax, amax, jmax uint, tps uint) [7]scurvePhase {
+	// Set the minimum number of ticks to avoid short segments. Short
+	// segments lead to larger errors in kinetic value calculations.
+	const minTicks = 50
+
+	smaxf := float32(smax)
+	vmaxf := float32(vmax)
+	amaxf := float32(amax)
+	jmaxf := float32(jmax)
+
+	// The relation between position, velocity, acceleration and jerk is
+	// given by
+	//
+	//  s(t) = s0 + v*t + a/2*t² + j/6*t³
+	//
+	// There are 3 phases with +jmax, 0, -jmax respectively. Denoting
+	// the phase durations t1, t2, t3, the acceleration after phase 3 is
+	//
+	//  a_ph3 = jmax*t1-jmax*t3
+	//
+	// Since the acceleration must be 0 in the coasting phase,
+	//
+	//  a_ph3 = 0 => t3 = t1
+	//
+	// The duration of phase 1, t1, is limited by amax:
+	//
+	//  a_ph1 = jmax*t1, aph1 <= amax => t1 <= amax/jmax
+	t1amax := amaxf / jmaxf
+
+	// t1 is further limited by vmax. Assuming t2 is zero, the
+	// velocity after phase 3 is
+	//
+	//  v_ph3 = jmax*t1² => t1 <= √(vmax/jmax)
+	t1vmax := float32(math.Sqrt(float64(vmaxf / jmaxf)))
+
+	// Finally, t1 is limited by half the distance, smax/2.
+	// The displacement after phase 3 is given by
+	//
+	//  s_ph3 = jmax*t1³ => t1 <= ∛(1/2*smax/jmax)
+	halfDist := 1. / 2 * smaxf
+	t1smax := float32(math.Cbrt(float64(halfDist / jmaxf)))
+
+	// t1f and t3 are now known, and respects machine limits.
+	t1f := min(t1smax, t1vmax, t1amax)
+
+	var t2vmax, t2smax float32
+	if t1f != 0 {
+		// The duration of phase 2, t2, is limited by vmax. The velocity after
+		// phase 3 is given by
+		//
+		//  v_ph3 = jmax*t1² + jmax*t1*t2 => t2 <= (vmax - jmax*t1²)/(jmax*t1)
+		t2vmax = (vmaxf - jmaxf*t1f*t1f) / (jmaxf * t1f)
+
+		// t2 is also limited by smax/2:
+		//
+		//  s_ph3 = jmax*t1³ + 3/2*jmax*t1²*t2 + 1/2*jmax*t1*t2²
+		//   => t2 <= (-3*jmax*t1² + √(jmax^2*t1^4 + 4*jmax*smax*t1))/(2*jmax*t1)
+		//   => t2 <= -3/2*t1 + √(1/4*t1² + smax/(jmax*t1))
+		if t1f != 0 {
+			t2smax = -3./2*t1f + float32(math.Sqrt(float64(1./4*t1f*t1f+smaxf/(jmaxf*t1f))))
 		}
 	}
 
-	// Verify constant-ness.
-	if !c.isConstant(cmd) {
-		// Should be constant by construction.
-		panic("command is not constant")
+	// Clamp phase 2 duration to 0 to avoid round-off error.
+	t2f := max(0, min(t2vmax, t2smax))
+
+	// Knowing the jerk and duration of every phase,
+	// compute the distance and velocities by integration.
+	sph0 := physState{}
+	sph1 := sph0.Simulate(t1f, +jmaxf)
+	sph2 := sph1.Simulate(t2f, 0)
+	sph3 := sph2.Simulate(t1f, -jmaxf)
+	// Coasting phase 4 is the remaining distance.
+	sph4 := max(0, smaxf-sph3.s*2)
+	// Phase 4 velocity is vmax by construction (otherwise its distance is zero).
+	t4f := sph4 / vmaxf
+	type controlPoint struct {
+		t float32
+		s physState
 	}
-	return cmd
+	tpsf := float32(tps)
+	t1 := uint(t1f*tpsf + .5)
+	t2 := uint(t2f*tpsf + .5)
+	t4 := uint(t4f*tpsf + .5)
+	ctrls := make([]controlPoint, 4)
+	var nctrls int
+	switch {
+	case t4 > minTicks && t2 > minTicks:
+		nctrls = copy(ctrls, []controlPoint{{t1f, sph0}, {t2f, sph1}, {t1f, sph2}, {t4f, sph3}})
+	case t4 > minTicks:
+		nctrls = copy(ctrls, []controlPoint{{t1f, sph0}, {t1f, sph2}, {t4f, sph3}})
+	case t2 > minTicks:
+		nctrls = copy(ctrls, []controlPoint{{t1f, sph0}, {t2f, sph1}, {t1f, sph2}, {t1f, sph3}})
+	default:
+		nctrls = copy(ctrls, []controlPoint{{t1f, sph0}, {t1f, sph2}, {t1f, sph3}})
+	}
+	ctrls = ctrls[:nctrls]
+	spline := make([]uint, 4)[:nctrls-1]
+	// Compute control points for phases 1-3.
+	for i, s0 := range ctrls[:len(ctrls)-1] {
+		s1 := ctrls[i+1]
+		// Use polar coordinates to compute the knot control point
+		// from the two middle control points of the Bézier segment
+		// implied by the position and velocity of the two states
+		// s0 and s1.
+		p001 := s0.s.s + s0.s.v*s0.t/3
+		p011 := s1.s.s - s1.s.v*s0.t/3
+		p012 := (p011-p001)*s1.t/s0.t + p011
+		spline[i] = uint(p012 + .5)
+	}
+	switch {
+	case t4 > minTicks && t2 > minTicks:
+		return [...]scurvePhase{
+			{t1, spline[0]},
+			{t2, spline[1]},
+			{t1, spline[2]},
+			{t4, smax - spline[2]},
+			{t1, smax - spline[1]},
+			{t2, smax - spline[0]},
+			{t1, smax},
+		}
+	case t4 > minTicks:
+		return [...]scurvePhase{
+			{t1, spline[0]},
+			{},
+			{t1, spline[1]},
+			{t4, smax - spline[1]},
+			{t1, smax - spline[0]},
+			{},
+			{t1, smax},
+		}
+	case t2 > minTicks:
+		return [...]scurvePhase{
+			{t1, spline[0]},
+			{t2, spline[1]},
+			{t1, spline[2]},
+			{},
+			{t1, smax - spline[1]},
+			{t2, smax - spline[0]},
+			{t1, smax},
+		}
+	default:
+		return [...]scurvePhase{
+			{t1, spline[0]},
+			{},
+			{t1, spline[1]},
+			{},
+			{t1, smax - spline[0]},
+			{},
+			{t1, smax},
+		}
+	}
 }
 
-func isConstantQR(cmd *constantQRCmd, dim int) bool {
-	pt := new(pattern)
-	for c := range cmd.engrave() {
-		pt.Command(c)
-	}
-	start, end := constantTimeStartEnd(dim)
-	start = cmd.centerOf(start)
-	end = cmd.centerOf(end)
-	// Constant start and end points.
-	if pt.start != start || pt.end != end {
-		return false
-	}
-	// Constant number of patterns: 2 per module, 1
-	// for the end
-	npatterns := 2*constantTimeQRModules(dim) + 1
-	if len(pt.pattern) != npatterns {
-		return false
-	}
-	sc := cmd.scale * cmd.strokeWidth
-	moveLen := qrMoves * sc
-	for _, p := range pt.pattern {
-		wantLen := moveLen
-		if p.line {
-			wantLen = sc * cmd.scale
-		}
-		if p.len != wantLen {
-			return false
-		}
-	}
-	return true
+// physState models physical properties for simulating the
+// movement of the engraving needle in one dimension.
+type physState struct {
+	// s is the position.
+	s float32
+	// v is the velocity.
+	v float32
+	// a is the acceleration.
+	a float32
 }
 
-func (c *ConstantStringer) isConstant(cmd Plan) bool {
-	pt := new(pattern)
-	for c := range cmd {
-		pt.Command(c)
+// Simulate advance time by t at jerk j.
+func (p *physState) Simulate(t, j float32) physState {
+	jt := j * t
+	jtt := jt * t
+	jttt := jtt * t
+	at := p.a * t
+	return physState{
+		a: p.a + jt,
+		v: p.v + at + jtt/2,
+		s: p.s + p.v*t + at*t/2 + jttt/6,
 	}
-	// Constant start and end points.
-	if pt.start != c.wordStart || pt.end != c.wordEnd {
-		return false
-	}
-	// Constant number of patterns.
-	if len(pt.pattern) != 2*c.longest+1 {
-		return false
-	}
-	// All pattern elements have constant sizes.
-	line := false
-	for i, p := range pt.pattern {
-		if p.line != line {
-			return false
+}
+
+func PlanEngraving(conf StepperConfig, e Engraving) bspline.Curve {
+	const maxSplineKnots = 100
+
+	knotBuf := make([]bspline.Knot, 0, maxSplineKnots)
+	return planEngraving(knotBuf, conf, e)
+}
+
+// planEngraving is like PlanEngraving but avoids garbage from the knot buffer on
+// TinyGo.
+func planEngraving(knotBuf []bspline.Knot, conf StepperConfig, e Engraving) bspline.Curve {
+	return func(yield func(bspline.Knot) bool) {
+		var ts timeScaler
+		start := bspline.Knot{}
+		spline := knotBuf[:0]
+		// Initialize the spline with 2 clamping knots at (0, 0).
+		spline = append(spline, start, start)
+		for c := range e {
+			if k, ok := c.AsKnot(); ok {
+				for range k.Multiplicity {
+					spline = append(spline, bspline.Knot{Engrave: k.Engrave, Ctrl: k.Knot})
+					if len(spline) < 5 {
+						continue
+					}
+					n := len(spline)
+					k0, k1, k2 := spline[n-3].Ctrl, spline[n-2].Ctrl, spline[n-1].Ctrl
+					if clamped := k0 == k1 && k1 == k2; !clamped {
+						continue
+					}
+
+					engrave := spline[2].Engrave
+					// Line segments have a closed form solution for
+					// time minimal traversal.
+					if len(spline) == 5 {
+						s, e := spline[1].Ctrl, spline[3].Ctrl
+						spline = appendLineBSpline(spline[:0], conf, engrave, s, e)
+					} else {
+						for i := range spline[2 : len(spline)-2] {
+							spline[i+2].T = 1
+						}
+						maxv, maxa, maxj := bspline.ComputeKinematics(spline, 1)
+						tscale := timeScale(conf, engrave, maxv, maxa, maxj)
+						for i := range spline[2 : len(spline)-2] {
+							spline[i+2].T = tscale
+						}
+					}
+					dur := uint(0)
+					for _, k := range spline[2:] {
+						dur += k.T
+					}
+					if ts.Done() {
+						ts.Reset(dur, dur)
+					}
+					for _, k := range spline[2:] {
+						k.T = ts.Scale(k.T)
+						if !yield(k) {
+							return
+						}
+					}
+					// Duplicate the last clamping knot twice to maintain
+					// clamping start knots.
+					spline = append(spline[:0], spline[len(spline)-2:]...)
+				}
+			} else if d, n, ok := c.AsDelay(); ok {
+				if len(spline) > 3 {
+					panic("delay during spline")
+				}
+				ts.Reset(n, d)
+			}
 		}
-		var wantDist int
+	}
+}
+
+// timeScaler precisely scales spline segment durations by
+// a rational fraction.
+type timeScaler struct {
+	// nom/denom is the scaling fraction.
+	nom, denom uint
+	// frac2 accumulates twice the fractional ticks.
+	frac2 uint
+	// rem is the remaining ticks at nom/denom speed.
+	rem uint
+}
+
+func (s *timeScaler) Reset(n, d uint) {
+	if n < d {
+		panic("invalid scale")
+	}
+	if s.rem > 0 {
+		panic("scale already in effect")
+	}
+	s.rem = n
+	s.nom, s.denom = n, d
+	// Round to nearest tick by adding denom/2 ticks.
+	s.frac2 = d
+}
+
+func (s *timeScaler) Scale(t uint) uint {
+	var scaled uint
+	if s.denom != 0 {
+		frac2_64 := uint64(s.frac2) + uint64(2*s.nom)*uint64(t)
+		d2 := uint64(2 * s.denom)
+		d, r := frac2_64/d2, frac2_64%d2
+		scaled = uint(d)
+		s.frac2 = uint(r)
+	} else {
+		// Special case: a 0-length spline.
+		scaled = s.rem
+	}
+
+	if scaled > s.rem {
+		panic("unaligned delay")
+	}
+	s.rem -= scaled
+	return scaled
+}
+
+func (s *timeScaler) Done() bool {
+	return s.rem == 0
+}
+
+func appendLineBSpline(spline []bspline.Knot, conf StepperConfig, engrave bool, s, e bezier.Point) []bspline.Knot {
+	tps := conf.TicksPerSecond
+	vlim := conf.Speed
+	if engrave {
+		vlim = conf.EngravingSpeed
+	}
+	jlim := conf.Jerk
+	alim := conf.Acceleration
+	dist := uint(ManhattanDist(s, e))
+	sc := computeSCurve(dist, vlim, alim, jlim, tps)
+	knots := make([]bspline.Knot, len(sc))
+	// Starting knot.
+	nknots := 0
+	for _, p := range sc {
+		if p.Duration == 0 {
+			continue
+		}
+		// Interpolate between endpoints.
+		s64, e64 := bezier.P64(s), bezier.P64(e)
+		ip := e64.Mul(int(p.Position)).Add(s64.Mul(int(dist - p.Position))).Div(int(dist)).Point()
+		knots[nknots] = bspline.Knot{
+			Ctrl:    ip,
+			T:       p.Duration,
+			Engrave: engrave,
+		}
+		nknots++
+	}
+	knots = knots[:nknots]
+	start := bspline.Knot{Ctrl: s, Engrave: engrave}
+	end := bspline.Knot{Ctrl: e, Engrave: engrave}
+	spline = append(spline, start, start)
+	spline = append(spline, knots...)
+	if len(knots) == 0 {
+		spline = append(spline, start)
+	}
+	spline = append(spline, end, end)
+	return spline
+}
+
+// timeScale computes the minimum time in ticks to traverse c given
+// limits.
+func timeScale(c StepperConfig, engrave bool, v, a, j uint) uint {
+	limv := c.Speed
+	if engrave {
+		limv = c.EngravingSpeed
+	}
+	lima, limj := c.Acceleration, c.Jerk
+	// Compute the scale required by the velocity limit.
+	// Velocity is propertional to the scale.
+	tv := float32(v) / float32(limv)
+	// Acceleration is proportional to the square of the scale.
+	ta := float32(math.Sqrt(float64(float32(a) / float32(lima))))
+	// Jerk by the cube.
+	tj := float32(math.Cbrt(float64(float32(j) / float32(limj))))
+	tps := float32(c.TicksPerSecond)
+	scale := float32(math.Ceil(float64(max(0, tv, ta, tj) * tps)))
+	return uint(scale)
+}
+
+// timeConstantPath computes the engraving time in ticks along
+// with the start and end points.
+func timeConstantPath(s bspline.Curve) constantPlan {
+	engraving := false
+	var inf constantPlan
+	var seg bspline.Segment
+	for k := range s {
+		c, ticks, engrave := seg.Knot(k)
 		switch {
-		case i == 0:
-			wantDist = c.moveDist + c.dims.X/2
-		case i == len(pt.pattern)-1:
-			wantDist = c.moveDist + c.dims.X/2 + c.finalDist
-		case line:
-			wantDist = c.engraveDist
-		default:
-			wantDist = 2*c.moveDist + c.dims.X
+		case !engraving && engrave:
+			inf.Start = inf.End
+			engraving = true
+		case engraving && !engrave:
+			panic("broken path")
 		}
-		if wantDist != p.len {
-			return false
+		if engrave {
+			inf.Duration += ticks
 		}
-		line = !line
+		inf.End = c.C3
 	}
-	return true
+	return inf
 }
 
-type cmdYielder func(Command) bool
+func TimePlan(conf StepperConfig, p Engraving) time.Duration {
+	ticks := uint(0)
+	for k := range PlanEngraving(conf, p) {
+		ticks += k.T
+	}
+	s := (ticks + conf.TicksPerSecond - 1) / conf.TicksPerSecond
+	return time.Duration(s) * time.Second
+}
 
-// constantMove moves to dst from src in exactly dist manhattan distance.
-// It spends extra moves by moving along the square with dst in the center
-// and src on its boundary.
-// constantMove assumes the distance between dst and src is less than or
-// equal to dist.
-// constantMove panics if dst equals src and dist is 1.
-func constantMove(yield cmdYielder, dst, src image.Point, dist int) bool {
-	// extra is the distance to spend.
-	extra := dist - ManhattanDist(dst, src)
-	cont := true
-	if dst == src {
-		if extra == 1 {
-			panic("dst and src coincides and dist allows no movement")
+func timeMove(conf StepperConfig, dist int) uint {
+	sc := computeSCurve(uint(dist), conf.Speed, conf.Acceleration, conf.Jerk, conf.TicksPerSecond)
+	t := uint(0)
+	for _, s := range sc {
+		t += s.Duration
+	}
+	return t
+}
+
+func NewConstantStringer(face *vector.Face, params Params, em int) *ConstantStringer {
+	var bounds bspline.Bounds
+	var adv int
+	var maxDur uint
+	m := face.Metrics()
+	fh := m.Height
+	conf := params.StepperConfig
+	runes := make([]constantRune, 0, len(constantAlphabet))
+	var lastr rune
+	const maxSplineKnots = 100
+
+	knotBuf := make([]bspline.Knot, 0, maxSplineKnots)
+	// Compute engraving durations for the alphabet.
+	for i, r := range constantAlphabet {
+		if r < lastr {
+			panic("unsorted alphabet")
 		}
-		// If src and dst coincides the implied square reduces to a
-		// point which cannot be used for spending moves.
-		// Instead move half of extra away and continue from there.
-		d := extra / 2
-		src = src.Add(image.Pt(d, 0))
-		cont = cont && yield(Move(src))
-		extra -= d * 2
-	}
-	dp := src.Sub(dst)
-	d := manhattanLen(dp)
-	// axis is the direction from dst to src along the longest axis.
-	axis := dp.Div(d)
-	// Tie-break diagonals arbitrarily.
-	if axis.X != 0 && axis.Y != 0 {
-		axis.X = 0
-	}
-	for extra > 0 {
-		dp := src.Sub(dst)
-		axis = image.Pt(-axis.Y, axis.X)
-		// cornerDist is the distance from src to the corner along
-		// moveDir.
-		cornerDist := d - dp.X*axis.X - dp.Y*axis.Y
-		moveDist := cornerDist
-		if moveDist > extra {
-			moveDist = extra
+		lastr = r
+		a, spline, found := face.Decode(r)
+		if !found {
+			panic(fmt.Errorf("unsupported rune: %s", string(r)))
 		}
-		extra -= moveDist
-		src = src.Add(axis.Mul(moveDist))
-		cont = cont && yield(Move(src))
+		if i > 0 && adv != a {
+			panic("variable width font")
+		}
+		adv = a
+		inf := timeConstantPath(planEngraving(knotBuf, conf, func(yield func(c Command) bool) {
+			engraveSpline(yield, bezier.Point{}, em, fh, spline)
+		}))
+		bounds.Min.X = min(bounds.Min.X, inf.Start.X, inf.End.X)
+		bounds.Min.Y = min(bounds.Min.Y, inf.Start.Y, inf.End.Y)
+		bounds.Max.X = max(bounds.Max.X, inf.Start.X, inf.End.X)
+		bounds.Max.Y = max(bounds.Max.Y, inf.Start.Y, inf.End.Y)
+		runes = append(runes, constantRune{
+			R:    r,
+			Info: inf,
+		})
+		maxDur = max(inf.Duration, maxDur)
 	}
-	cont = cont && yield(Move(dst))
+	startEndDist := ManhattanDist(bounds.Min, bounds.Max)
+	center := bounds.Max.Add(bounds.Min).Div(2)
+
+	return &ConstantStringer{
+		face:         face,
+		runeDuration: maxDur,
+		alphabet:     runes,
+		em:           em,
+		center:       center,
+		startEndDist: startEndDist,
+		conf:         params.StepperConfig,
+		advDist:      adv * em / fh,
+	}
+}
+
+func (c *ConstantStringer) String(yield func(Command) bool, txt string) bool {
+	n := strlen(txt)
+	return c.PaddedString(yield, txt, n, n)
+}
+
+func (c *ConstantStringer) PaddedString(yield func(Command) bool, txt string, shortest, longest int) bool {
+	if n := strlen(txt); n < shortest || longest < n {
+		panic("string length out of bounds")
+	}
+	return c.paddedString(yield, txt, shortest, longest)
+}
+
+func (c *ConstantStringer) paddedString(yield func(Command) bool, txt string, shortest, longest int) bool {
+	f := c.face
+	m := f.Metrics()
+	fh := m.Height
+	baseline := (m.Ascent*c.em + fh - 1) / fh
+	dot := bezier.Pt(0, baseline)
+	// Move to the data-independent start position.
+	pen := dot.Add(c.center)
+	cont := yield(Move(pen))
+	// Compute worst case movement durations.
+	padDur := timeMove(c.conf, ((longest-shortest)*c.advDist+1)/2+c.startEndDist)
+	advDur := timeMove(c.conf, c.advDist+c.startEndDist)
+	centerDur := timeMove(c.conf, (c.startEndDist+1)/2)
+	totalDur := centerDur
+	// accum accumulates the fraction each rune in txt
+	// contributes towards engraving the total number of runes
+	// (longest). This is to spread out the repeat runes.
+	accum := 0
+	ridx := 0
+	for range longest {
+		r, n := utf8.DecodeRuneInString(txt[ridx:])
+		idx, found := sort.Find(len(c.alphabet), func(i int) int {
+			return int(r - c.alphabet[i].R)
+		})
+		if !found {
+			panic(fmt.Errorf("unsupported rune: %s", string(r)))
+		}
+		_, spline, found := f.Decode(r)
+		if !found {
+			// Unreachable by construction, since c.alphabet contains
+			// only runes from f.
+			panic("unreachable")
+		}
+		inf := c.alphabet[idx].Info
+		// Skip starting move segment.
+		if inf.Start != (bezier.Point{}) {
+			for range 3 {
+				if _, ok := spline.Next(); !ok {
+					panic("unclamped spline")
+				}
+			}
+		}
+		start := dot.Add(inf.Start)
+		cont = cont && DelayMove(yield, c.conf, totalDur, pen, start) &&
+			yield(Delay(inf.Duration, c.runeDuration)) &&
+			engraveSpline(yield, dot, c.em, fh, spline)
+		pen = dot.Add(inf.End)
+		totalDur = advDur
+		accum += len(txt)
+		if accum >= longest {
+			accum -= longest
+			ridx += n
+			dot.X += c.advDist
+		}
+	}
+	// Move to end, the midpoint between shortest and longest.
+	mid2 := longest + shortest - 1
+	dot = bezier.Pt(mid2*c.advDist/2, baseline)
+	end := dot.Add(c.center)
+	cont = cont && DelayMove(yield, c.conf, padDur, pen, end)
 	return cont
-}
-
-type collectProgram struct {
-	path []image.Point
-	len  int
-}
-
-func (m *collectProgram) Command(c Command) {
-	if c.Line {
-		if len(m.path) == 0 {
-			panic("no start point for constant rune")
-		}
-		needle := m.path[len(m.path)-1]
-		d := ManhattanDist(needle, c.Coord)
-		if d == 0 {
-			return
-		}
-		m.len += d
-	} else {
-		if len(m.path) > 0 {
-			panic("move during constant rune")
-		}
-	}
-	m.path = append(m.path, c.Coord)
-}
-
-// pattern records the pattern of the engraving instructions
-// sent to it.
-type pattern struct {
-	start, end image.Point
-	pattern    []patternElem
-}
-
-type patternElem struct {
-	line bool
-	len  int
-}
-
-func (c *pattern) Command(cmd Command) {
-	if len(c.pattern) == 0 {
-		c.start = cmd.Coord
-		c.end = cmd.Coord
-		c.pattern = append(c.pattern, patternElem{line: cmd.Line})
-		return
-	}
-	prev := c.end
-	elem := &c.pattern[len(c.pattern)-1]
-	dist := ManhattanDist(prev, cmd.Coord)
-	if elem.line != cmd.Line {
-		c.pattern = append(c.pattern, patternElem{line: cmd.Line, len: dist})
-	} else {
-		elem.len += dist
-	}
-	c.end = cmd.Coord
 }
 
 func String(face *vector.Face, em int, txt string) *StringCmd {
@@ -1023,120 +1332,109 @@ type StringCmd struct {
 	txt  string
 }
 
-func (s *StringCmd) Engrave() Plan {
-	return func(yield func(Command) bool) {
-		s.engrave(yield)
-	}
+func (s *StringCmd) Engrave(yield func(Command) bool) bool {
+	_, ok := s.engrave(yield)
+	return ok
 }
 
-func (s *StringCmd) Measure() image.Point {
-	return s.engrave(nil)
+func (s *StringCmd) Measure() (int, int) {
+	b, _ := s.engrave(nil)
+	return int(b.X), int(b.Y)
 }
 
-func (s *StringCmd) engrave(yield func(Command) bool) image.Point {
+func (s *StringCmd) engrave(yield func(Command) bool) (bezier.Point, bool) {
 	m := s.face.Metrics()
-	pos := image.Pt(0, (int(m.Ascent)*s.em+int(m.Height)-1)/int(m.Height))
-	addScale := func(p1, p2 image.Point) image.Point {
-		return image.Point{
-			X: p1.X + p2.X*s.em/int(m.Height),
-			Y: p1.Y + p2.Y*s.em/int(m.Height),
-		}
-	}
-	height := s.em * s.LineHeight
+	mh := m.Height
+	dot := bezier.Pt(0, (m.Ascent*s.em+mh-1)/mh)
+	lheight := s.em * s.LineHeight
 	cont := true
 	for _, r := range s.txt {
 		if r == '\n' {
-			pos.X = 0
-			pos.Y += height
+			dot.X = 0
+			dot.Y += lheight
 			continue
 		}
-		adv, segs, found := s.face.Decode(r)
+		adv, spline, found := s.face.Decode(r)
 		if !found {
 			panic(fmt.Errorf("unsupported rune: %s", string(r)))
 		}
 		if yield != nil {
-			for {
-				seg, ok := segs.Next()
-				if !ok {
-					break
-				}
-				switch seg.Op {
-				case vector.SegmentOpMoveTo:
-					p1 := addScale(pos, seg.Arg)
-					cont = cont && yield(Move(p1))
-				case vector.SegmentOpLineTo:
-					p1 := addScale(pos, seg.Arg)
-					cont = cont && yield(Line(p1))
-				default:
-					panic(errors.New("unsupported segment"))
-				}
-			}
+			cont = cont && engraveSpline(yield, dot, s.em, mh, spline)
 		}
-		pos.X += adv * s.em / int(m.Height)
+		dot.X += adv * s.em / mh
 	}
-	return image.Pt(pos.X, height)
+	return bezier.Point{X: dot.X, Y: lheight}, cont
 }
 
-func Rasterize(img draw.Image, p Plan) {
-	var pen image.Point
-	for c := range p {
-		var l bresenham.Line
-		v := c.Coord.Sub(pen)
-		xd, yd, steps := l.Reset(v)
-		xdir := int(xd)*2 - 1
-		ydir := int(yd)*2 - 1
-		if c.Line {
-			img.Set(pen.X, pen.Y, color.Black)
+func addScale(p1, p2 bezier.Point, em, height int) bezier.Point {
+	return p2.Mul(em).Div(height).Add(p1)
+}
+
+func engraveSpline(yield func(Command) bool, pos bezier.Point, em, height int, spline vector.UniformBSpline) bool {
+	for {
+		k, ok := spline.Next()
+		if !ok {
+			break
 		}
-		for range steps {
-			dx, dy := l.Step()
-			pen.X -= int(dx) * xdir
-			pen.Y -= int(dy) * ydir
-			if c.Line {
-				img.Set(pen.X, pen.Y, color.Black)
-			}
+		c := addScale(pos, k.Ctrl, em, height)
+		if !yield(ControlPoint(k.Line, c)) {
+			return false
 		}
 	}
+	return true
 }
 
-type measureProgram struct {
-	p      image.Point
-	bounds image.Rectangle
+// Profile describes the engraving timing as well as the
+// start and end points of a [Engraving].
+type Profile struct {
+	// Pattern is the times, in ticks, where the plan
+	// switches from moves to engraves or back.
+	Pattern []uint
+	// Start and End points of the plan.
+	Start, End bezier.Point
 }
 
-func (m *measureProgram) Command(cmd Command) {
-	if cmd.Line {
-		m.expand(cmd.Coord)
-		m.expand(m.p)
-	} else {
-		m.p = cmd.Coord
+func ProfileSpline(s bspline.Curve) Profile {
+	engraving := false
+	firstPoint := true
+	var prof Profile
+	var t uint
+	var seg bspline.Segment
+	for k := range s {
+		c, ticks, _ := seg.Knot(k)
+		prof.End = c.C3
+		if !k.Engrave && firstPoint {
+			prof.Start = prof.End
+			firstPoint = false
+		}
+		if k.Engrave != engraving {
+			engraving = k.Engrave
+			prof.Pattern = append(prof.Pattern, t)
+		}
+		t += ticks
 	}
+	if t > 0 {
+		prof.Pattern = append(prof.Pattern, t)
+	}
+	return prof
 }
 
-func (m *measureProgram) expand(p image.Point) {
-	if p.X < m.bounds.Min.X {
-		m.bounds.Min.X = p.X
-	} else if p.X > m.bounds.Max.X {
-		m.bounds.Max.X = p.X
+func (p Profile) Equal(p2 Profile) bool {
+	if p.Start != p2.Start || p.End != p2.End || len(p.Pattern) != len(p2.Pattern) {
+		return false
 	}
-	if p.Y < m.bounds.Min.Y {
-		m.bounds.Min.Y = p.Y
-	} else if p.Y > m.bounds.Max.Y {
-		m.bounds.Max.Y = p.Y
+	for i, t := range p.Pattern {
+		if p2.Pattern[i] != t {
+			return false
+		}
 	}
+	return true
 }
 
-func Measure(plan Plan) image.Rectangle {
-	inf := image.Rectangle{Min: image.Pt(1e6, 1e6), Max: image.Pt(-1e6, -1e6)}
-	measure := &measureProgram{
-		bounds: inf,
+func strlen(s string) int {
+	n := 0
+	for range s {
+		n++
 	}
-	for c := range plan {
-		measure.Command(c)
-	}
-	b := measure.bounds
-	if b == inf {
-		b = image.Rectangle{}
-	}
-	return b
+	return n
 }
