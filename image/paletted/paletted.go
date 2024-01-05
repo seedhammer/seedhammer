@@ -25,11 +25,9 @@ type Rectangle struct {
 // Palette is a list of RGBA colors encoded as a byte slice.
 type Palette []byte
 
-func (p Palette) At(i uint8) color.RGBA {
+func (p Palette) At(i uint8) (rgb565.Color, uint8) {
 	col := p[int(i)*3 : (int(i)+1)*3]
-	col16 := rgb565.Color{col[0], col[1]}
-	r, g, b := rgb565.RGB565ToRGB888(col16)
-	return color.RGBA{R: r, G: g, B: b, A: col[2]}
+	return rgb565.Color{B0: col[0], B1: col[1]}, col[2]
 }
 
 func (p *Image) Bounds() image.Rectangle {
@@ -59,12 +57,14 @@ func (p *Image) RGBA64At(x, y int) color.RGBA64 {
 		return color.RGBA64{}
 	}
 	i := p.PixOffset(x, y)
-	c := p.Palette.At(p.Pix[i])
-	r, g, b, a := c.RGBA()
+	c, a := p.Palette.At(p.Pix[i])
+	r, g, b := rgb565.RGB565ToRGB888(c)
+	rgba := color.RGBA{R: r, G: g, B: b, A: a}
+	r16, g16, b16, a16 := rgba.RGBA()
 	return color.RGBA64{
-		uint16(r),
-		uint16(g),
-		uint16(b),
-		uint16(a),
+		uint16(r16),
+		uint16(g16),
+		uint16(b16),
+		uint16(a16),
 	}
 }
