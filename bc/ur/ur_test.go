@@ -2,6 +2,7 @@ package ur
 
 import (
 	"encoding/hex"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -115,5 +116,34 @@ func TestDecode(t *testing.T) {
 				t.Errorf("seqNum %d of %s is %s expected %s", seqNum, test.want, got, want)
 			}
 		}
+	}
+}
+
+func TestSplit(t *testing.T) {
+	t.Parallel()
+
+	maxShares := 15
+	if testing.Short() {
+		maxShares = 10
+	}
+	data := make([]byte, 10e3)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	for n := 1; n <= maxShares; n++ {
+		name := fmt.Sprintf("%d-shares", n)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for m := 1; m <= n; m++ {
+				data := Data{
+					Data:      data,
+					Threshold: m,
+					Shards:    n,
+				}
+				if !Recoverable(data) {
+					t.Errorf("%d-of-%d: failed to recover", m, n)
+				}
+			}
+		})
 	}
 }
