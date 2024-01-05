@@ -335,7 +335,6 @@ func interpolate(stdout io.Writer, stdin io.Reader) error {
 	if err != nil {
 		return err
 	}
-	shares = append(shares, k)
 	shareIdx++
 	if shareIdx == 'S' {
 		shareIdx++
