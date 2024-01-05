@@ -1,4 +1,4 @@
-//go:build debug && linux && arm
+//go:build debug && linux && arm && !tinygo
 
 package main
 

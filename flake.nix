@@ -652,7 +652,17 @@
             '';
             default = self.packages.${system}.image;
           };
-        # developer shell for running .#reload-fast.
-        devShells.default = self.packages.${system}.controller-debug;
+        devShells = {
+          # shell for running .#reload-fast.
+          default = self.packages.${system}.controller-debug;
+          # shell for running tinygo.
+          tinygo = localpkgs-unstable.mkShell {
+            packages = with localpkgs-unstable; [
+              tinygo
+              pioasm
+              go
+            ];
+          };
+        };
       });
 }

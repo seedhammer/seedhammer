@@ -1,4 +1,4 @@
-//go:build linux && arm
+//go:build linux && arm && !tinygo
 
 package main
 
@@ -97,7 +97,7 @@ func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Even
 		c.active = false
 	}
 	for {
-		// Give the input go routines a chance to process
+		// Give the input goroutines a chance to process
 		// incoming events.
 		runtime.Gosched()
 		select {

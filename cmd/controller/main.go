@@ -1,5 +1,4 @@
 // command controller is the user interface for engraving SeedHammer plates.
-// It runs on a Raspberry Pi Zero, in the same configuration as SeedSigner.
 package main
 
 import (

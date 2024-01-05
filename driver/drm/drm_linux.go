@@ -1,3 +1,5 @@
+//go:build !tinygo
+
 // package drm implements a display on top of dumb DRM devices.
 package drm
 
