@@ -1,3 +1,3 @@
 package assets
 
-//go:generate go run generator.go
+//go:generate go run seedhammer.com/cmd/assets
