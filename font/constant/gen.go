@@ -2,4 +2,4 @@
 // words.
 package constant
 
-//go:generate go run ../vector/convert.go -package constant constant.svg constant
+//go:generate go run seedhammer.com/cmd/vectorfont -package constant -scale 100 constant.svg constant
