@@ -486,12 +486,6 @@ func buildLogo(wide bool) logo {
 	return logo
 }
 
-func drawBoxes(screen draw.RGBA64Image, boxes []image.Point, x, y int) {
-	for _, c := range boxes {
-		drawBox(screen, c.X*gridSize+x, c.Y*gridSize+y, white)
-	}
-}
-
 const boxSize = gridSize
 
 func clearBox(screen draw.RGBA64Image, x, y int, img image.Image) {
