@@ -49,7 +49,7 @@ type Context struct {
 	RotateCamera bool
 
 	Wakeup chan struct{}
-	events []Event
+	events []ButtonEvent
 }
 
 func NewContext(pl Platform) *Context {
@@ -119,7 +119,7 @@ func (c *Context) Repeat() {
 		if now.Before(c.Repeats[btn]) {
 			continue
 		}
-		c.events = append(c.events, Event{Button: b, Pressed: true})
+		c.events = append(c.events, ButtonEvent{Button: b, Pressed: true})
 		c.Repeats[b] = c.Platform.Now().Add(repeatDelay)
 		c.WakeupAfter(repeatDelay)
 	}
@@ -129,7 +129,7 @@ func (c *Context) Reset() {
 	c.events = c.events[:0]
 }
 
-func (c *Context) Events(evts ...Event) {
+func (c *Context) Events(evts ...ButtonEvent) {
 	for _, e := range evts {
 		e2 := e
 		if int(e.Button) < len(c.Buttons) {
@@ -144,9 +144,9 @@ func (c *Context) Events(evts ...Event) {
 	}
 }
 
-func (c *Context) Next(btns ...Button) (Event, bool) {
+func (c *Context) Next(btns ...Button) (ButtonEvent, bool) {
 	if len(c.events) == 0 {
-		return Event{}, false
+		return ButtonEvent{}, false
 	}
 	e := c.events[0]
 	for _, btn := range btns {
@@ -155,7 +155,7 @@ func (c *Context) Next(btns ...Button) (Event, bool) {
 			return e, true
 		}
 	}
-	return Event{}, false
+	return ButtonEvent{}, false
 }
 
 const longestWord = "TOMORROW"
@@ -2685,7 +2685,7 @@ func (s *MainScreen) layoutPager(ops op.Ctx, th *Colors) image.Point {
 }
 
 type Platform interface {
-	Input(ch chan<- Event) error
+	Input(ch chan<- ButtonEvent) error
 	Engraver() (io.ReadWriteCloser, error)
 	Camera(size image.Point, frames chan Frame, out <-chan Frame) func()
 	Now() time.Time
@@ -2705,7 +2705,7 @@ type LCD interface {
 	Dirty(sr image.Rectangle) error
 }
 
-type Event struct {
+type ButtonEvent struct {
 	Button  Button
 	Pressed bool
 	// Rune is only valid if Button is Rune.
@@ -2731,7 +2731,7 @@ const (
 type App struct {
 	root op.Ops
 	ctx  *Context
-	btns <-chan Event
+	btns <-chan ButtonEvent
 	lcd  LCD
 	err  error
 	scr  MainScreen
@@ -2742,7 +2742,7 @@ type App struct {
 }
 
 func NewApp(pl Platform, version string) (*App, error) {
-	btns := make(chan Event, 10)
+	btns := make(chan ButtonEvent, 10)
 	ctx := NewContext(pl)
 	ctx.Version = version
 	d, err := pl.Display()

@@ -31,7 +31,7 @@ var (
 type Platform struct {
 	sdcard  chan bool
 	display *drm.LCD
-	inputCh chan<- gui.Event
+	inputCh chan<- gui.ButtonEvent
 }
 
 func Init() (*Platform, error) {
@@ -64,7 +64,7 @@ func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
 	return mjolnir.Open("")
 }
 
-func (p *Platform) Input(ch chan<- gui.Event) error {
+func (p *Platform) Input(ch chan<- gui.ButtonEvent) error {
 	p.inputCh = ch
 	return wshat.Open(ch)
 }

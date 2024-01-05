@@ -15,8 +15,8 @@ func init() {
 	debug = true
 }
 
-func click(btn gui.Button) []gui.Event {
-	return []gui.Event{
+func click(btn gui.Button) []gui.ButtonEvent {
+	return []gui.ButtonEvent{
 		{
 			Button:  btn,
 			Pressed: true,
@@ -28,8 +28,8 @@ func click(btn gui.Button) []gui.Event {
 	}
 }
 
-func debugCommand(cmd string) []gui.Event {
-	var evts []gui.Event
+func debugCommand(cmd string) []gui.ButtonEvent {
+	var evts []gui.ButtonEvent
 	switch {
 	case strings.HasPrefix(cmd, "runes "):
 		cmd = strings.ToUpper(cmd[len("runes "):])
@@ -38,7 +38,7 @@ func debugCommand(cmd string) []gui.Event {
 				evts = append(evts, click(gui.Button2)...)
 				continue
 			}
-			evts = append(evts, gui.Event{
+			evts = append(evts, gui.ButtonEvent{
 				Button:  gui.Rune,
 				Rune:    r,
 				Pressed: true,

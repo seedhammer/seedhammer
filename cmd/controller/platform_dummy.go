@@ -20,7 +20,7 @@ func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
 	return nil, errors.New("Engraver not implemented")
 }
 
-func (p *Platform) Input(ch chan<- gui.Event) error {
+func (p *Platform) Input(ch chan<- gui.ButtonEvent) error {
 	return nil
 }
 

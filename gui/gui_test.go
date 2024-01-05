@@ -497,7 +497,7 @@ func fillDescriptor(t *testing.T, desc urtypes.OutputDescriptor, path urtypes.Pa
 
 type testPlatform struct {
 	input struct {
-		in   chan<- Event
+		in   chan<- ButtonEvent
 		init chan struct{}
 	}
 
@@ -559,7 +559,7 @@ func (*testPlatform) Debug() bool {
 func ctxString(ctx *Context, str string) {
 	for _, r := range str {
 		ctx.Events(
-			Event{
+			ButtonEvent{
 				Button:  Rune,
 				Rune:    r,
 				Pressed: true,
@@ -571,7 +571,7 @@ func ctxString(ctx *Context, str string) {
 func ctxPress(ctx *Context, bs ...Button) {
 	for _, b := range bs {
 		ctx.Events(
-			Event{
+			ButtonEvent{
 				Button:  b,
 				Pressed: true,
 			},
@@ -582,11 +582,11 @@ func ctxPress(ctx *Context, bs ...Button) {
 func ctxButton(ctx *Context, bs ...Button) {
 	for _, b := range bs {
 		ctx.Events(
-			Event{
+			ButtonEvent{
 				Button:  b,
 				Pressed: true,
 			},
-			Event{
+			ButtonEvent{
 				Button:  b,
 				Pressed: false,
 			},
@@ -594,7 +594,7 @@ func ctxButton(ctx *Context, bs ...Button) {
 	}
 }
 
-func (p *testPlatform) Input(ch chan<- Event) error {
+func (p *testPlatform) Input(ch chan<- ButtonEvent) error {
 	p.input.in = ch
 	close(p.input.init)
 	return nil
@@ -693,7 +693,7 @@ func (r *runner) String(t *testing.T, str string) {
 	t.Helper()
 	wait(t, r, r.p.input.init)
 	for _, c := range str {
-		evt := Event{
+		evt := ButtonEvent{
 			Button:  Rune,
 			Rune:    c,
 			Pressed: true,
@@ -778,11 +778,11 @@ func (r *runner) Button(t *testing.T, bs ...Button) {
 	t.Helper()
 	wait(t, r, r.p.input.init)
 	for _, b := range bs {
-		deliver(t, r, r.p.input.in, Event{
+		deliver(t, r, r.p.input.in, ButtonEvent{
 			Button:  b,
 			Pressed: true,
 		})
-		deliver(t, r, r.p.input.in, Event{
+		deliver(t, r, r.p.input.in, ButtonEvent{
 			Button:  b,
 			Pressed: false,
 		})
@@ -793,7 +793,7 @@ func (r *runner) Press(t *testing.T, bs ...Button) {
 	t.Helper()
 	wait(t, r, r.p.input.init)
 	for _, b := range bs {
-		deliver(t, r, r.p.input.in, Event{
+		deliver(t, r, r.p.input.in, ButtonEvent{
 			Button:  b,
 			Pressed: true,
 		})

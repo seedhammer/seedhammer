@@ -12,7 +12,7 @@ import (
 	"seedhammer.com/gui"
 )
 
-func Open(ch chan<- gui.Event) error {
+func Open(ch chan<- gui.ButtonEvent) error {
 	if _, err := host.Init(); err != nil {
 		return err
 	}
@@ -51,7 +51,7 @@ func Open(ch chan<- gui.Event) error {
 					// Debounce timeout; ok to send event.
 					if newPressed != pressed {
 						pressed = newPressed
-						ch <- gui.Event{Button: btn.Button, Pressed: pressed}
+						ch <- gui.ButtonEvent{Button: btn.Button, Pressed: pressed}
 					}
 				}
 			}
