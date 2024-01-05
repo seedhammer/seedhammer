@@ -2,7 +2,7 @@ package seedqr
 
 import (
 	"bytes"
-	"reflect"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -75,7 +75,7 @@ func TestSeedQR(t *testing.T) {
 		if !ok {
 			t.Fatalf("failed to parse %q", test.SeedQR)
 		}
-		if !reflect.DeepEqual(got1, want) {
+		if !slices.Equal(got1, want) {
 			t.Errorf("%q decoded to %v, want %v", test.SeedQR, got1, want)
 		}
 		got2 := QR(want)
@@ -103,7 +103,7 @@ func TestCompactSeedQR(t *testing.T) {
 		if !ok {
 			t.Fatalf("failed to parse %q", test.CompactSeedQR)
 		}
-		if !reflect.DeepEqual(got1, want) {
+		if !slices.Equal(got1, want) {
 			t.Errorf("%q decoded to %v, want %v", test.CompactSeedQR, got1, want)
 		}
 		got2 := CompactQR(want)

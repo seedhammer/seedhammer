@@ -2,7 +2,7 @@ package text
 
 import (
 	"fmt"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -118,7 +118,7 @@ func TestLayout(t *testing.T) {
 			}
 			endline()
 			if align == AlignStart {
-				if !reflect.DeepEqual(gotLines, test.want) {
+				if !slices.Equal(gotLines, test.want) {
 					t.Errorf("%s: got %v, want %v", s, gotLines, test.want)
 				}
 			}

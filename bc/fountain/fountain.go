@@ -9,7 +9,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
-	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -232,7 +231,7 @@ func SeqNumFor(seqLen int, checksum uint32, fragments []int) int {
 	for {
 		got := chooseFragments(uint32(seqNum), seqLen, checksum)
 		sort.Ints(got)
-		if reflect.DeepEqual(got, fragments) {
+		if slices.Equal(got, fragments) {
 			return seqNum
 		}
 		seqNum++
