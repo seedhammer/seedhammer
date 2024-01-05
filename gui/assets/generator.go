@@ -5,12 +5,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"go/format"
 	"image"
 	"image/color"
 	"image/draw"
 	_ "image/png"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,13 +20,20 @@ import (
 	"unicode"
 
 	simage "seedhammer.com/image"
+	"seedhammer.com/image/alpha4"
 	"seedhammer.com/image/rgb565"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("generator: %v", err)
+	}
+}
+
+func run() error {
 	pngs, err := filepath.Glob("*.png")
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	// out is the generated embed.go file.
 	out := new(bytes.Buffer)
@@ -34,6 +43,7 @@ func main() {
 	fmt.Fprintf(out, "import (\n")
 	fmt.Fprintf(out, "_ \"embed\"\n")
 	fmt.Fprintf(out, "\"unsafe\"\n\n")
+	fmt.Fprintf(out, "\"seedhammer.com/image/alpha4\"\n")
 	fmt.Fprintf(out, "\"seedhammer.com/image/ninepatch\"\n")
 	fmt.Fprintf(out, "\"seedhammer.com/image/paletted\"\n\n")
 	fmt.Fprintf(out, ")\n\n")
@@ -41,96 +51,131 @@ func main() {
 	for _, p := range pngs {
 		r, err := os.Open(p)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
-		img, _, err := image.Decode(r)
+		err = convert(out, r, p)
 		r.Close()
 		if err != nil {
-			log.Fatal(err)
-		}
-		// Convert RGBA images to image.Paletted.
-		if nrgba, ok := img.(*image.NRGBA); ok {
-			// Convert to alpha pre-multiplied RGBA.
-			rgba := image.NewRGBA(nrgba.Bounds())
-			draw.Draw(rgba, rgba.Bounds(), nrgba, nrgba.Bounds().Min, draw.Src)
-			paletteMap := make(map[color.RGBA64]uint8)
-			b := rgba.Bounds()
-			index := uint8(0)
-			for y := b.Min.Y; y < b.Max.Y; y++ {
-				for x := b.Min.X; x < b.Max.X; x++ {
-					c := rgba.RGBA64At(x, y)
-					idx, ok := paletteMap[c]
-					if !ok {
-						idx = index
-						paletteMap[c] = idx
-						index++
-						if index < idx {
-							log.Fatalf("too many colors in %q:", p)
-						}
-					}
-				}
-			}
-			palette := make([]color.Color, len(paletteMap))
-			for col, idx := range paletteMap {
-				palette[idx] = col
-			}
-			pimg := image.NewPaletted(rgba.Bounds(), palette)
-			for y := b.Min.Y; y < b.Max.Y; y++ {
-				for x := b.Min.X; x < b.Max.X; x++ {
-					c := rgba.RGBA64At(x, y)
-					idx := paletteMap[c]
-					pimg.SetColorIndex(x, y, idx)
-				}
-			}
-			img = pimg
-		}
-		name := p[:len(p)-len(filepath.Ext(p))]
-		ninePatchPrefix, ninePatchSuffix := "", ""
-		if ext := filepath.Ext(name); ext == ".9" {
-			name = name[:len(name)-len(ext)]
-			ninePatchPrefix, ninePatchSuffix = "ninepatch.New(", ")"
-		}
-		goName := filenameToGoName(name)
-		fmt.Fprintf(out, "%s = %s&", goName, ninePatchPrefix)
-		data := new(bytes.Buffer)
-		switch img := img.(type) {
-		case *image.Paletted:
-			r := simage.Crop(img)
-			crop := image.NewPaletted(r, img.Palette)
-			draw.Draw(crop, crop.Rect, img, crop.Rect.Min, draw.Src)
-			img = crop
-			data.Write(img.Pix)
-			start := data.Len()
-			// Write palette.
-			for _, c := range img.Palette {
-				r, g, b, a := c.RGBA()
-				rgb565 := rgb565.RGB888ToRGB565(uint8(r>>8), uint8(g>>8), uint8(b>>8))
-				data.Write([]byte{rgb565[0], rgb565[1], uint8(a >> 8)})
-			}
-			b := img.Rect
-			fmt.Fprintf(out, "paletted.Image{\n")
-			fmt.Fprintf(out, "Pix: unsafe.Slice(unsafe.StringData(%sData[:%d]), len(%[1]sData[:%[2]d])),\n", goName, start)
-			fmt.Fprintf(out, "Rect: paletted.Rectangle{MinX: %d, MinY: %d, MaxX: %d, MaxY: %d},\n", b.Min.X, b.Min.Y, b.Max.X, b.Max.Y)
-			fmt.Fprintf(out, "Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(%sData[%d:]), len(%[1]sData[%[2]d:]))),\n", goName, start)
-		default:
-			log.Fatalf("unsupported image format for %q: %T\n", p, img)
-		}
-		fmt.Fprintf(out, "}%s\n", ninePatchSuffix)
-		binName := fmt.Sprintf("%s.bin", name)
-		fmt.Fprintf(out, "//go:embed %s\n", binName)
-		fmt.Fprintf(out, "%sData string\n\n", goName)
-		if err := os.WriteFile(binName, data.Bytes(), 0o644); err != nil {
-			log.Fatal(err)
+			return fmt.Errorf("%s: %v", p, err)
 		}
 	}
 	fmt.Fprintf(out, ")\n\n")
 	src, err := format.Source(out.Bytes())
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if err := os.WriteFile("embed.go", src, 0o644); err != nil {
-		log.Fatal(err)
+		return err
 	}
+	return nil
+}
+
+func convert(out io.Writer, r io.Reader, p string) error {
+	img, _, err := image.Decode(r)
+	if err != nil {
+		return err
+	}
+	// Convert RGBA images to image.Paletted.
+	if nrgba, ok := img.(*image.NRGBA); ok {
+		// Convert to alpha pre-multiplied RGBA.
+		rgba := image.NewRGBA(nrgba.Bounds())
+		draw.Draw(rgba, rgba.Bounds(), nrgba, nrgba.Bounds().Min, draw.Src)
+		paletteMap := make(map[color.RGBA64]uint8)
+		b := rgba.Bounds()
+		index := uint8(0)
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				c := rgba.RGBA64At(x, y)
+				idx, ok := paletteMap[c]
+				if !ok {
+					idx = index
+					paletteMap[c] = idx
+					index++
+					if index < idx {
+						return errors.New("too many colors in")
+					}
+				}
+			}
+		}
+		palette := make([]color.Color, len(paletteMap))
+		for col, idx := range paletteMap {
+			palette[idx] = col
+		}
+		pimg := image.NewPaletted(rgba.Bounds(), palette)
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				c := rgba.RGBA64At(x, y)
+				idx := paletteMap[c]
+				pimg.SetColorIndex(x, y, idx)
+			}
+		}
+		img = pimg
+	}
+	name := p[:len(p)-len(filepath.Ext(p))]
+	ninePatchPrefix, ninePatchSuffix := "", ""
+	if ext := filepath.Ext(name); ext == ".9" {
+		name = name[:len(name)-len(ext)]
+		ninePatchPrefix, ninePatchSuffix = "ninepatch.New(", ")"
+	}
+	if ext := filepath.Ext(name); ext == ".alpha" {
+		name = name[:len(name)-len(ext)]
+		switch src := img.(type) {
+		case *image.Paletted:
+			r := src.Bounds()
+			rr := alpha4.Rect(r)
+			if rr.Rect() != r {
+				return errors.New("image bounds too large")
+			}
+			alp := alpha4.New(rr)
+			draw.Draw(alp, alp.Bounds(), src, alp.Bounds().Min, draw.Src)
+			img = alp
+		default:
+			return fmt.Errorf("unsupported image format: %T\n", img)
+		}
+	}
+	goName := filenameToGoName(name)
+	fmt.Fprintf(out, "%s = %s&", goName, ninePatchPrefix)
+	data := new(bytes.Buffer)
+	switch img := img.(type) {
+	case *image.Paletted:
+		r := simage.Crop(img)
+		crop := image.NewPaletted(r, img.Palette)
+		draw.Draw(crop, crop.Rect, img, crop.Rect.Min, draw.Src)
+		img = crop
+		data.Write(img.Pix)
+		start := data.Len()
+		// Write palette.
+		for _, c := range img.Palette {
+			r, g, b, a := c.RGBA()
+			rgb565 := rgb565.RGB888ToRGB565(uint8(r>>8), uint8(g>>8), uint8(b>>8))
+			data.Write([]byte{rgb565.B0, rgb565.B1, uint8(a >> 8)})
+		}
+		fmt.Fprintf(out, "paletted.Image{\n")
+		fmt.Fprintf(out, "Pix: unsafe.Slice(unsafe.StringData(%sData[:%d]), len(%[1]sData[:%[2]d])),\n", goName, start)
+		fmt.Fprintf(out, "Rect: paletted.Rectangle{MinX: %d, MinY: %d, MaxX: %d, MaxY: %d},\n", r.Min.X, r.Min.Y, r.Max.X, r.Max.Y)
+		fmt.Fprintf(out, "Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(%sData[%d:]), len(%[1]sData[%[2]d:]))),\n", goName, start)
+		fmt.Fprintf(out, "}")
+	case *alpha4.Image:
+		r := simage.Crop(img)
+		crop := alpha4.New(alpha4.Rect(r))
+		draw.Draw(crop, crop.Bounds(), img, crop.Bounds().Min, draw.Src)
+		img = crop
+		data.Write(img.Pix)
+		fmt.Fprintf(out, "alpha4.Image{\n")
+		fmt.Fprintf(out, "Pix: unsafe.Slice(unsafe.StringData(%sData), len(%[1]sData)),\n", goName)
+		fmt.Fprintf(out, "Rect: alpha4.Rectangle{MinX: %d, MinY: %d, MaxX: %d, MaxY: %d},\n", r.Min.X, r.Min.Y, r.Max.X, r.Max.Y)
+		fmt.Fprintf(out, "}")
+	default:
+		return fmt.Errorf("unsupported image format: %T\n", img)
+	}
+	fmt.Fprintf(out, "%s\n", ninePatchSuffix)
+	binName := fmt.Sprintf("%s.bin", name)
+	fmt.Fprintf(out, "//go:embed %s\n", binName)
+	fmt.Fprintf(out, "%sData string\n\n", goName)
+	if err := os.WriteFile(binName, data.Bytes(), 0o644); err != nil {
+		return err
+	}
+	return nil
 }
 
 func filenameToGoName(n string) string {

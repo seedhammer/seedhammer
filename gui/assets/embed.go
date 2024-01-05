@@ -5,47 +5,43 @@ import (
 	_ "embed"
 	"unsafe"
 
+	"seedhammer.com/image/alpha4"
 	"seedhammer.com/image/ninepatch"
 	"seedhammer.com/image/paletted"
 )
 
 var (
-	ArrowDown = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(ArrowDownData[:135]), len(ArrowDownData[:135])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 15, MaxY: 9},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(ArrowDownData[135:]), len(ArrowDownData[135:]))),
+	ArrowDown = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(ArrowDownData), len(ArrowDownData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 15, MaxY: 9},
 	}
 	//go:embed arrow-down.bin
 	ArrowDownData string
 
-	ArrowLeft = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(ArrowLeftData[:135]), len(ArrowLeftData[:135])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 9, MaxY: 15},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(ArrowLeftData[135:]), len(ArrowLeftData[135:]))),
+	ArrowLeft = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(ArrowLeftData), len(ArrowLeftData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 9, MaxY: 15},
 	}
 	//go:embed arrow-left.bin
 	ArrowLeftData string
 
-	ArrowRight = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(ArrowRightData[:135]), len(ArrowRightData[:135])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 9, MaxY: 15},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(ArrowRightData[135:]), len(ArrowRightData[135:]))),
+	ArrowRight = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(ArrowRightData), len(ArrowRightData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 9, MaxY: 15},
 	}
 	//go:embed arrow-right.bin
 	ArrowRightData string
 
-	ArrowUp = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(ArrowUpData[:135]), len(ArrowUpData[:135])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 15, MaxY: 9},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(ArrowUpData[135:]), len(ArrowUpData[135:]))),
+	ArrowUp = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(ArrowUpData), len(ArrowUpData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 15, MaxY: 9},
 	}
 	//go:embed arrow-up.bin
 	ArrowUpData string
 
-	ButtonFocused = ninepatch.New(&paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(ButtonFocusedData[:850]), len(ButtonFocusedData[:850])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 34, MaxY: 25},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(ButtonFocusedData[850:]), len(ButtonFocusedData[850:]))),
+	ButtonFocused = ninepatch.New(&alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(ButtonFocusedData), len(ButtonFocusedData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 34, MaxY: 25},
 	})
 	//go:embed button-focused.bin
 	ButtonFocusedData string
@@ -58,18 +54,16 @@ var (
 	//go:embed camera-corners.bin
 	CameraCornersData string
 
-	CircleFilled = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(CircleFilledData[:169]), len(CircleFilledData[:169])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 13, MaxY: 13},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(CircleFilledData[169:]), len(CircleFilledData[169:]))),
+	CircleFilled = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(CircleFilledData), len(CircleFilledData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 13, MaxY: 13},
 	}
 	//go:embed circle-filled.bin
 	CircleFilledData string
 
-	Circle = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(CircleData[:169]), len(CircleData[:169])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 13, MaxY: 13},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(CircleData[169:]), len(CircleData[169:]))),
+	Circle = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(CircleData), len(CircleData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 13, MaxY: 13},
 	}
 	//go:embed circle.bin
 	CircleData string
@@ -82,154 +76,135 @@ var (
 	//go:embed hammer.bin
 	HammerData string
 
-	IconBack = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconBackData[:270]), len(IconBackData[:270])),
-		Rect:    paletted.Rectangle{MinX: 8, MinY: 10, MaxX: 26, MaxY: 25},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconBackData[270:]), len(IconBackData[270:]))),
+	IconBack = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconBackData), len(IconBackData)),
+		Rect: alpha4.Rectangle{MinX: 8, MinY: 10, MaxX: 26, MaxY: 25},
 	}
 	//go:embed icon-back.bin
 	IconBackData string
 
-	IconBackspace = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconBackspaceData[:260]), len(IconBackspaceData[:260])),
-		Rect:    paletted.Rectangle{MinX: 7, MinY: 11, MaxX: 27, MaxY: 24},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconBackspaceData[260:]), len(IconBackspaceData[260:]))),
+	IconBackspace = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconBackspaceData), len(IconBackspaceData)),
+		Rect: alpha4.Rectangle{MinX: 7, MinY: 11, MaxX: 27, MaxY: 24},
 	}
 	//go:embed icon-backspace.bin
 	IconBackspaceData string
 
-	IconCheckmark = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconCheckmarkData[:414]), len(IconCheckmarkData[:414])),
-		Rect:    paletted.Rectangle{MinX: 6, MinY: 8, MaxX: 29, MaxY: 26},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconCheckmarkData[414:]), len(IconCheckmarkData[414:]))),
+	IconCheckmark = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconCheckmarkData), len(IconCheckmarkData)),
+		Rect: alpha4.Rectangle{MinX: 6, MinY: 8, MaxX: 29, MaxY: 26},
 	}
 	//go:embed icon-checkmark.bin
 	IconCheckmarkData string
 
-	IconDiscard = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconDiscardData[:460]), len(IconDiscardData[:460])),
-		Rect:    paletted.Rectangle{MinX: 7, MinY: 6, MaxX: 27, MaxY: 29},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconDiscardData[460:]), len(IconDiscardData[460:]))),
+	IconDiscard = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconDiscardData), len(IconDiscardData)),
+		Rect: alpha4.Rectangle{MinX: 7, MinY: 6, MaxX: 27, MaxY: 29},
 	}
 	//go:embed icon-discard.bin
 	IconDiscardData string
 
-	IconDot = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconDotData[:121]), len(IconDotData[:121])),
-		Rect:    paletted.Rectangle{MinX: 12, MinY: 12, MaxX: 23, MaxY: 23},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconDotData[121:]), len(IconDotData[121:]))),
+	IconDot = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconDotData), len(IconDotData)),
+		Rect: alpha4.Rectangle{MinX: 12, MinY: 12, MaxX: 23, MaxY: 23},
 	}
 	//go:embed icon-dot.bin
 	IconDotData string
 
-	IconEdit = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconEditData[:441]), len(IconEditData[:441])),
-		Rect:    paletted.Rectangle{MinX: 7, MinY: 7, MaxX: 28, MaxY: 28},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconEditData[441:]), len(IconEditData[441:]))),
+	IconEdit = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconEditData), len(IconEditData)),
+		Rect: alpha4.Rectangle{MinX: 7, MinY: 7, MaxX: 28, MaxY: 28},
 	}
 	//go:embed icon-edit.bin
 	IconEditData string
 
-	IconFlip = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconFlipData[:360]), len(IconFlipData[:360])),
-		Rect:    paletted.Rectangle{MinX: 8, MinY: 9, MaxX: 28, MaxY: 27},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconFlipData[360:]), len(IconFlipData[360:]))),
+	IconFlip = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconFlipData), len(IconFlipData)),
+		Rect: alpha4.Rectangle{MinX: 8, MinY: 9, MaxX: 28, MaxY: 27},
 	}
 	//go:embed icon-flip.bin
 	IconFlipData string
 
-	IconHammer = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconHammerData[:506]), len(IconHammerData[:506])),
-		Rect:    paletted.Rectangle{MinX: 6, MinY: 7, MaxX: 29, MaxY: 29},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconHammerData[506:]), len(IconHammerData[506:]))),
+	IconHammer = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconHammerData), len(IconHammerData)),
+		Rect: alpha4.Rectangle{MinX: 6, MinY: 7, MaxX: 29, MaxY: 29},
 	}
 	//go:embed icon-hammer.bin
 	IconHammerData string
 
-	IconInfo = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconInfoData[:152]), len(IconInfoData[:152])),
-		Rect:    paletted.Rectangle{MinX: 14, MinY: 8, MaxX: 22, MaxY: 27},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconInfoData[152:]), len(IconInfoData[152:]))),
+	IconInfo = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconInfoData), len(IconInfoData)),
+		Rect: alpha4.Rectangle{MinX: 14, MinY: 8, MaxX: 22, MaxY: 27},
 	}
 	//go:embed icon-info.bin
 	IconInfoData string
 
-	IconLeft = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconLeftData[:270]), len(IconLeftData[:270])),
-		Rect:    paletted.Rectangle{MinX: 8, MinY: 10, MaxX: 26, MaxY: 25},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconLeftData[270:]), len(IconLeftData[270:]))),
+	IconLeft = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconLeftData), len(IconLeftData)),
+		Rect: alpha4.Rectangle{MinX: 8, MinY: 10, MaxX: 26, MaxY: 25},
 	}
 	//go:embed icon-left.bin
 	IconLeftData string
 
-	IconProgress = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconProgressData[:529]), len(IconProgressData[:529])),
-		Rect:    paletted.Rectangle{MinX: 6, MinY: 6, MaxX: 29, MaxY: 29},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconProgressData[529:]), len(IconProgressData[529:]))),
+	IconProgress = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconProgressData), len(IconProgressData)),
+		Rect: alpha4.Rectangle{MinX: 6, MinY: 6, MaxX: 29, MaxY: 29},
 	}
 	//go:embed icon-progress.bin
 	IconProgressData string
 
-	IconRight = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconRightData[:270]), len(IconRightData[:270])),
-		Rect:    paletted.Rectangle{MinX: 9, MinY: 10, MaxX: 27, MaxY: 25},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconRightData[270:]), len(IconRightData[270:]))),
+	IconRight = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconRightData), len(IconRightData)),
+		Rect: alpha4.Rectangle{MinX: 9, MinY: 10, MaxX: 27, MaxY: 25},
 	}
 	//go:embed icon-right.bin
 	IconRightData string
 
-	IconSkip = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(IconSkipData[:270]), len(IconSkipData[:270])),
-		Rect:    paletted.Rectangle{MinX: 8, MinY: 10, MaxX: 26, MaxY: 25},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(IconSkipData[270:]), len(IconSkipData[270:]))),
+	IconSkip = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(IconSkipData), len(IconSkipData)),
+		Rect: alpha4.Rectangle{MinX: 8, MinY: 10, MaxX: 26, MaxY: 25},
 	}
 	//go:embed icon-skip.bin
 	IconSkipData string
 
-	KeyActive = ninepatch.New(&paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(KeyActiveData[:112]), len(KeyActiveData[:112])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 8, MaxY: 14},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(KeyActiveData[112:]), len(KeyActiveData[112:]))),
+	KeyActive = ninepatch.New(&alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(KeyActiveData), len(KeyActiveData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 8, MaxY: 14},
 	})
 	//go:embed key-active.bin
 	KeyActiveData string
 
-	KeyBackspace = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(KeyBackspaceData[:187]), len(KeyBackspaceData[:187])),
-		Rect:    paletted.Rectangle{MinX: 2, MinY: 0, MaxX: 19, MaxY: 11},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(KeyBackspaceData[187:]), len(KeyBackspaceData[187:]))),
+	KeyBackspace = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(KeyBackspaceData), len(KeyBackspaceData)),
+		Rect: alpha4.Rectangle{MinX: 2, MinY: 0, MaxX: 19, MaxY: 11},
 	}
 	//go:embed key-backspace.bin
 	KeyBackspaceData string
 
-	Key = ninepatch.New(&paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(KeyData[:112]), len(KeyData[:112])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 8, MaxY: 14},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(KeyData[112:]), len(KeyData[112:]))),
+	Key = ninepatch.New(&alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(KeyData), len(KeyData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 8, MaxY: 14},
 	})
 	//go:embed key.bin
 	KeyData string
 
-	LogoSmall = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(LogoSmallData[:441]), len(LogoSmallData[:441])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 21, MaxY: 21},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(LogoSmallData[441:]), len(LogoSmallData[441:]))),
+	LogoSmall = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(LogoSmallData), len(LogoSmallData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 21, MaxY: 21},
 	}
 	//go:embed logo-small.bin
 	LogoSmallData string
 
-	NavBtnPrimary = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(NavBtnPrimaryData[:1225]), len(NavBtnPrimaryData[:1225])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 35, MaxY: 35},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(NavBtnPrimaryData[1225:]), len(NavBtnPrimaryData[1225:]))),
+	NavBtnPrimary = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(NavBtnPrimaryData), len(NavBtnPrimaryData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 35, MaxY: 35},
 	}
 	//go:embed nav-btn-primary.bin
 	NavBtnPrimaryData string
 
-	NavBtnSecondary = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(NavBtnSecondaryData[:1225]), len(NavBtnSecondaryData[:1225])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 35, MaxY: 35},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(NavBtnSecondaryData[1225:]), len(NavBtnSecondaryData[1225:]))),
+	NavBtnSecondary = &alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(NavBtnSecondaryData), len(NavBtnSecondaryData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 35, MaxY: 35},
 	}
 	//go:embed nav-btn-secondary.bin
 	NavBtnSecondaryData string
@@ -250,18 +225,16 @@ var (
 	//go:embed sh02.bin
 	Sh02Data string
 
-	WarningBoxBg = ninepatch.New(&paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(WarningBoxBgData[:405]), len(WarningBoxBgData[:405])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 27, MaxY: 15},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(WarningBoxBgData[405:]), len(WarningBoxBgData[405:]))),
+	WarningBoxBg = ninepatch.New(&alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(WarningBoxBgData), len(WarningBoxBgData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 27, MaxY: 15},
 	})
 	//go:embed warning-box-bg.bin
 	WarningBoxBgData string
 
-	WarningBoxBorder = ninepatch.New(&paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(WarningBoxBorderData[:405]), len(WarningBoxBorderData[:405])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 27, MaxY: 15},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(WarningBoxBorderData[405:]), len(WarningBoxBorderData[405:]))),
+	WarningBoxBorder = ninepatch.New(&alpha4.Image{
+		Pix:  unsafe.Slice(unsafe.StringData(WarningBoxBorderData), len(WarningBoxBorderData)),
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 27, MaxY: 15},
 	})
 	//go:embed warning-box-border.bin
 	WarningBoxBorderData string
