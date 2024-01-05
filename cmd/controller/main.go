@@ -1,15 +1,16 @@
 // command controller is the user interface for engraving SeedHammer plates.
-// It runs on a Raspberry Pi Zero, in the same configuration as SeedSigner.
 package main
 
 import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"seedhammer.com/gui"
 )
+
+// Version is set by the Go linker with -ldflags='-X main.Version=...'.
+var Version string
 
 func main() {
 	if err := run(); err != nil {
@@ -20,22 +21,15 @@ func main() {
 
 func run() error {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
-	version := os.Getenv("sh_version")
+	ver := Version
+	if ver == "" {
+		ver = os.Getenv("sh_version")
+	}
 	p, err := Init()
 	if err != nil {
 		return err
 	}
-	for range gui.Run(p, version) {
+	for range gui.Run(p, ver) {
 	}
 	return nil
-}
-
-var debug = false
-
-func (p *Platform) Debug() bool {
-	return debug
-}
-
-func (p *Platform) Now() time.Time {
-	return time.Now()
 }

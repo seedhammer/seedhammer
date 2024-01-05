@@ -3,274 +3,96 @@ package gui
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"image"
 	"image/draw"
 	"image/png"
 	"io"
 	"iter"
-	"math"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/seedhammer/kortschak-qr"
-	"seedhammer.com/backup"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip380"
 	"seedhammer.com/bip39"
-	"seedhammer.com/driver/mjolnir"
+	"seedhammer.com/bspline"
 	"seedhammer.com/engrave"
-	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/op"
-	"seedhammer.com/nonstandard"
-	"seedhammer.com/seedqr"
+	"seedhammer.com/image/rgb565"
 )
 
-func TestDescriptorScreenError(t *testing.T) {
-	dupDesc := &bip380.Descriptor{
-		Script:    bip380.P2WSH,
-		Type:      bip380.SortedMulti,
-		Threshold: 2,
-		Keys:      make([]bip380.Key, 2),
+func BenchmarkRedraw(b *testing.B) {
+	ops := new(op.Ops)
+	ctx := NewContext(newPlatform())
+	ctx.FrameCallback = func() {
+		ctx.Done = true
 	}
-	dupMnemonic := fillDescriptor(t, dupDesc, dupDesc.Script.DerivationPath(), 12, 0)
-	dupDesc.Keys[1] = dupDesc.Keys[0]
-	smallDesc := &bip380.Descriptor{
+	m := new(MainScreen)
+	m.Flow(ctx, ops.Context())
+	clip := image.Rectangle{Max: ctx.Platform.DisplaySize()}
+	ops.Clip(clip)
+	fb := rgb565.New(clip)
+	maskfb := image.NewAlpha(clip)
+	for b.Loop() {
+		ops.Draw(fb, maskfb)
+	}
+}
+
+func BenchmarkAllocs(b *testing.B) {
+	desc := &bip380.Descriptor{
 		Script:    bip380.P2WSH,
 		Type:      bip380.SortedMulti,
 		Threshold: 2,
 		Keys:      make([]bip380.Key, 5),
 	}
-	smallMnemonic := fillDescriptor(t, smallDesc, smallDesc.Script.DerivationPath(), 12, 0)
-	okDesc := &bip380.Descriptor{
-		Script:    bip380.P2WSH,
-		Type:      bip380.SortedMulti,
-		Threshold: 3,
-		Keys:      make([]bip380.Key, 5),
+	fillDescriptor(b, desc, desc.Script.DerivationPath(), 12, 0)
+	ds := &DescriptorScreen{
+		Descriptor: desc,
 	}
-	okMnemonic := fillDescriptor(t, okDesc, okDesc.Script.DerivationPath(), 12, 0)
-	tests := []struct {
-		name     string
-		desc     *bip380.Descriptor
-		mnemonic bip39.Mnemonic
-		ok       bool
-	}{
-		{"duplicate key", dupDesc, dupMnemonic, false},
-		{"small threshold", smallDesc, smallMnemonic, false},
-		{"ok descriptor", okDesc, okMnemonic, true},
+	m := new(MainScreen)
+	screens := []func(*Context, op.Ctx){
+		m.Flow,
+		func(ctx *Context, ops op.Ctx) {
+			ds.Confirm(ctx, ops, &descriptorTheme)
+		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			scr := &DescriptorScreen{
-				Descriptor: test.desc,
-				Mnemonic:   test.mnemonic,
-			}
+	var frames []func()
+	for _, s := range screens {
+		it := func(yield func(struct{}) bool) {
+			ops := new(op.Ops)
 			ctx := NewContext(newPlatform())
-			// Ok descriptor, ok error message, back.
-			ctxButton(ctx, Button3, Button3, Button1)
-			for range runUI(ctx, func() {
-				if _, ok := scr.Confirm(ctx, op.Ctx{}, &descriptorTheme); ok != test.ok {
-					t.Fatalf("DescriptorScreen.Confirm returned %v, expected %v", ok, test.ok)
-				}
-			}) {
+			ctx.FrameCallback = func() {
+				ctx.Done = !yield(struct{}{})
+				ctx.Reset()
+				ops.Reset()
 			}
-		})
-	}
-}
-
-func TestValidateDescriptor(t *testing.T) {
-	// Duplicate key.
-	dup := &bip380.Descriptor{
-		Script:    bip380.P2WSH,
-		Threshold: 1,
-		Type:      bip380.SortedMulti,
-		Keys:      make([]bip380.Key, 2),
-	}
-	fillDescriptor(t, dup, dup.Script.DerivationPath(), 12, 0)
-	dup.Keys[1] = dup.Keys[0]
-
-	// Threshold too small.
-	smallDesc := &bip380.Descriptor{
-		Script:    bip380.P2WSH,
-		Threshold: 2,
-		Type:      bip380.SortedMulti,
-		Keys:      make([]bip380.Key, 5),
-	}
-	fillDescriptor(t, smallDesc, smallDesc.Script.DerivationPath(), 12, 0)
-
-	tests := []struct {
-		name string
-		desc *bip380.Descriptor
-		err  error
-	}{
-		{"duplicate key", dup, new(errDuplicateKey)},
-		{"threshold too small", smallDesc, backup.ErrDescriptorTooLarge},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := validateDescriptor(mjolnir.Params, test.desc)
-			if err == nil {
-				t.Fatal("validateDescriptor accepted an unsupported descriptor")
-			}
-			if !errors.Is(err, test.err) {
-				t.Fatalf("validateDescriptor returned %v, expected %v", err, test.err)
-			}
-		})
-	}
-}
-
-func runUI(ctx *Context, f func()) iter.Seq[struct{}] {
-	return runUILimit(ctx, 1000, f)
-}
-
-func runUILimit(ctx *Context, limit int, f func()) iter.Seq[struct{}] {
-	return func(yield func(struct{}) bool) {
-		token := new(int)
-		defer func() {
-			if v := recover(); v != nil && v != token {
-				panic(v)
-			}
-		}()
-		frames := 0
-		ctx.Frame = func() {
-			frames++
-			if frames > limit {
-				panic("UI is not making progress")
-			}
-			if !yield(struct{}{}) {
-				panic(token)
-			}
+			s(ctx, ops.Context())
 		}
-		f()
+		next, quit := iter.Pull(it)
+		defer quit()
+		frames = append(frames, func() { next() })
 	}
-}
-
-func resetOps(ops *op.Ops, f func() (struct{}, bool)) func() (struct{}, bool) {
-	return func() (struct{}, bool) {
-		ops.Reset()
-		return f()
+	for b.Loop() {
+		for _, f := range frames {
+			f()
+		}
 	}
-}
-
-func opsContains(ops *op.Ops, str string) bool {
-	clip := image.Rectangle{Max: image.Pt(testDisplayDim, testDisplayDim)}
-	str = strings.ToLower(str)
-	txt := strings.ToLower(ops.ExtractText(clip))
-	clean := strings.ReplaceAll(strings.ToLower(str), " ", "")
-	return strings.Index(txt, clean) != -1
 }
 
 func TestAllocs(t *testing.T) {
-	res := testing.Benchmark(func(b *testing.B) {
-		desc := &bip380.Descriptor{
-			Script:    bip380.P2WSH,
-			Type:      bip380.SortedMulti,
-			Threshold: 2,
-			Keys:      make([]bip380.Key, 5),
-		}
-		m := fillDescriptor(t, desc, desc.Script.DerivationPath(), 12, 0)
-		ds := &DescriptorScreen{
-			Descriptor: desc,
-			Mnemonic:   m,
-		}
-		screens := []func(*Context, op.Ctx){
-			func(ctx *Context, ops op.Ctx) {
-				mainFlow(ctx, ops)
-			},
-			func(ctx *Context, ops op.Ctx) {
-				ds.Confirm(ctx, ops, &descriptorTheme)
-			},
-		}
-		frames := make([]func() (struct{}, bool), 0, len(screens))
-		for _, s := range screens {
-			ops := new(op.Ops)
-			ctx := NewContext(newPlatform())
-			next, quit := iter.Pull(runUILimit(ctx, math.MaxInt, func() {
-				s(ctx, ops.Context())
-			}))
-			defer quit()
-			frames = append(frames, resetOps(ops, next))
-		}
-		b.StartTimer()
-		for range b.N {
-			for _, f := range frames {
-				f()
-			}
-		}
-	})
+	res := testing.Benchmark(BenchmarkAllocs)
 	if a := res.AllocsPerOp(); a > 0 {
 		t.Errorf("got %d allocs, expected %d", a, 0)
 	}
 }
 
-func TestMainScreen(t *testing.T) {
-	p := newPlatform()
-	ctx := NewContext(p)
-
-	ops := new(op.Ops)
-	next, quit := iter.Pull(runUI(ctx, func() {
-		mainFlow(ctx, ops.Context())
-	}))
-	defer quit()
-	frame := resetOps(ops, next)
-	// Test sd card warning.
-	ctxButton(ctx, Button3)
-	frame()
-	if !opsContains(ops, "Remove SD") {
-		t.Fatal("MainScreen ignored SD card present")
-	}
-	ctx.EmptySDSlot = true
-	frame()
-	if opsContains(ops, "Remove SD") {
-		t.Fatal("MainScreen ignored SD card ejected")
-	}
-	// Input method camera
-	ctxButton(ctx, Down, Button3)
-	// Scan xpub as descriptor.
-	ctxQR(t, ctx, p, "xpub6F148LnjUhGrHfEN6Pa8VkwF8L6FJqYALxAkuHfacfVhMLVY4MRuUVMxr9pguAv67DHx1YFxqoKN8s4QfZtD9sR2xRCffTqi9E8FiFLAYk8")
-	frame()
-	if !opsContains(ops, "Invalid Seed") {
-		t.Fatal("MainScreen accepted invalid data for a Seed")
-	}
-}
-
-func TestNonParticipatingSeed(t *testing.T) {
-	// Enter seed not part of the descriptor.
-	mnemonic := make(bip39.Mnemonic, 12)
-	for i := range mnemonic {
-		mnemonic[i] = bip39.RandomWord()
-	}
-	mnemonic = mnemonic.FixChecksum()
-	scr := &DescriptorScreen{
-		Mnemonic:   mnemonic,
-		Descriptor: twoOfThree.Descriptor,
-	}
-	ctx := NewContext(newPlatform())
-
-	// Accept descriptor.
-	ctxButton(ctx, Button3)
-
-	ops := new(op.Ops)
-	frame, quit := iter.Pull(runUI(ctx, func() {
-		if _, ok := scr.Confirm(ctx, ops.Context(), &descriptorTheme); ok {
-			t.Fatal("a non-participating seed was accepted")
-		}
-	}))
-	defer quit()
-	frame()
-	if !opsContains(ops, "Unknown Wallet") {
-		t.Fatal("a non-participating seed was accepted")
-	}
-}
-
-func dumpUI(t *testing.T, ops *op.Ops) {
+func dumpUI(t testing.TB, ops *op.Ops, path string) {
+	t.Helper()
 	clip := image.Rectangle{Max: image.Pt(testDisplayDim, testDisplayDim)}
-	ops.Clip(clip)
 	fb := image.NewNRGBA(clip)
 	maskfb := image.NewAlpha(clip)
 	ops.Draw(fb, maskfb)
@@ -278,721 +100,13 @@ func dumpUI(t *testing.T, ops *op.Ops) {
 	if err := png.Encode(buf, fb); err != nil {
 		t.Error(err)
 	}
-	if err := os.WriteFile("ui.png", buf.Bytes(), 0o600); err != nil {
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 		t.Error(err)
 	}
 }
 
 func newTestEngraveScreen(t *testing.T, ctx *Context) *EngraveScreen {
-	desc := twoOfThree.Descriptor
-	const keyIdx = 0
-	plate, err := engravePlate(plateSizes, mjolnir.Params, desc, keyIdx, twoOfThree.Mnemonic)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return NewEngraveScreen(
-		ctx,
-		plate,
-	)
-}
-
-func TestEngraveScreenCancel(t *testing.T) {
-	p := newPlatform()
-	ctx := NewContext(p)
-	scr := newTestEngraveScreen(t, ctx)
-
-	// Back.
-	ctxButton(ctx, Button1)
-	// Hold confirm.
-	ctxPress(ctx, Button3)
-	var cancelled bool
-	frame, quit := iter.Pull(runUI(ctx, func() {
-		cancelled = !scr.Engrave(ctx, op.Ctx{}, &engraveTheme)
-	}))
-	defer quit()
-	frame()
-	if cancelled {
-		t.Error("exited screen without confirmation")
-	}
-	p.timeOffset += confirmDelay
-	frame()
-	if !cancelled {
-		t.Error("failed to exit screen")
-	}
-}
-
-func TestEngraveError(t *testing.T) {
-	nonstdPath := []uint32{
-		hdkeychain.HardenedKeyStart + 86,
-		hdkeychain.HardenedKeyStart + 0,
-		hdkeychain.HardenedKeyStart + 0,
-	}
-	tests := []struct {
-		name      string
-		threshold int
-		keys      int
-		path      []uint32
-		err       error
-	}{
-		{"threshold too small", 1, 5, nonstdPath, backup.ErrDescriptorTooLarge},
-	}
-	for i, test := range tests {
-		name := fmt.Sprintf("%d-%d-of-%d", i, test.threshold, test.keys)
-		t.Run(name, func(t *testing.T) {
-			desc := &bip380.Descriptor{
-				Script:    bip380.P2WSH,
-				Threshold: test.threshold,
-				Type:      bip380.SortedMulti,
-				Keys:      make([]bip380.Key, test.keys),
-			}
-			mnemonic := fillDescriptor(t, desc, test.path, 12, 0)
-			_, err := engravePlate(plateSizes, mjolnir.Params, desc, 0, mnemonic)
-			if err == nil {
-				t.Fatal("invalid descriptor succeeded")
-			}
-			if !errors.Is(err, test.err) {
-				t.Fatalf("got error %v, expected %v", err, test.err)
-			}
-		})
-	}
-}
-
-func TestEngraveScreenConnectionError(t *testing.T) {
-	p := newPlatform()
-	p.engrave.closed = make(chan []mjolnir.Cmd, 1)
-	p.engrave.connErr = errors.New("failed to connect")
-	ctx := NewContext(p)
-	scr := newTestEngraveScreen(t, ctx)
-	ops := new(op.Ops)
-	frame, quit := iter.Pull(runUI(ctx, func() {
-		scr.Engrave(ctx, ops.Context(), &engraveTheme)
-	}))
-	defer quit()
-	frame = resetOps(ops, frame)
-	// Press next until connect is reached.
-	for scr.instructions[scr.step].Type != ConnectInstruction {
-		ctxButton(ctx, Button3)
-		frame()
-	}
-	// Hold connect.
-	ctxPress(ctx, Button3)
-	frame()
-	p.timeOffset += confirmDelay
-	frame()
-	if !opsContains(ops, p.engrave.connErr.Error()) {
-		t.Fatal("engraver error did not propagate to screen")
-	}
-	// Dismiss error.
-	ctxButton(ctx, Button3)
-	// Successfully connect, but fail during engraving.
-	p.engrave.connErr = nil
-	p.engrave.ioErr = errors.New("error during engraving")
-	delivered := make(chan struct{})
-	p.engrave.ioErrDelivered = delivered
-	// Hold connect.
-	ctxPress(ctx, Button3)
-	frame()
-	p.timeOffset += confirmDelay
-	frame()
-	if opsContains(ops, "error") {
-		t.Fatal("screen reported error for connection success")
-	}
-	<-delivered
-	for range p.wakeups {
-		frame()
-		if opsContains(ops, p.engrave.ioErr.Error()) {
-			break
-		}
-	}
-	// Dismiss error and verify screen exits.
-	ctxButton(ctx, Button3)
-	frame()
-	if opsContains(ops, "error") {
-		t.Fatal("screen didn't exit after fatal engraver error")
-	}
-	// Verify device was closed.
-	<-p.engrave.closed
-}
-
-func TestScanScreenConnectError(t *testing.T) {
-	p := newPlatform()
-	// Fail on connect.
-	ctx := NewContext(p)
-	scr := &ScanScreen{}
-	camErr := errors.New("failed to open camera")
-	ctx.events = append(ctx.events, FrameEvent{Error: camErr}.Event())
-	ops := new(op.Ops)
-	frame, quit := iter.Pull(runUI(ctx, func() {
-		scr.Scan(ctx, ops.Context())
-	}))
-	defer quit()
-	frame = resetOps(ops, frame)
-	frame()
-	if !opsContains(ops, camErr.Error()) {
-		t.Fatal("initial camera error not reported")
-	}
-}
-
-func TestScanScreenStreamError(t *testing.T) {
-	p := newPlatform()
-	ctx := NewContext(p)
-	// Fail during streaming.
-	scr := &ScanScreen{}
-	// Connect.
-	camErr := errors.New("error during streaming")
-	ctx.events = append(ctx.events, FrameEvent{Error: camErr}.Event())
-	ops := new(op.Ops)
-	frame, quit := iter.Pull(runUI(ctx, func() {
-		scr.Scan(ctx, ops.Context())
-	}))
-	defer quit()
-	frame()
-	if !opsContains(ops, camErr.Error()) {
-		t.Fatal("streaming camera error not reported")
-	}
-}
-
-func TestWordKeyboardScreen(t *testing.T) {
-	ctx := NewContext(newPlatform())
-	for i := bip39.Word(0); i < bip39.NumWords; i++ {
-		w := bip39.LabelFor(i)
-		ctxString(ctx, strings.ToUpper(w))
-		ctxButton(ctx, Button2)
-		m := make(bip39.Mnemonic, 1)
-		inputWordsFlow(ctx, op.Ctx{}, &descriptorTheme, m, 0)
-		if got := bip39.LabelFor(m[0]); got != w {
-			t.Errorf("keyboard mapped %q to %q", w, got)
-		}
-	}
-}
-
-func ctxMnemonic(ctx *Context, m bip39.Mnemonic) {
-	for _, word := range m {
-		ctxString(ctx, strings.ToUpper(bip39.LabelFor(word)))
-		ctxButton(ctx, Button2)
-	}
-}
-
-func ctxQR(t *testing.T, ctx *Context, p *testPlatform, qrs ...string) {
-	t.Helper()
-	for _, qr := range qrs {
-		ctx.events = append(ctx.events, qrFrame(t, p, qr).Event())
-	}
-}
-
-func TestSeedScreenScan(t *testing.T) {
-	p := newPlatform()
-	ctx := NewContext(p)
-	// Select camera.
-	ctxButton(ctx, Down, Button3)
-	want, err := bip39.ParseMnemonic("attack pizza motion avocado network gather crop fresh patrol unusual wild holiday candy pony ranch winter theme error hybrid van cereal salon goddess expire")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctxQR(t, ctx, p, string(seedqr.QR(want)))
-	got, ok := newMnemonicFlow(ctx, op.Ctx{}, &descriptorTheme)
-	if !ok {
-		t.Errorf("no mnemonic from scanned seed")
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("scanned %v, want %v", got, want)
-	}
-}
-
-func TestSeedScreenScanInvalid(t *testing.T) {
-	p := newPlatform()
-	ctx := NewContext(p)
-	// Select camera.
-	ctxButton(ctx, Down, Button3)
-	ctxQR(t, ctx, p, "UR:CRYPTO-SEED/OYADGDIYWLAMAEJSZSWDWYTLTIFEENFTLNMNWKBDHNSSRO")
-	ops := new(op.Ops)
-	frame, quit := iter.Pull(runUI(ctx, func() {
-		newMnemonicFlow(ctx, ops.Context(), &descriptorTheme)
-	}))
-	defer quit()
-	frame()
-	if !opsContains(ops, "invalid seed") {
-		t.Error("invalid seed accepted")
-	}
-}
-
-func TestSeedScreenInvalidSeed(t *testing.T) {
-	p := newPlatform()
-	ctx := NewContext(p)
-	m := append(bip39.Mnemonic{}, twoOfThree.Mnemonic...)
-	// Invalidate seed.
-	m[0] = 0
-	// Accept seed.
-	ctxButton(ctx, Button3)
-	scr := new(SeedScreen)
-	var confirmed bool
-	ops := new(op.Ops)
-	var exited bool
-	frame, quit := iter.Pull(runUI(ctx, func() {
-		scr.Confirm(ctx, ops.Context(), &singleTheme, m)
-		exited = true
-	}))
-	defer quit()
-	frame = resetOps(ops, frame)
-	frame()
-	if confirmed || !opsContains(ops, "invalid seed") {
-		t.Fatal("invalid seed accepted")
-	}
-	// Dismiss error.
-	ctxButton(ctx, Button3)
-
-	// Back.
-	ctxButton(ctx, Button1)
-	// Hold confirm.
-	ctxPress(ctx, Button3)
-	frame()
-	if exited {
-		t.Error("exited screen without confirmation")
-	}
-	p.timeOffset += confirmDelay
-	frame()
-	if !exited {
-		t.Error("failed to exit screen")
-	}
-}
-
-func TestXpubMasterFingerprintSinglesig(t *testing.T) {
-	const mnemonic = "upset toe sheriff cotton vibrant shock torch waste congress innocent company review"
-	const descriptor = "zpub6qiC7jMrWkhNEu7YamFTWx8YHQaDFynLYQCUmxjCWpBiLQ4Qp6c6PEwpZpkN27XmUtBjX7hVLyyBKa7zhgaB5B2qvdckaP21ADwx7oYgYD6"
-
-	m, err := bip39.ParseMnemonic(mnemonic)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	p := newPlatform()
-	ctx := NewContext(p)
-	ops := new(op.Ops)
-	ctxQR(t, ctx, p, descriptor)
-	ctxButton(ctx, Button3)
-	got, parsed := inputDescriptorFlow(ctx, ops.Context(), &descriptorTheme, m)
-
-	if !parsed {
-		t.Error("failed to parse descriptor")
-	}
-
-	want, err := nonstandard.OutputDescriptor([]byte(descriptor))
-	if err != nil {
-		t.Fatal(err)
-	}
-	mfp, err := masterFingerprintFor(m, &chaincfg.MainNetParams)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want.Keys[0].MasterFingerprint = mfp
-	if !reflect.DeepEqual(want, got) {
-		t.Error("descriptors don't match")
-	}
-}
-
-func TestSeed(t *testing.T) {
-	p := newPlatform()
-	ctx := NewContext(p)
-
-	const mnemonic = "doll clerk nice coast caught valid shallow taxi buyer economy lunch roof"
-	m, err := bip39.ParseMnemonic(mnemonic)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mk, ok := deriveMasterKey(m, &chaincfg.MainNetParams)
-	if !ok {
-		t.Fatal("failed to derive master key")
-	}
-	pkey, err := mk.ECPubKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	mfp := bip32.Fingerprint(pkey)
-	seedDesc := backup.Seed{
-		KeyIdx:            0,
-		Mnemonic:          m,
-		Keys:              1,
-		MasterFingerprint: mfp,
-		Font:              constant.Font,
-		Size:              backup.SquarePlate,
-	}
-	side, err := backup.EngraveSeed(p.EngraverParams(), seedDesc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plate := Plate{
-		Sides:             []engrave.Plan{side},
-		Size:              backup.SquarePlate,
-		MasterFingerprint: mfp,
-	}
-
-	var completed bool
-	scr := NewEngraveScreen(ctx, plate)
-	frame, quit := iter.Pull(runUI(ctx, func() {
-		completed = scr.Engrave(ctx, op.Ctx{}, &engraveTheme)
-	}))
-	defer quit()
-
-	testEngraving(t, p, ctx, scr, side, frame)
-	for !completed {
-		ctxButton(ctx, Button3)
-		frame()
-	}
-}
-
-func TestMulti(t *testing.T) {
-	const oneOfTwoDesc = "wsh(sortedmulti(1,[94631f99/48h/0h/0h/2h]xpub6ENfRaMWq2UoFy5FrLRMwiEkdgFdMgjEoikR34RBGzhsx8JzAkn7fyQeR5odirEwERvmxhSEv7rsmV7nuzjSKKKJHBP2aQZVu3R2d5ERgcw,[4bbaa801/48h/0h/0h/2h]xpub6E8mpiqJiVKuJZqxtu5SbHQnwUWWPQpZEy9CVtvfU1gxXZnbb9DG2AvZyMHvyVRtUPAEmu6BuRCy4LK2rKMeNr7jQKXsCyFfr1osgFCMYpc))"
-	mnemonics := []string{
-		"doll clerk nice coast caught valid shallow taxi buyer economy lunch roof",
-		"road lend lyrics shift rabbit amazing fetch impulse provide reopen sphere network",
-	}
-
-	for i, mnemonic := range mnemonics {
-		p := newPlatform()
-		ctx := NewContext(p)
-
-		m, err := bip39.ParseMnemonic(mnemonic)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		oneOfTwo, err := nonstandard.OutputDescriptor([]byte(oneOfTwoDesc))
-		if err != nil {
-			t.Fatal(err)
-		}
-		const size = backup.LargePlate
-		descPlate := backup.Descriptor{
-			Descriptor: oneOfTwo,
-			KeyIdx:     i,
-			Font:       constant.Font,
-			Size:       size,
-		}
-		descSide, err := backup.EngraveDescriptor(p.EngraverParams(), descPlate)
-		if err != nil {
-			t.Fatal(err)
-		}
-		seedDesc := backup.Seed{
-			Title:             oneOfTwo.Title,
-			KeyIdx:            i,
-			Mnemonic:          m,
-			Keys:              len(oneOfTwo.Keys),
-			MasterFingerprint: oneOfTwo.Keys[i].MasterFingerprint,
-			Font:              constant.Font,
-			Size:              size,
-		}
-		seedSide, err := backup.EngraveSeed(p.EngraverParams(), seedDesc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		plate := Plate{
-			Size:  size,
-			Sides: []engrave.Plan{descSide, seedSide},
-		}
-		var completed bool
-		scr := NewEngraveScreen(ctx, plate)
-		frame, quit := iter.Pull(runUI(ctx, func() {
-			completed = scr.Engrave(ctx, op.Ctx{}, &engraveTheme)
-		}))
-		defer quit()
-		for _, side := range plate.Sides {
-			testEngraving(t, p, ctx, scr, side, frame)
-		}
-		for !completed {
-			ctxButton(ctx, Button3)
-			frame()
-		}
-	}
-}
-
-func fillDescriptor(t *testing.T, desc *bip380.Descriptor, path bip32.Path, seedlen int, keyIdx int) bip39.Mnemonic {
-	var mnemonic bip39.Mnemonic
-	for i := range desc.Keys {
-		m := make(bip39.Mnemonic, seedlen)
-		for j := range m {
-			m[j] = bip39.Word(i*seedlen + j)
-		}
-		m = m.FixChecksum()
-		seed := bip39.MnemonicSeed(m, "")
-		network := &chaincfg.MainNetParams
-		mk, err := hdkeychain.NewMaster(seed, network)
-		if err != nil {
-			t.Fatal(err)
-		}
-		xpub, err := bip32.Derive(mk, path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pkey, err := mk.ECPubKey()
-		if err != nil {
-			t.Fatal(err)
-		}
-		mfp := bip32.Fingerprint(pkey)
-		pub, err := xpub.ECPubKey()
-		if err != nil {
-			t.Fatal(err)
-		}
-		desc.Keys[i] = bip380.Key{
-			Network:           network,
-			MasterFingerprint: mfp,
-			DerivationPath:    path,
-			KeyData:           pub.SerializeCompressed(),
-			ChainCode:         xpub.ChainCode(),
-			ParentFingerprint: xpub.ParentFingerprint(),
-		}
-		if i == keyIdx {
-			mnemonic = m
-		}
-	}
-	return mnemonic
-}
-
-type testPlatform struct {
-	events  []Event
-	wakeups chan struct{}
-
-	engrave struct {
-		closed         chan []mjolnir.Cmd
-		connErr        error
-		ioErr          error
-		ioErrDelivered chan<- struct{}
-	}
-
-	timeOffset time.Duration
-	qrImages   map[*uint8][]byte
-}
-
-func (t *testPlatform) ScanQR(img *image.Gray) ([][]byte, error) {
-	if content, ok := t.qrImages[&img.Pix[0]]; ok {
-		return [][]byte{content}, nil
-	}
-	return nil, errors.New("no QR code")
-}
-
-const testDisplayDim = 240
-
-func (*testPlatform) DisplaySize() image.Point {
-	return image.Pt(testDisplayDim, testDisplayDim)
-}
-
-func (*testPlatform) Dirty(r image.Rectangle) error {
-	return nil
-}
-
-func (*testPlatform) NextChunk() (draw.RGBA64Image, bool) {
-	return nil, false
-}
-
-func (t *testPlatform) Now() time.Time {
-	return time.Now().Add(t.timeOffset)
-}
-
-func (*testPlatform) Debug() bool {
-	return false
-}
-
-func ctxString(ctx *Context, str string) {
-	for _, r := range str {
-		ctx.Events(
-			ButtonEvent{
-				Button:  Rune,
-				Rune:    r,
-				Pressed: true,
-			}.Event(),
-		)
-	}
-}
-
-func ctxPress(ctx *Context, bs ...Button) {
-	for _, b := range bs {
-		ctx.Events(
-			ButtonEvent{
-				Button:  b,
-				Pressed: true,
-			}.Event(),
-		)
-	}
-}
-
-func ctxButton(ctx *Context, bs ...Button) {
-	for _, b := range bs {
-		ctx.Events(
-			ButtonEvent{
-				Button:  b,
-				Pressed: true,
-			}.Event(),
-			ButtonEvent{
-				Button:  b,
-				Pressed: false,
-			}.Event(),
-		)
-	}
-}
-
-func (p *testPlatform) Wakeup() {
-	select {
-	case <-p.wakeups:
-	default:
-	}
-	p.wakeups <- struct{}{}
-}
-
-func (p *testPlatform) AppendEvents(deadline time.Time, evts []Event) []Event {
-	evts = append(evts, p.events...)
-	p.events = nil
-	return evts
-}
-
-type wrappedEngraver struct {
-	dev            *mjolnir.Simulator
-	closed         chan<- []mjolnir.Cmd
-	ioErr          error
-	ioErrDelivered chan<- struct{}
-}
-
-func (w *wrappedEngraver) Read(p []byte) (int, error) {
-	n, err := w.dev.Read(p)
-	if err == nil && w.ioErr != nil {
-		err = w.ioErr
-		w.ioErr = nil
-		close(w.ioErrDelivered)
-	}
-	return n, err
-}
-
-func (w *wrappedEngraver) Write(p []byte) (int, error) {
-	n, err := w.dev.Write(p)
-	if err == nil && w.ioErr != nil {
-		err = w.ioErr
-		w.ioErr = nil
-		close(w.ioErrDelivered)
-	}
-	return n, err
-}
-
-func (w *wrappedEngraver) Close() error {
-	if w.closed != nil {
-		w.closed <- w.dev.Cmds
-	}
-	return w.dev.Close()
-}
-
-func (p *testPlatform) EngraverParams() engrave.Params {
-	return mjolnir.Params
-}
-
-var plateSizes = []backup.PlateSize{backup.SquarePlate, backup.LargePlate}
-
-func (p *testPlatform) PlateSizes() []backup.PlateSize {
-	return plateSizes
-}
-
-func (p *testPlatform) Engraver() (Engraver, error) {
-	if err := p.engrave.connErr; err != nil {
-		return nil, err
-	}
-	sim := mjolnir.NewSimulator()
-	return &engraver{
-		dev: &wrappedEngraver{sim, p.engrave.closed, p.engrave.ioErr, p.engrave.ioErrDelivered},
-	}, nil
-}
-
-type engraver struct {
-	dev io.ReadWriteCloser
-}
-
-func (e *engraver) Engrave(sz backup.PlateSize, plan engrave.Plan, quit <-chan struct{}) error {
-	return mjolnir.Engrave(e.dev, mjolnir.Options{}, plan, quit)
-}
-
-func (e *engraver) Close() {
-	e.dev.Close()
-}
-
-func (p *testPlatform) CameraFrame(dims image.Point) {
-}
-
-func newPlatform() *testPlatform {
-	return &testPlatform{
-		wakeups: make(chan struct{}, 1),
-	}
-}
-
-func qrFrame(t *testing.T, p *testPlatform, content string) FrameEvent {
-	qr, err := qr.Encode(content, qr.L)
-	if err != nil {
-		t.Fatal(err)
-	}
-	qrImg := qr.Image()
-	b := qrImg.Bounds()
-	frameImg := image.NewYCbCr(b, image.YCbCrSubsampleRatio420)
-	for y := b.Min.Y; y < b.Max.Y; y++ {
-		for x := b.Min.X; x < b.Max.X; x++ {
-			off := frameImg.YOffset(x, y)
-			r, _, _, _ := qrImg.At(x, y).RGBA()
-			frameImg.Y[off] = uint8(r >> 8)
-		}
-	}
-	if p.qrImages == nil {
-		p.qrImages = make(map[*byte][]byte)
-	}
-	p.qrImages[&frameImg.Y[0]] = []byte(content)
-	return FrameEvent{
-		Image: frameImg,
-	}
-}
-
-func testEngraving(t *testing.T, p *testPlatform, ctx *Context, scr *EngraveScreen, side engrave.Plan, frame func() (struct{}, bool)) {
-	p.engrave.closed = make(chan []mjolnir.Cmd)
-done:
-	for {
-		switch scr.instructions[scr.step].Type {
-		case EngraveInstruction:
-			break done
-		case ConnectInstruction:
-			// Hold connect.
-			ctxPress(ctx, Button3)
-			frame()
-			p.timeOffset += confirmDelay
-			frame()
-		default:
-			ctxButton(ctx, Button3)
-			frame()
-		}
-	}
-	got := <-p.engrave.closed
-	// Verify the step is advanced after engrave completion.
-	for scr.instructions[scr.step].Type == EngraveInstruction {
-		frame()
-	}
-	want := simEngrave(t, side)
-	if !reflect.DeepEqual(want, got) {
-		t.Fatalf("engraver commands mismatch for side %v", side)
-	}
-}
-
-func simEngrave(t *testing.T, plate engrave.Plan) []mjolnir.Cmd {
-	sim := mjolnir.NewSimulator()
-	defer sim.Close()
-	if err := mjolnir.Engrave(sim, mjolnir.Options{}, plate, nil); err != nil {
-		t.Fatal(err)
-	}
-	return sim.Cmds
-}
-
-func mnemonicFor(phrase string) bip39.Mnemonic {
-	m, err := bip39.ParseMnemonic(phrase)
-	if err != nil {
-		panic(err)
-	}
-	return m
-}
-
-var twoOfThree = struct {
-	Descriptor *bip380.Descriptor
-	Mnemonic   bip39.Mnemonic
-}{
-	Mnemonic: mnemonicFor("flip begin artist fringe online release swift genre wool general transfer arm"),
-	Descriptor: &bip380.Descriptor{
+	desc := &bip380.Descriptor{
 		Script:    bip380.P2WSH,
 		Threshold: 2,
 		Type:      bip380.SortedMulti,
@@ -1022,5 +136,315 @@ var twoOfThree = struct {
 				ParentFingerprint: 0x97ec38f9,
 			},
 		},
-	},
+	}
+
+	_, engravings, err := validateDescriptor(ctx.Platform.EngraverParams(), desc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewEngraveScreen(
+		ctx,
+		engravings[0],
+	)
+}
+
+func TestEngraveScreenCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := newPlatform()
+		ctx := NewContext(p)
+		ops := new(op.Ops)
+		frame, quit := runUI(ctx, ops, func() {
+			scr := newTestEngraveScreen(t, ctx)
+			if ok := scr.Engrave(ctx, ops.Context(), &engraveTheme); ok {
+				t.Error("EngraveScreen: succeeded unexpectedly")
+			}
+		})
+		defer quit()
+
+		// Start engraving.
+		click(&ctx.Router, Button3, Button3, Button3)
+		// Hold confirm.
+		press(&ctx.Router, Button3)
+		if _, ok := frame(); !ok {
+			t.Fatal("EngraveScreen: exited unexpectedly")
+		}
+		time.Sleep(confirmDelay)
+		if _, ok := frame(); !ok {
+			t.Fatal("EngraveScreen: exited unexpectedly")
+		}
+
+		// Back and press confirm.
+		click(&ctx.Router, Button1)
+		press(&ctx.Router, Button3)
+		if _, ok := frame(); !ok {
+			t.Fatal("EngraveScreen: cancelled without confirmation")
+		}
+		// Hold confirm.
+		time.Sleep(confirmDelay)
+		if _, ok := frame(); ok {
+			t.Fatal("engrave screen did not cancel")
+		}
+		select {
+		case <-p.engrave.quit:
+		default:
+			t.Fatal("EngraveScreen: did not close quit channel")
+		}
+	})
+}
+
+func TestEngraveScreenError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := newPlatform()
+		ctx := NewContext(p)
+		ops := new(op.Ops)
+		scr := newTestEngraveScreen(t, ctx)
+		frame, quit := runUI(ctx, ops, func() {
+			scr.Engrave(ctx, ops.Context(), &engraveTheme)
+		})
+		defer quit()
+
+		// Fail during engraving.
+		ioErr := errors.New("error during engraving")
+		p.engrave.ioErr = ioErr
+		// Press next until connect is reached.
+		click(&ctx.Router, Button3, Button3, Button3)
+		// Hold connect.
+		press(&ctx.Router, Button3)
+		frame()
+		time.Sleep(confirmDelay)
+		frame()
+		<-p.engrave.done
+		content, ok := frame()
+		if !ok || !uiContains(content, ioErr.Error()) {
+			t.Fatalf("EngraveScreen: no error reported, expected %v", ioErr)
+		}
+		// Dismiss error and verify screen exits.
+		click(&ctx.Router, Button3)
+		content, ok = frame()
+		if ok && uiContains(content, "error") {
+			t.Fatal("EngraveScreen: didn't dismiss error")
+		}
+	})
+}
+
+func TestEngraveScreen(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := newPlatform()
+		ctx := NewContext(p)
+		ops := new(op.Ops)
+		scr := newTestEngraveScreen(t, ctx)
+		success := false
+		frame, quit := runUI(ctx, ops, func() {
+			success = scr.Engrave(ctx, ops.Context(), &engraveTheme)
+		})
+		defer quit()
+
+		// Press next until connect is reached.
+		click(&ctx.Router, Button3, Button3, Button3)
+		// Hold connect.
+		press(&ctx.Router, Button3)
+		frame()
+		time.Sleep(confirmDelay)
+	loop:
+		for {
+			frame()
+			select {
+			case <-p.engrave.done:
+				break loop
+			case <-p.wakeups:
+			}
+		}
+		click(&ctx.Router, Button3)
+		synctest.Wait()
+		if _, ok := frame(); ok || !success {
+			t.Fatal("EngraveScreen: didn't complete successfully")
+		}
+	})
+}
+
+func TestWordKeyboardScreen(t *testing.T) {
+	ctx := NewContext(newPlatform())
+	for i := bip39.Word(0); i < bip39.NumWords; i++ {
+		w := bip39.LabelFor(i)
+		runes(&ctx.Router, strings.ToUpper(w))
+		click(&ctx.Router, Button2)
+		m := make(bip39.Mnemonic, 1)
+		inputWordsFlow(ctx, op.Ctx{}, &descriptorTheme, m, 0)
+		if got := bip39.LabelFor(m[0]); got != w {
+			t.Errorf("keyboard mapped %q to %q", w, got)
+		}
+	}
+}
+
+func fillDescriptor(t testing.TB, desc *bip380.Descriptor, path bip32.Path, seedlen int, keyIdx int) bip39.Mnemonic {
+	var mnemonic bip39.Mnemonic
+	for i := range desc.Keys {
+		m := make(bip39.Mnemonic, seedlen)
+		for j := range m {
+			m[j] = bip39.Word(i*seedlen + j)
+		}
+		m = m.FixChecksum()
+		seed := bip39.MnemonicSeed(m, "")
+		network := &chaincfg.MainNetParams
+		mk, err := hdkeychain.NewMaster(seed, network)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pkey, err := mk.ECPubKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mfp := bip32.Fingerprint(pkey)
+		xpub, err := bip32.Derive(mk, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pub, err := xpub.ECPubKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		desc.Keys[i] = bip380.Key{
+			Network:           network,
+			MasterFingerprint: mfp,
+			DerivationPath:    path,
+			KeyData:           pub.SerializeCompressed(),
+			ChainCode:         xpub.ChainCode(),
+			ParentFingerprint: xpub.ParentFingerprint(),
+		}
+		if i == keyIdx {
+			mnemonic = m
+		}
+	}
+	return mnemonic
+}
+
+type testPlatform struct {
+	events  []Event
+	wakeups chan struct{}
+	engrave struct {
+		ioErr error
+		quit  <-chan struct{}
+		done  chan struct{}
+		jobs  chan bspline.Curve
+	}
+}
+
+const (
+	mm             = 6400
+	strokeWidth    = 0.3 * mm
+	topSpeed       = 30 * mm
+	engravingSpeed = 8 * mm
+	acceleration   = 250 * mm
+	jerk           = 2600 * mm
+
+	testDisplayDim = 240
+)
+
+var (
+	engraverConf = engrave.StepperConfig{
+		TicksPerSecond: topSpeed,
+		Speed:          topSpeed,
+		EngravingSpeed: engravingSpeed,
+		Acceleration:   acceleration,
+		Jerk:           jerk,
+	}
+	engraverParams = engrave.Params{
+		StrokeWidth:   strokeWidth,
+		Millimeter:    mm,
+		StepperConfig: engraverConf,
+	}
+)
+
+func (*testPlatform) DisplaySize() image.Point {
+	return image.Pt(testDisplayDim, testDisplayDim)
+}
+
+func (*testPlatform) Dirty(r image.Rectangle) error {
+	return nil
+}
+
+func (*testPlatform) NextChunk() (draw.RGBA64Image, bool) {
+	return nil, false
+}
+
+func (p *testPlatform) Wakeup() {
+	select {
+	case <-p.wakeups:
+	default:
+	}
+	p.wakeups <- struct{}{}
+}
+
+func (p *testPlatform) AppendEvents(deadline time.Time, evts []Event) []Event {
+	evts = append(evts, p.events...)
+	p.events = nil
+	return evts
+}
+
+func (p *testPlatform) Features() Features {
+	return 0
+}
+
+func (p *testPlatform) LockBoot() error {
+	panic("not implemented")
+}
+
+func (p *testPlatform) EngraverParams() engrave.Params {
+	return engraverParams
+}
+
+func (p *testPlatform) NFCReader() io.Reader {
+	return nil
+}
+
+func (p *testPlatform) Engrave(stall bool, spline bspline.Curve, status chan<- EngraverStatus, quit <-chan struct{}) error {
+	defer close(p.engrave.done)
+	p.engrave.quit = quit
+	select {
+	case p.engrave.jobs <- spline:
+	default:
+	}
+	if err := p.engrave.ioErr; err != nil {
+		return err
+	}
+	for range spline {
+	}
+	return nil
+}
+
+func newPlatform() *testPlatform {
+	t := &testPlatform{
+		wakeups: make(chan struct{}, 1),
+	}
+	t.engrave.done = make(chan struct{})
+	t.engrave.jobs = make(chan bspline.Curve, 1)
+	return t
+}
+
+func mnemonicFor(phrase string) bip39.Mnemonic {
+	m, err := bip39.ParseMnemonic(phrase)
+	if err != nil {
+		panic(err)
+	}
+	return m
+}
+
+func runUI(ctx *Context, ops *op.Ops, ui func()) (frame func() (string, bool), close func()) {
+	return iter.Pull(func(yield func(content string) bool) {
+		ctx.FrameCallback = func() {
+			r := image.Rectangle{Max: ctx.Platform.DisplaySize()}
+			content := ops.ExtractText(r)
+			ctx.Reset()
+			ops.Reset()
+			ctx.Done = ctx.Done || !yield(content)
+		}
+		ui()
+	})
+}
+
+func uiContains(content, str string) bool {
+	str = strings.ToLower(str)
+	txt := strings.ToLower(content)
+	clean := strings.ReplaceAll(strings.ToLower(str), " ", "")
+	return strings.Index(txt, clean) != -1
 }

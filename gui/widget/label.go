@@ -9,6 +9,14 @@ import (
 	"seedhammer.com/gui/text"
 )
 
+func Label(ops op.Ctx, st text.Style, col color.NRGBA, txt string) image.Point {
+	return Labelwf(ops, st, math.MaxInt, col, "%s", txt)
+}
+
+func Labelw(ops op.Ctx, st text.Style, width int, col color.NRGBA, txt string) image.Point {
+	return Labelwf(ops, st, width, col, "%s", txt)
+}
+
 func Labelf(ops op.Ctx, l text.Style, col color.NRGBA, txt string, args ...any) image.Point {
 	return Labelwf(ops, l, math.MaxInt, col, txt, args...)
 }
