@@ -12,10 +12,7 @@ require (
 	github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07
 	golang.org/x/crypto v0.47.0
 	golang.org/x/image v0.35.0
-	golang.org/x/sys v0.40.0
 	gonum.org/v1/gonum v0.17.0
-	periph.io/x/conn/v3 v3.7.0
-	periph.io/x/host/v3 v3.8.2
 )
 
 require (
@@ -23,5 +20,6 @@ require (
 	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f // indirect
 	github.com/decred/dcrd/crypto/blake256 v1.0.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
 )
