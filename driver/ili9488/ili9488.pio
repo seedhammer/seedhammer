@@ -1,0 +1,27 @@
+; Driver for the 8-bit parallel interface of an
+; ILI9488 LCD display. The program writes a byte
+; every 2 clock cycles.
+.program ili9488
+
+; Side-set WRX pin.
+.side_set 1 opt
+
+pull ifempty side 1 ; stall here if no data.
+out  pins 8  side 0
+
+; Utility instructions.
+.program ili9488_util
+
+.side_set 1 opt ; must match main program
+
+wait 1 pin 0
+
+% go {
+package ili9488
+
+import "seedhammer.com/driver/pio"
+
+const pioCyclesPerWrite = 2
+
+var waitForVSYNCInst = uint32(ili9488_utilInstructions[0])
+%}

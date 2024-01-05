@@ -1,0 +1,54 @@
+.program uart
+
+.side_set 1 opt
+.define PUBLIC ErrIRQ 0
+.define PUBLIC RxIRQ 1
+
+; IN pin 0, OUT pin 0, JMP pin, SET pin 0 and sideset pin are all mapped to the
+; UART I/O pin. Register y must be loaded with the number of tx bytes.
+
+; Transmit.
+
+start_tx:
+    pull ifempty        [6] ; Stall with line in idle state.
+    set x, 7     side 0 [7] ; Preload bit counter, assert start bit for 8 clocks.
+bitloop_tx:                 ; This loop will run 8 times (8n1 UART).
+    out pins, 1             ; Shift 1 bit from OSR to the first OUT pin.
+    jmp x-- bitloop_tx  [6] ; Each loop iteration is 8 cycles.
+PUBLIC transmit:
+    jmp y-- start_tx side 1 ; Assert stop bit.
+    nop                 [6] ; Leave the last stop bit for 8 cycles.
+
+; Receive.
+
+    set pindirs, 0         ; Set pin to input.
+    irq RxIRQ              ; Notify tx done.
+.wrap_target
+start_rx:
+    wait 0 pin 0  [3]      ; Stall until start bit is asserted.
+    set x, 7      [7]      ; Preload bit counter, then delay until halfway through
+bitloop_rx:                ; the first data bit (12 cycles incl wait, set).
+    in pins, 1             ; Shift data bit into ISR.
+    jmp x-- bitloop_rx [6] ; Loop 8 times, each loop iteration is 8 cycles.
+    jmp pin start_rx       ; Check stop bit (should be high).
+
+    irq ErrIRQ             ; Either a framing error or a break. Set a sticky flag,
+    wait 1 pin 0           ; and wait for line to return to idle state.
+
+; Utility instructions.
+.program uart_util
+
+.side_set 1 opt ; must match main program
+
+set y, 0 ; The zero is a dummy value - the driver sets the actual value.
+
+% go {
+package tmc2209
+
+import "seedhammer.com/driver/pio"
+
+// The number of PIO cycles per bit.
+const cyclesPerBit = 8
+
+var setYInst = uint32(uart_utilInstructions[0])
+%}
