@@ -1,0 +1,54 @@
+; A driver for running two stepper motor drivers
+; and a solenoid.
+;
+; Input format is 5 bit pin settings (including the step pins).
+;
+; On stalls, the x register is output on the pins. Clear
+; it to ensure the needle in particular is stopped if
+; the FIFO empties.
+;
+; Out pins mapping:
+;
+; pin 0: dir y
+; pin 1: dir x
+; pin 2: solenoid
+; pin 3: step y
+; pin 4: step x
+;
+; Side set pins mapping:
+;
+; pin 0: step y
+; pin 1: step x
+;
+; Note that the side set pins overlap the out pins.
+;
+.program mjolnir2
+
+.side_set 2 opt
+
+.define PUBLIC pinBits 5
+
+	pull ifempty noblock  ; Fill the OSR with x on stalls.
+	out y, pinBits        ; Fetch the pins.
+	mov pins, y side 0b00 ; Set pins.
+	mov pins, y           ; Step.
+	mov pins, y side 0b00 ; Reset pins.
+
+; Utility instructions.
+.program mjolnir2_util
+
+.side_set 2 opt ; must match main program
+
+set x, 0b00000
+
+% go {
+package mjolnir2
+
+import "seedhammer.com/driver/pio"
+
+const (
+	pioCyclesPerStep = 5
+)
+
+var clearXInst = uint32(mjolnir2_utilInstructions[0])
+%}
