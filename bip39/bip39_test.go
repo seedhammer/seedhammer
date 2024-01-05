@@ -59,6 +59,21 @@ func TestVectors(t *testing.T) {
 		if got := m4.String(); got != v.mnemonic {
 			t.Errorf("%s: round-tripped to %s", v.mnemonic, got)
 		}
+		swu := bytes.ToUpper(sw)
+		m5, err := Parse(swu)
+		if err != nil {
+			t.Fatalf("Parse failed to parse %q: %v", swu, err)
+		}
+		if !slices.Equal(m, m5) {
+			t.Fatalf("Parse parsed differently than ParseMnemonic for %q", v.mnemonic)
+		}
+		m6, err := ParseMnemonic(strings.ToUpper(v.mnemonic))
+		if err != nil {
+			t.Fatalf("ParseMnemonic failed to parse %q: %v", swu, err)
+		}
+		if !slices.Equal(m, m6) {
+			t.Fatalf("Parse parsed differently than ParseMnemonic for %q", v.mnemonic)
+		}
 	}
 }
 

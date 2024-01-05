@@ -1,7 +1,7 @@
 // package bip39 represents and converts bitcoin bip39 mnemonic phrases.
 package bip39
 
-//go:generate go run gen.go
+//go:generate go run seedhammer.com/cmd/wordlist -pkg bip39
 
 import (
 	"bytes"
@@ -52,7 +52,6 @@ func DiceToWord(roll Roll) (Word, bool) {
 	}
 	const rowsPerSubcolumn = 5 * 16
 	const rowsPerPage = 13 * 16
-	const wordsPerPage = 2 * rowsPerPage
 	page := roll[0]
 	subcol := roll[len(roll)-1]
 	row := 0
@@ -191,14 +190,14 @@ func ChecksumWord(entropy []byte) Word {
 }
 
 func MnemonicSeed(m Mnemonic, password string) []byte {
-	var sentence strings.Builder
+	var sentence []byte
 	for i, w := range m {
-		sentence.WriteString(LabelFor(w))
+		sentence = append(sentence, []byte(LabelFor(w))...)
 		if i < len(m)-1 {
-			sentence.WriteByte(' ')
+			sentence = append(sentence, ' ')
 		}
 	}
-	return pbkdf2.Key([]byte(sentence.String()), []byte("mnemonic"+password), 2048, 64, sha512.New)
+	return pbkdf2.Key(sentence, []byte("mnemonic"+password), 2048, 64, sha512.New)
 }
 
 func New(entropy []byte) Mnemonic {
@@ -236,9 +235,10 @@ func Parse(buf []byte) (Mnemonic, error) {
 		if len(m) == 24 {
 			return nil, fmt.Errorf("bip39: parse: mnemonic too long")
 		}
-		closest, valid := ClosestWord(string(w))
-		if !valid || len(w) < 3 ||
-			!bytes.HasPrefix([]byte(LabelFor(closest)), w) {
+		wl := bytes.ToLower(w)
+		closest, valid := ClosestWord(string(wl))
+		if !valid || len(wl) < 3 ||
+			!bytes.HasPrefix([]byte(LabelFor(closest)), wl) {
 			return nil, fmt.Errorf("bip39: parse: unknown word: %q", w)
 		}
 		m = append(m, closest)
@@ -253,8 +253,9 @@ func ParseMnemonic(mnemonic string) (Mnemonic, error) {
 	words := strings.Split(mnemonic, " ")
 	m := make(Mnemonic, len(words))
 	for i, w := range words {
-		closest, valid := ClosestWord(w)
-		if !valid || LabelFor(closest) != w {
+		wl := strings.ToLower(w)
+		closest, valid := ClosestWord(wl)
+		if !valid || LabelFor(closest) != wl {
 			return nil, fmt.Errorf("bip39: unknown word: %q", w)
 		}
 		m[i] = closest
