@@ -11,7 +11,27 @@ import (
 	"github.com/kortschak/qr"
 	"seedhammer.com/bip39"
 	"seedhammer.com/font/constant"
+	"seedhammer.com/seedqr"
 )
+
+func TestCSQR(t *testing.T) {
+	mnemonic := make(bip39.Mnemonic, 24)
+	for i := range mnemonic {
+		mnemonic[i] = bip39.RandomWord()
+	}
+	mnemonic = mnemonic.FixChecksum()
+	compact, err := qr.Encode(string(seedqr.CompactQR(mnemonic)), qr.Q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	regular, err := qr.Encode(string(seedqr.QR(mnemonic)), qr.M)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compact.Size != regular.Size {
+		t.Errorf("compact: %d, regular: %d", compact.Size, regular.Size)
+	}
+}
 
 func TestConstantQR(t *testing.T) {
 	rng := rand.New(rand.NewSource(44))
