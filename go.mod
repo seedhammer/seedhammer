@@ -13,6 +13,7 @@ require (
 	golang.org/x/crypto v0.47.0
 	golang.org/x/image v0.35.0
 	golang.org/x/sys v0.40.0
+	gonum.org/v1/gonum v0.17.0
 	periph.io/x/conn/v3 v3.7.0
 	periph.io/x/host/v3 v3.8.2
 )
