@@ -3,12 +3,18 @@ package vector
 
 import (
 	"encoding/binary"
-	"image"
 	"unicode"
+
+	"seedhammer.com/bezier"
 )
 
 type Face struct {
 	data []byte
+}
+
+type Knot struct {
+	Ctrl bezier.Point
+	Line bool
 }
 
 func NewFace(data []byte) *Face {
@@ -16,77 +22,64 @@ func NewFace(data []byte) *Face {
 }
 
 type Glyph struct {
-	Advance    int8
-	Start, End uint16
+	Advance    int
+	Start, End int
 }
 
-// Segments is an iterator over a glyph's segments
-type Segments struct {
-	segs []byte
+// UniformBSpline is an iterator over a glyph's uniform spline.
+type UniformBSpline struct {
+	spline []byte
 }
 
-func (s *Segments) Next() (Segment, bool) {
-	if len(s.segs) == 0 {
-		return Segment{}, false
+func (s *UniformBSpline) Next() (Knot, bool) {
+	if len(s.spline) == 0 {
+		return Knot{}, false
 	}
-	seg := Segment{
-		Op: SegmentOp(s.segs[0]),
-		Arg: image.Point{
-			X: int(int8(s.segs[1])),
-			Y: int(int8(s.segs[2])),
+	k := Knot{
+		Line: s.spline[0] != 0,
+		Ctrl: bezier.Point{
+			X: int(int16(bo.Uint16(s.spline[1:]))),
+			Y: int(int16(bo.Uint16(s.spline[3:]))),
 		},
 	}
-	s.segs = s.segs[3:]
-	return seg, true
-}
-
-// Segment is like sfnt.Segment but with integer coordinates.
-type Segment struct {
-	Op  SegmentOp
-	Arg image.Point
+	s.spline = s.spline[5:]
+	return k, true
 }
 
 type Metrics struct {
-	Ascent, Height int8
+	Ascent, Height int
 }
-
-type SegmentOp uint32
-
-const (
-	SegmentOpMoveTo SegmentOp = iota
-	SegmentOpLineTo
-)
 
 const (
 	indexLen      = unicode.MaxASCII
-	IndexElemSize = 1 + 2 + 2
+	IndexElemSize = 2 + 2 + 2
 
-	offAscent   = 0
-	offHeight   = offAscent + 1
-	offIndex    = offHeight + 1
-	OffSegments = offIndex + indexLen*IndexElemSize
+	offAscent  = 0
+	offHeight  = offAscent + 2
+	offIndex   = offHeight + 2
+	OffSplines = offIndex + indexLen*IndexElemSize
 )
 
 var bo = binary.LittleEndian
 
 func (f *Face) Metrics() Metrics {
 	return Metrics{
-		Ascent: int8(f.data[offAscent]),
-		Height: int8(f.data[offHeight]),
+		Ascent: int(bo.Uint16(f.data[offAscent:])),
+		Height: int(bo.Uint16(f.data[offHeight:])),
 	}
 }
 
-func (f *Face) Decode(ch rune) (int, Segments, bool) {
+func (f *Face) Decode(ch rune) (int, UniformBSpline, bool) {
 	if int(ch) >= indexLen {
-		return 0, Segments{}, false
+		return 0, UniformBSpline{}, false
 	}
-	index := f.data[offIndex:OffSegments]
+	index := f.data[offIndex:OffSplines]
 	gdata := index[ch*IndexElemSize : (ch+1)*IndexElemSize]
 	g := Glyph{
-		Advance: int8(gdata[0]),
-		Start:   bo.Uint16(gdata[1:]),
-		End:     bo.Uint16(gdata[1+2:]),
+		Advance: int(bo.Uint16(gdata[0:])),
+		Start:   int(bo.Uint16(gdata[2:])),
+		End:     int(bo.Uint16(gdata[2+2:])),
 	}
-	segs := f.data[g.Start:g.End]
-	return int(g.Advance), Segments{segs: segs}, g.Advance > 0
+	spline := f.data[g.Start:g.End]
+	return g.Advance, UniformBSpline{spline: spline}, g.Advance > 0
 }

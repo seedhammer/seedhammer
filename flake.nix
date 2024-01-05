@@ -97,8 +97,11 @@
             build-firmware = pkgs.writeShellScriptBin "build-firmware" ''
               set -eu -o pipefail
 
-              VERSION=$(${pkgs.git}/bin/git describe --dirty)
+              if [ -z "''${VERSION:-}" ]; then
+                VERSION=$(${pkgs.git}/bin/git describe --tags --always --dirty)
+              fi
               WORKDIR="$(mktemp -d)"
+              OUTPUT="seedhammerii-$VERSION.uf2"
 
               ${pkgs.tinygo}/bin/tinygo build -o "$WORKDIR/firmware.uf2" -ldflags="-X main.Version=$VERSION" ${tinygo-flags} "$@" ./cmd/controller
               # Sign with a dummy key to convince picotool to create the necessary
@@ -108,10 +111,9 @@
               # Clear public key and signature.
               ${pkgs.go}/bin/go run seedhammer.com/cmd/picosign sign -clear "$WORKDIR/firmware.signed.uf2"
 
-              OUTPUT="seedhammerii-$VERSION.uf2"
               mv "$WORKDIR/firmware.signed.uf2" "$OUTPUT"
-              echo "Built $OUTPUT"
               rm -rf "$WORKDIR"
+              echo "Built $OUTPUT"
             '';
             flash-firmware = pkgs.writeShellScriptBin "flash-firmware" ''
               set -eu -o pipefail
