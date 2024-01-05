@@ -12,7 +12,7 @@ import (
 	"seedhammer.com/gui"
 )
 
-func Open(ch chan<- gui.ButtonEvent) error {
+func Open(ch chan<- gui.Event) error {
 	if _, err := host.Init(); err != nil {
 		return err
 	}

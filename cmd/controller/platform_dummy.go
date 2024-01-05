@@ -20,20 +20,18 @@ func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
 	return nil, errors.New("Engraver not implemented")
 }
 
-func (p *Platform) Input(ch chan<- gui.ButtonEvent) error {
-	return nil
-}
-
-func (p *Platform) SDCard() <-chan bool {
-	return nil
-}
-
 func (p *Platform) Display() (gui.LCD, error) {
 	return nil, errors.New("Display not implemented")
 }
 
-func (p *Platform) Camera(dims image.Point, frames chan gui.Frame, out <-chan gui.Frame) func() {
-	return func() {}
+func (p *Platform) Wakeup() {
+}
+
+func (p *Platform) Events() []gui.Event {
+	return nil
+}
+
+func (p *Platform) CameraFrame(dims image.Point) {
 }
 
 func (p *Platform) ScanQR(img *image.Gray) ([][]byte, error) {

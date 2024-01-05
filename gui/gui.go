@@ -48,54 +48,52 @@ type Context struct {
 	NoSDCard     bool
 	RotateCamera bool
 
-	Wakeup chan struct{}
-	events []ButtonEvent
+	events []Event
+	wakeup struct {
+		timeouts chan time.Time
+		quit     chan struct{}
+	}
 }
 
 func NewContext(pl Platform) *Context {
 	c := &Context{
 		Platform: pl,
-		Wakeup:   make(chan struct{}, 1),
 		Styles:   NewStyles(),
 	}
+	c.wakeup.timeouts = make(chan time.Time)
+	c.wakeup.quit = make(chan struct{}, 1)
+	// Wakeup goroutine is not running.
+	c.wakeup.quit <- struct{}{}
 	// Wake up initially.
-	c.Wakeup <- struct{}{}
+	pl.Wakeup()
 	return c
 }
 
-func (c *Context) WakeupAfter(d time.Duration) {
-	go func() {
-		time.Sleep(d)
-		select {
-		case c.Wakeup <- struct{}{}:
-		default:
-		}
-	}()
-}
-
-func WakeupChan[T any](ctx *Context, in <-chan T) <-chan T {
-	if in == nil {
-		return in
-	}
-	out := make(chan T, cap(in))
-	go func() {
-		defer close(out)
-		for v := range in {
-		delivery:
+func (c *Context) WakeupAt(t time.Time) {
+	select {
+	case <-c.wakeup.quit:
+		go func() {
+			d := t.Sub(c.Platform.Now())
+			timer := time.NewTimer(d)
 			for {
 				select {
-				case out <- v:
-					break delivery
-				case ctx.Wakeup <- struct{}{}:
+				case <-timer.C:
+					c.Platform.Wakeup()
+					c.wakeup.quit <- struct{}{}
+					return
+				case newt := <-c.wakeup.timeouts:
+					if newt.After(t) {
+						break
+					}
+					t = newt
+					timer.Stop()
+					d := t.Sub(c.Platform.Now())
+					timer = time.NewTimer(d)
 				}
 			}
-			select {
-			case ctx.Wakeup <- struct{}{}:
-			default:
-			}
-		}
-	}()
-	return out
+		}()
+	case c.wakeup.timeouts <- t:
+	}
 }
 
 const repeatStartDelay = 400 * time.Millisecond
@@ -120,8 +118,9 @@ func (c *Context) Repeat() {
 			continue
 		}
 		c.events = append(c.events, ButtonEvent{Button: b, Pressed: true})
-		c.Repeats[b] = c.Platform.Now().Add(repeatDelay)
-		c.WakeupAfter(repeatDelay)
+		t := c.Platform.Now().Add(repeatDelay)
+		c.Repeats[b] = t
+		c.WakeupAt(t)
 	}
 }
 
@@ -129,30 +128,45 @@ func (c *Context) Reset() {
 	c.events = c.events[:0]
 }
 
-func (c *Context) Events(evts ...ButtonEvent) {
+func (c *Context) Events(evts ...Event) {
 	for _, e := range evts {
-		e2 := e
-		if int(e.Button) < len(c.Buttons) {
-			e2.Click = !e.Pressed && c.Buttons[e.Button]
-			c.Buttons[e.Button] = e.Pressed
-			if e.Pressed && isRepeatButton(e.Button) {
-				c.Repeats[e.Button] = c.Platform.Now().Add(repeatStartDelay)
-				c.WakeupAfter(repeatStartDelay)
+		if e2, ok := e.(ButtonEvent); ok {
+			if int(e2.Button) < len(c.Buttons) {
+				e2.Click = !e2.Pressed && c.Buttons[e2.Button]
+				c.Buttons[e2.Button] = e2.Pressed
+				if e2.Pressed && isRepeatButton(e2.Button) {
+					t := c.Platform.Now().Add(repeatStartDelay)
+					c.Repeats[e2.Button] = t
+					c.WakeupAt(t)
+				}
 			}
+			e = e2
 		}
-		c.events = append(c.events, e2)
+		c.events = append(c.events, e)
 	}
 }
 
-func (c *Context) Next(btns ...Button) (ButtonEvent, bool) {
-	if len(c.events) == 0 {
-		return ButtonEvent{}, false
-	}
-	e := c.events[0]
-	for _, btn := range btns {
-		if e.Button == btn {
-			c.events = c.events[1:]
+func (c *Context) Frame() (FrameEvent, bool) {
+	for i, e := range c.events {
+		if e, ok := e.(FrameEvent); ok {
+			c.events = append(c.events[:i], c.events[i+1:]...)
 			return e, true
+		}
+	}
+	return nil, false
+}
+
+func (c *Context) Next(btns ...Button) (ButtonEvent, bool) {
+	for i, e := range c.events {
+		e, ok := e.(ButtonEvent)
+		if !ok {
+			continue
+		}
+		for _, btn := range btns {
+			if e.Button == btn {
+				c.events = append(c.events[:i], c.events[i+1:]...)
+				return e, true
+			}
 		}
 	}
 	return ButtonEvent{}, false
@@ -521,38 +535,11 @@ type ScanScreen struct {
 	decoder   ur.Decoder
 	nsdecoder nonstandard.Decoder
 	feed      *image.Gray
-	camera    struct {
-		out  chan<- Frame
-		in   <-chan Frame
-		quit chan struct{}
-		err  error
-	}
-}
-
-func (s *ScanScreen) close() {
-	if s.camera.quit != nil {
-		s.camera.quit <- struct{}{}
-		<-s.camera.quit
-	}
+	err       error
 }
 
 func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, Result) {
 	const cameraFrameScale = 3
-	if s.camera.quit == nil && s.camera.err == nil {
-		frames := make(chan Frame, 1)
-		out := make(chan Frame)
-		quit := make(chan struct{})
-		go func() {
-			defer close(quit)
-			defer close(frames)
-			closer := ctx.Platform.Camera(dims.Mul(cameraFrameScale), frames, out)
-			defer closer()
-			<-quit
-		}()
-		s.camera.quit = quit
-		s.camera.in = WakeupChan(ctx, frames)
-		s.camera.out = out
-	}
 	for {
 		e, ok := ctx.Next(Button1, Button2)
 		if !ok {
@@ -563,7 +550,6 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, Re
 		}
 		switch e.Button {
 		case Button1:
-			s.close()
 			return nil, ResultCancelled
 		case Button2:
 			ctx.RotateCamera = !ctx.RotateCamera
@@ -573,37 +559,29 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, Re
 	if s.feed == nil || dims != s.feed.Bounds().Size() {
 		s.feed = image.NewGray(image.Rectangle{Max: dims})
 	}
-	select {
-	case frame := <-s.camera.in:
-		if frame.Error() != nil {
-			s.camera.quit <- struct{}{}
-			<-s.camera.quit
-			s.camera.err = frame.Error()
-			s.camera.quit = nil
-			s.camera.in = nil
-			s.camera.out = nil
+	ctx.Platform.CameraFrame(dims.Mul(cameraFrameScale))
+	for {
+		f, ok := ctx.Frame()
+		if !ok {
 			break
 		}
-		ycbcr := frame.Image().(*image.YCbCr)
-		gray := &image.Gray{Pix: ycbcr.Y, Stride: ycbcr.YStride, Rect: ycbcr.Bounds()}
+		s.err = f.Error()
+		if s.err == nil {
+			ycbcr := f.Image().(*image.YCbCr)
+			gray := &image.Gray{Pix: ycbcr.Y, Stride: ycbcr.YStride, Rect: ycbcr.Bounds()}
 
-		scaleRot(s.feed, gray, ctx.RotateCamera)
-		// Re-create image (but not backing store) to ensure redraw.
-		copy := *s.feed
-		s.feed = &copy
-		results, err := ctx.Platform.ScanQR(gray)
-		s.camera.out <- frame
-		if err != nil {
-			break
-		}
-		for _, res := range results {
-			v, res := s.parseQR(res)
-			if res != ResultNone {
-				s.close()
-				return v, res
+			scaleRot(s.feed, gray, ctx.RotateCamera)
+			// Re-create image (but not backing store) to ensure redraw.
+			copy := *s.feed
+			s.feed = &copy
+			results, _ := ctx.Platform.ScanQR(gray)
+			for _, res := range results {
+				v, res := s.parseQR(res)
+				if res != ResultNone {
+					return v, res
+				}
 			}
 		}
-	default:
 	}
 	th := &cameraTheme
 	r := layout.Rectangle{Max: dims}
@@ -628,7 +606,7 @@ func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, Re
 	background(ops, ops.End(), title, image.Point{})
 
 	// Camera error, if any.
-	if err := s.camera.err; err != nil {
+	if err := s.err; err != nil {
 		sz := widget.LabelW(ops.Begin(), ctx.Styles.body, dims.X-2*16, th.Text, err.Error())
 		op.Position(ops, ops.End(), r.Center(sz))
 	}
@@ -799,7 +777,7 @@ func (c *ConfirmDelay) Progress(ctx *Context) float32 {
 	if d <= 0 {
 		return 1.
 	}
-	ctx.WakeupAfter(0)
+	ctx.Platform.Wakeup()
 	return 1. - float32(d.Seconds()/confirmDelay.Seconds())
 }
 
@@ -1029,8 +1007,8 @@ func NewEngraveScreen(ctx *Context, desc urtypes.OutputDescriptor, keyIdx int, m
 type engraveState struct {
 	dev          io.ReadWriteCloser
 	cancel       chan struct{}
-	progress     <-chan float32
-	errs         <-chan error
+	progress     chan float32
+	errs         chan error
 	lastProgress float32
 	warning      *ErrorScreen
 }
@@ -1076,15 +1054,30 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 		errs := make(chan error, 1)
 		progress := make(chan float32, 1)
 		s.engrave.cancel = cancel
-		s.engrave.errs = WakeupChan(ctx, errs)
-		s.engrave.progress = WakeupChan(ctx, progress)
+		s.engrave.errs = make(chan error, 1)
+		s.engrave.progress = make(chan float32, 1)
 		dev := s.engrave.dev
+		wakeup := ctx.Platform.Wakeup
 		go func() {
-			defer close(errs)
-			defer close(progress)
+			for {
+				select {
+				case p := <-progress:
+					select {
+					case <-s.engrave.progress:
+					default:
+					}
+					s.engrave.progress <- p
+					wakeup()
+				case err := <-errs:
+					s.engrave.errs <- err
+					wakeup()
+					return
+				}
+			}
+		}()
+		go func() {
 			defer dev.Close()
-			err := mjolnir.Engrave(dev, prog, progress, cancel)
-			errs <- err
+			errs <- mjolnir.Engrave(dev, prog, progress, cancel)
 		}()
 		go s.plate.Sides[ins.Side].Engrave(prog)
 	}
@@ -1106,9 +1099,6 @@ loop:
 		case p := <-s.engrave.progress:
 			s.engrave.lastProgress = p
 		case err := <-s.engrave.errs:
-			// Clear out progress channel.
-			for range s.engrave.progress {
-			}
 			s.engrave = engraveState{}
 			if err != nil {
 				log.Printf("gui: connection lost to engraver: %v", err)
@@ -1189,8 +1179,9 @@ loop:
 			}
 		case Button2:
 			if e.Pressed {
-				s.dryRun.timeout = ctx.Platform.Now().Add(confirmDelay)
-				ctx.WakeupAfter(confirmDelay)
+				t := ctx.Platform.Now().Add(confirmDelay)
+				s.dryRun.timeout = t
+				ctx.WakeupAt(t)
 			} else {
 				s.dryRun.timeout = time.Time{}
 			}
@@ -2685,24 +2676,29 @@ func (s *MainScreen) layoutPager(ops op.Ctx, th *Colors) image.Point {
 }
 
 type Platform interface {
-	Input(ch chan<- ButtonEvent) error
+	Events() []Event
+	Wakeup()
 	Engraver() (io.ReadWriteCloser, error)
-	Camera(size image.Point, frames chan Frame, out <-chan Frame) func()
+	CameraFrame(size image.Point)
 	Now() time.Time
-	SDCard() <-chan bool
 	Display() (LCD, error)
 	ScanQR(qr *image.Gray) ([][]byte, error)
 	Debug() bool
 }
 
-type Frame interface {
+type FrameEvent interface {
 	Error() error
 	Image() image.Image
+	Event
 }
 
 type LCD interface {
 	Framebuffer() draw.RGBA64Image
 	Dirty(sr image.Rectangle) error
+}
+
+type Event interface {
+	ImplementsEvent()
 }
 
 type ButtonEvent struct {
@@ -2711,6 +2707,10 @@ type ButtonEvent struct {
 	// Rune is only valid if Button is Rune.
 	Rune  rune
 	Click bool
+}
+
+type SDCardEvent struct {
+	Inserted bool
 }
 
 type Button int
@@ -2731,18 +2731,17 @@ const (
 type App struct {
 	root op.Ops
 	ctx  *Context
-	btns <-chan ButtonEvent
 	lcd  LCD
 	err  error
 	scr  MainScreen
 	idle struct {
-		eatButton bool
-		timeout   <-chan time.Time
+		start  time.Time
+		active bool
+		state  saver.State
 	}
 }
 
 func NewApp(pl Platform, version string) (*App, error) {
-	btns := make(chan ButtonEvent, 10)
 	ctx := NewContext(pl)
 	ctx.Version = version
 	d, err := pl.Display()
@@ -2750,78 +2749,62 @@ func NewApp(pl Platform, version string) (*App, error) {
 		return nil, err
 	}
 	a := &App{
-		ctx:  ctx,
-		err:  pl.Input(btns),
-		btns: WakeupChan(ctx, btns),
-		lcd:  d,
+		lcd: d,
+		ctx: ctx,
 	}
+	a.idle.start = pl.Now()
 	return a, nil
 }
 
 const idleTimeout = 3 * time.Minute
 
 func (a *App) Frame() {
-	select {
-	case inserted := <-a.ctx.Platform.SDCard():
-		a.ctx.NoSDCard = !inserted
-	case <-a.ctx.Wakeup:
-	case <-a.idle.timeout:
-		a.saveScreen()
-		// The screen saver has invalidated the cached
-		// frame content.
-		a.root = op.Ops{}
-		a.idle.eatButton = true
-	}
 	a.ctx.Reset()
-loop:
-	for {
-		select {
-		case e := <-a.btns:
-			if a.idle.eatButton {
-				a.idle.eatButton = false
-				break
-			}
+	now := a.ctx.Platform.Now()
+	for _, e := range a.ctx.Platform.Events() {
+		a.idle.start = now
+		switch e := e.(type) {
+		case SDCardEvent:
+			a.ctx.NoSDCard = !e.Inserted
+		case Event:
 			a.ctx.Events(e)
-		default:
-			break loop
 		}
 	}
 	a.ctx.Repeat()
+	a.ctx.WakeupAt(a.idle.start.Add(idleTimeout))
+	idle := now.Sub(a.idle.start) >= idleTimeout
+	if a.idle.active != idle {
+		a.idle.active = idle
+		if idle {
+			a.idle.state = saver.State{}
+		} else {
+			a.ctx.Buttons = [nbuttons]bool{}
+		}
+	}
 	start := time.Now()
-	pressed := false
-	for _, b := range a.ctx.Buttons {
-		pressed = pressed || b
-	}
-	a.idle.timeout = nil
-	if !pressed {
-		a.idle.timeout = time.NewTimer(idleTimeout).C
-	}
 	ops := a.root.Reset()
 	frame := a.lcd.Framebuffer()
 	dims := frame.Bounds().Size()
-	a.scr.Layout(a.ctx, ops, dims, a.err)
+	if !a.idle.active {
+		a.scr.Layout(a.ctx, ops, dims, a.err)
+	}
 	layoutTime := time.Now()
-	dirty := a.root.Draw(frame)
+	var dirty image.Rectangle
+	if !a.idle.active {
+		dirty = a.root.Draw(frame)
+	} else {
+		saver.Draw(&a.idle.state, frame)
+		// The screen saver has invalidated the cached
+		// frame content.
+		dirty = frame.Bounds()
+		a.root = op.Ops{}
+	}
 	renderTime := time.Now()
 	a.lcd.Dirty(dirty)
 	drawTime := time.Now()
 	if a.ctx.Platform.Debug() {
-		log.Printf("frame: %v layout: %v render: %v draw: %v %v",
-			drawTime.Sub(start), layoutTime.Sub(start), renderTime.Sub(layoutTime), drawTime.Sub(renderTime), dirty)
-	}
-}
-
-func (a *App) saveScreen() {
-	var s saver.State
-	for {
-		select {
-		case <-a.ctx.Wakeup:
-			return
-		default:
-			frame := a.lcd.Framebuffer()
-			saver.Draw(&s, frame)
-			a.lcd.Dirty(frame.Bounds())
-		}
+		log.Printf("frame: %v layout: %v render: %v draw: %v %v idle: %v",
+			drawTime.Sub(start), layoutTime.Sub(start), renderTime.Sub(layoutTime), drawTime.Sub(renderTime), dirty, idle)
 	}
 }
 
@@ -2832,3 +2815,6 @@ func rgb(c uint32) color.NRGBA {
 func argb(c uint32) color.NRGBA {
 	return color.NRGBA{A: uint8(c >> 24), R: uint8(c >> 16), G: uint8(c >> 8), B: uint8(c)}
 }
+
+func (ButtonEvent) ImplementsEvent() {}
+func (SDCardEvent) ImplementsEvent() {}

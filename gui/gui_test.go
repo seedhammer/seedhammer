@@ -124,9 +124,9 @@ func TestMainScreen(t *testing.T) {
 	}
 	// Input method camera
 	ctxButton(ctx, Down, Button3)
-	frame()
 	// Scan xpub as descriptor.
-	ctxQR(t, p, frame, "xpub6F148LnjUhGrHfEN6Pa8VkwF8L6FJqYALxAkuHfacfVhMLVY4MRuUVMxr9pguAv67DHx1YFxqoKN8s4QfZtD9sR2xRCffTqi9E8FiFLAYk8")
+	ctxQR(t, ctx, p, "xpub6F148LnjUhGrHfEN6Pa8VkwF8L6FJqYALxAkuHfacfVhMLVY4MRuUVMxr9pguAv67DHx1YFxqoKN8s4QfZtD9sR2xRCffTqi9E8FiFLAYk8")
+	frame()
 	if scr.seed.warning == nil {
 		t.Fatal("MainScreen accepted invalid data for a Seed")
 	}
@@ -269,23 +269,20 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 func TestScanScreenError(t *testing.T) {
 	p := newPlatform()
 	// Fail on connect.
-	p.camera.connErr = errors.New("failed to open camera")
 	ctx := NewContext(p)
 	scr := &ScanScreen{}
-	for scr.camera.err == nil {
-		scr.Layout(ctx, op.Ctx{}, image.Point{})
+	ctx.events = append(ctx.events, testFrame{Err: errors.New("failed to open camera")})
+	scr.Layout(ctx, op.Ctx{}, image.Point{})
+	if scr.err == nil {
+		t.Fatal("initial camera error not reported")
 	}
 	// Fail during streaming.
-	p.camera.connErr = nil
 	scr = &ScanScreen{}
 	// Connect.
+	ctx.events = append(ctx.events, testFrame{Err: errors.New("error during streaming")})
 	scr.Layout(ctx, op.Ctx{}, image.Point{})
-	go func() {
-		<-p.camera.init
-		p.camera.in <- testFrame{Err: errors.New("error during streaming")}
-	}()
-	for scr.camera.err == nil {
-		scr.Layout(ctx, op.Ctx{}, image.Point{})
+	if scr.err == nil {
+		t.Fatal("streaming camera error not reported")
 	}
 }
 
@@ -308,29 +305,10 @@ func TestWordKeyboardScreen(t *testing.T) {
 	}
 }
 
-func ctxQR(t *testing.T, p *testPlatform, frame func(), qrs ...string) {
+func ctxQR(t *testing.T, ctx *Context, p *testPlatform, qrs ...string) {
 	t.Helper()
 	for _, qr := range qrs {
-		select {
-		case <-p.camera.init:
-		case <-time.After(5 * time.Second):
-			t.Fatal("camera never turned on")
-		}
-		p.camera.in <- qrFrame(t, p, qr)
-		delivered := make(chan struct{})
-		go func() {
-			<-p.camera.out
-			close(delivered)
-		}()
-	loop:
-		for {
-			select {
-			case <-delivered:
-				break loop
-			default:
-				frame()
-			}
-		}
+		ctx.events = append(ctx.events, qrFrame(t, p, qr))
 	}
 }
 
@@ -338,13 +316,10 @@ func TestSeedScreenScan(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
 	scr := NewEmptySeedScreen("")
-	frame := func() {
-		scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
-	}
 	// Select camera.
 	ctxButton(ctx, Down, Button3)
-	frame()
-	ctxQR(t, p, frame, "011513251154012711900771041507421289190620080870026613431420201617920614089619290300152408010643")
+	ctxQR(t, ctx, p, "011513251154012711900771041507421289190620080870026613431420201617920614089619290300152408010643")
+	scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	want, err := bip39.ParseMnemonic("attack pizza motion avocado network gather crop fresh patrol unusual wild holiday candy pony ranch winter theme error hybrid van cereal salon goddess expire")
 	if err != nil {
 		t.Fatal(err)
@@ -359,13 +334,10 @@ func TestSeedScreenScanInvalid(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
 	scr := NewEmptySeedScreen("")
-	frame := func() {
-		scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
-	}
 	// Select camera.
 	ctxButton(ctx, Down, Button3)
-	frame()
-	ctxQR(t, p, frame, "UR:CRYPTO-SEED/OYADGDIYWLAMAEJSZSWDWYTLTIFEENFTLNMNWKBDHNSSRO")
+	ctxQR(t, ctx, p, "UR:CRYPTO-SEED/OYADGDIYWLAMAEJSZSWDWYTLTIFEENFTLNMNWKBDHNSSRO")
+	scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	if scr.warning == nil {
 		t.Error("SeedScreen accepted invalid seed")
 	}
@@ -414,19 +386,31 @@ func TestMulti(t *testing.T) {
 
 		//Seed input method, keyboad input, select 12 words.
 		r.Button(t, Button3, Button3, Button3)
+		r.Frame(t)
+		if r.app.scr.seed == nil {
+			t.Fatal("not on seed screen")
+		}
 
 		m, err := bip39.ParseMnemonic(mnemonic)
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.Frame(t)
-		r.Frame(t)
 
 		for _, word := range m {
-			r.String(t, strings.ToUpper(bip39.LabelFor(word)))
-			r.Button(t, Button2)
+			for _, c := range strings.ToUpper(bip39.LabelFor(word)) {
+				r.p.events = append(r.p.events, ButtonEvent{
+					Button:  Rune,
+					Rune:    c,
+					Pressed: true,
+				})
+				r.Frame(t)
+				if r.app.scr.seed.input.kbd.nvalid == 1 {
+					r.Button(t, Button2)
+					r.Frame(t)
+					break
+				}
+			}
 		}
-		r.Frame(t)
 		r.Frame(t)
 
 		if sc := r.app.scr.seed; sc == nil || !sc.Mnemonic.Valid() {
@@ -440,10 +424,7 @@ func TestMulti(t *testing.T) {
 		// Accept seed, go to descriptor scan.
 		r.Button(t, Button3, Button3)
 
-		r.QR(t, oneOfTwoDesc)
-		for r.app.scr.desc == nil {
-			r.Frame(t)
-		}
+		r.QR(t, func() { r.Frame(t) }, oneOfTwoDesc)
 
 		// Accept descriptor, go to engrave.
 		r.Button(t, Button3)
@@ -451,9 +432,7 @@ func TestMulti(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for r.app.scr.engrave == nil {
-			r.Frame(t)
-		}
+		r.Frame(t)
 		testEngraving(t, r, r.app.scr.engrave, oneOfTwo, m, i)
 	}
 }
@@ -496,17 +475,7 @@ func fillDescriptor(t *testing.T, desc urtypes.OutputDescriptor, path urtypes.Pa
 }
 
 type testPlatform struct {
-	input struct {
-		in   chan<- ButtonEvent
-		init chan struct{}
-	}
-
-	camera struct {
-		in      chan<- Frame
-		out     <-chan Frame
-		init    chan struct{}
-		connErr error
-	}
+	events []Event
 
 	engrave struct {
 		closed  chan []mjolnir.Cmd
@@ -515,7 +484,6 @@ type testPlatform struct {
 	}
 
 	timeOffset time.Duration
-	sdcard     chan bool
 	qrImages   map[*uint8][]byte
 }
 
@@ -538,14 +506,6 @@ func (testLCD) Framebuffer() draw.RGBA64Image {
 
 func (testLCD) Dirty(sr image.Rectangle) error {
 	return nil
-}
-
-func (t *testPlatform) SDCard() <-chan bool {
-	if t.sdcard == nil {
-		t.sdcard = make(chan bool, 1)
-		t.sdcard <- false
-	}
-	return t.sdcard
 }
 
 func (t *testPlatform) Now() time.Time {
@@ -594,10 +554,13 @@ func ctxButton(ctx *Context, bs ...Button) {
 	}
 }
 
-func (p *testPlatform) Input(ch chan<- ButtonEvent) error {
-	p.input.in = ch
-	close(p.input.init)
-	return nil
+func (p *testPlatform) Wakeup() {
+}
+
+func (p *testPlatform) Events() []Event {
+	evts := p.events
+	p.events = nil
+	return evts
 }
 
 type wrappedEngraver struct {
@@ -637,17 +600,7 @@ func (p *testPlatform) Engraver() (io.ReadWriteCloser, error) {
 	return &wrappedEngraver{sim, p.engrave.closed, p.engrave.ioErr}, nil
 }
 
-func (p *testPlatform) Camera(dims image.Point, frames chan Frame, out <-chan Frame) func() {
-	if err := p.camera.connErr; err != nil {
-		go func() {
-			frames <- testFrame{Err: err}
-		}()
-		return func() {}
-	}
-	p.camera.in = frames
-	p.camera.out = out
-	close(p.camera.init)
-	return func() {}
+func (p *testPlatform) CameraFrame(dims image.Point) {
 }
 
 type testFrame struct {
@@ -663,6 +616,8 @@ func (t testFrame) Error() error {
 	return t.Err
 }
 
+func (testFrame) ImplementsEvent() {}
+
 type runner struct {
 	p      *testPlatform
 	app    *App
@@ -670,10 +625,7 @@ type runner struct {
 }
 
 func newPlatform() *testPlatform {
-	p := &testPlatform{}
-	p.input.init = make(chan struct{})
-	p.camera.init = make(chan struct{})
-	return p
+	return &testPlatform{}
 }
 
 func newRunner(t *testing.T) *runner {
@@ -689,19 +641,6 @@ func newRunner(t *testing.T) *runner {
 	return r
 }
 
-func (r *runner) String(t *testing.T, str string) {
-	t.Helper()
-	wait(t, r, r.p.input.init)
-	for _, c := range str {
-		evt := ButtonEvent{
-			Button:  Rune,
-			Rune:    c,
-			Pressed: true,
-		}
-		deliver(t, r, r.p.input.in, evt)
-	}
-}
-
 func (r *runner) Frame(t *testing.T) {
 	t.Helper()
 	r.frames++
@@ -711,31 +650,7 @@ func (r *runner) Frame(t *testing.T) {
 	r.app.Frame()
 }
 
-func deliver[T any](t *testing.T, r *runner, in chan<- T, v T) {
-	t.Helper()
-delivery:
-	for {
-		select {
-		case in <- v:
-			break delivery
-		default:
-			r.Frame(t)
-		}
-	}
-}
-
-func wait[T any](t *testing.T, r *runner, out <-chan T) {
-	for {
-		select {
-		case <-out:
-			return
-		default:
-			r.Frame(t)
-		}
-	}
-}
-
-func qrFrame(t *testing.T, p *testPlatform, content string) Frame {
+func qrFrame(t *testing.T, p *testPlatform, content string) FrameEvent {
 	qr, err := qrcode.New(content, qrcode.Low)
 	if err != nil {
 		t.Fatal(err)
@@ -759,30 +674,20 @@ func qrFrame(t *testing.T, p *testPlatform, content string) Frame {
 	}
 }
 
-func (r *runner) QR(t *testing.T, qrs ...string) {
+func (r *runner) QR(t *testing.T, frame func(), qrs ...string) {
 	t.Helper()
-	wait(t, r, r.p.camera.init)
 	for _, qr := range qrs {
-		frame := qrFrame(t, r.p, qr)
-		deliver(t, r, r.p.camera.in, frame)
-		delivered := make(chan struct{})
-		go func() {
-			<-r.p.camera.out
-			close(delivered)
-		}()
-		wait(t, r, delivered)
+		r.p.events = append(r.p.events, qrFrame(t, r.p, qr))
 	}
 }
 
 func (r *runner) Button(t *testing.T, bs ...Button) {
 	t.Helper()
-	wait(t, r, r.p.input.init)
 	for _, b := range bs {
-		deliver(t, r, r.p.input.in, ButtonEvent{
+		r.p.events = append(r.p.events, ButtonEvent{
 			Button:  b,
 			Pressed: true,
-		})
-		deliver(t, r, r.p.input.in, ButtonEvent{
+		}, ButtonEvent{
 			Button:  b,
 			Pressed: false,
 		})
@@ -791,9 +696,8 @@ func (r *runner) Button(t *testing.T, bs ...Button) {
 
 func (r *runner) Press(t *testing.T, bs ...Button) {
 	t.Helper()
-	wait(t, r, r.p.input.init)
 	for _, b := range bs {
-		deliver(t, r, r.p.input.in, ButtonEvent{
+		r.p.events = append(r.p.events, ButtonEvent{
 			Button:  b,
 			Pressed: true,
 		})
@@ -822,8 +726,10 @@ func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, desc urtypes.Out
 				// Hold connect.
 				r.Press(t, Button3)
 				r.p.timeOffset += confirmDelay
+				r.Frame(t)
 			default:
 				r.Button(t, Button3)
+				r.Frame(t)
 			}
 		}
 	received:

@@ -24,8 +24,8 @@ import (
 )
 
 type Camera struct {
-	frames    chan gui.Frame
-	out       <-chan gui.Frame
+	frames    chan gui.FrameEvent
+	out       <-chan gui.FrameEvent
 	bufs      chan C.size_t
 	destroyed chan struct{}
 	closed    chan struct{}
@@ -70,7 +70,7 @@ func requestCallback(handle C.uintptr_t, bufIdx C.size_t) {
 	}
 }
 
-func Open(dims image.Point, frames chan gui.Frame, out <-chan gui.Frame) func() {
+func Open(dims image.Point, frames chan gui.FrameEvent, out <-chan gui.FrameEvent) func() {
 	c := &Camera{
 		frames:    frames,
 		out:       out,
@@ -172,3 +172,5 @@ func (c *Camera) setup(dims image.Point) error {
 	}()
 	return nil
 }
+
+func (Frame) ImplementsEvent() {}
