@@ -3,7 +3,7 @@ package bip39
 import (
 	"bytes"
 	"encoding/hex"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -33,7 +33,7 @@ func TestVectors(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Parse failed to parse %q: %v", v.mnemonic, err)
 		}
-		if !reflect.DeepEqual(m, m2) {
+		if !slices.Equal(m, m2) {
 			t.Fatalf("Parse parsed differently than ParseMnemonic for %q", v.mnemonic)
 		}
 		shortWords := new(bytes.Buffer)
@@ -47,11 +47,12 @@ func TestVectors(t *testing.T) {
 			}
 			shortWords.WriteString(w)
 		}
-		m3, err := Parse(shortWords.Bytes())
+		sw := shortWords.Bytes()
+		m3, err := Parse(sw)
 		if err != nil {
-			t.Fatalf("ParseMnemonic failed to parse %q: %v", v.mnemonic, err)
+			t.Fatalf("Parse failed to parse %q: %v", sw, err)
 		}
-		if !reflect.DeepEqual(m, m3) {
+		if !slices.Equal(m, m3) {
 			t.Fatalf("Parse parsed differently than ParseMnemonic for %q", v.mnemonic)
 		}
 		m4 := New(ent)

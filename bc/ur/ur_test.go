@@ -2,7 +2,7 @@ package ur
 
 import (
 	"encoding/hex"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -105,7 +105,7 @@ func TestDecode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(got, want) {
+		if !slices.Equal(got, want) {
 			t.Errorf("%q: decoded to %x; wanted %x", test.urs[0], got, want)
 		}
 		for i, seqNum := range test.seqNums {

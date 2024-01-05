@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
+	"slices"
 	"strings"
 
 	"seedhammer.com/bip32"
@@ -57,7 +57,7 @@ func OutputDescriptor(enc []byte) (*bip380.Descriptor, error) {
 	if k, err := bip380.ParseKey(nil, enc); err == nil {
 		for _, s := range []bip380.Script{bip380.P2PKH, bip380.P2WPKH, bip380.P2SH_P2WPKH} {
 			path := s.DerivationPath()
-			if !reflect.DeepEqual(path, k.DerivationPath) {
+			if !slices.Equal(path, k.DerivationPath) {
 				continue
 			}
 			return &bip380.Descriptor{

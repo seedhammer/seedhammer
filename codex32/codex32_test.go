@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
-	"reflect"
 	"testing"
 )
 
@@ -26,7 +25,7 @@ func TestBIPVector1(t *testing.T) {
 	}
 
 	got := c32.parts()
-	if !reflect.DeepEqual(got, want) {
+	if *got != *want {
 		t.Errorf("%s split into\n%+v\nexpected\n%+v", secret, got, want)
 	}
 	const wantData = "318c6318c6318c6318c6318c6318c631"
