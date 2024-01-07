@@ -2017,7 +2017,7 @@ func (k *Keyboard) Valid(r rune) bool {
 
 func (k *Keyboard) Update(ctx *Context) {
 	for {
-		e, ok := ctx.Next(Left, Right, Up, Down, Center, Rune, Button3)
+		e, ok := ctx.Next(Left, Right, Up, Down, CCW, CW, Center, Rune, Button3)
 		if !ok {
 			break
 		}
@@ -2025,12 +2025,17 @@ func (k *Keyboard) Update(ctx *Context) {
 			continue
 		}
 		switch e.Button {
-		case Left:
+		case Left, CCW:
 			next := k.col
-			row := kbdKeys[k.row]
-			n := len(row)
 			for {
-				next = (next - 1 + n) % n
+				next--
+				if next == -1 {
+					if e.Button == CCW {
+						nrows := len(kbdKeys)
+						k.row = (k.row - 1 + nrows) % nrows
+					}
+					next = len(kbdKeys[k.row]) - 1
+				}
 				if !k.Valid(kbdKeys[k.row][next]) {
 					continue
 				}
@@ -2038,12 +2043,17 @@ func (k *Keyboard) Update(ctx *Context) {
 				k.adjust(true)
 				break
 			}
-		case Right:
+		case Right, CW:
 			next := k.col
-			row := kbdKeys[k.row]
-			n := len(row)
 			for {
-				next = (next + 1) % n
+				next++
+				if next == len(kbdKeys[k.row]) {
+					if e.Button == CW {
+						nrows := len(kbdKeys)
+						k.row = (k.row + 1 + nrows) % nrows
+					}
+					next = 0
+				}
 				if !k.Valid(kbdKeys[k.row][next]) {
 					continue
 				}
@@ -2200,7 +2210,7 @@ type ChoiceScreen struct {
 
 func (s *ChoiceScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, active bool) (int, Result) {
 	for active {
-		e, ok := ctx.Next(Button1, Button3, Center, Up, Down)
+		e, ok := ctx.Next(Button1, Button3, Center, Up, Down, CCW, CW)
 		if !ok {
 			break
 		}
@@ -2213,13 +2223,13 @@ func (s *ChoiceScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.P
 			if e.Click {
 				return s.choice, ResultComplete
 			}
-		case Up:
+		case Up, CCW:
 			if e.Pressed {
 				if s.choice > 0 {
 					s.choice--
 				}
 			}
-		case Down:
+		case Down, CW:
 			if e.Pressed {
 				if s.choice < len(s.Choices)-1 {
 					s.choice++
@@ -2724,6 +2734,8 @@ const (
 	Button1
 	Button2
 	Button3
+	CCW
+	CW
 	// Synthetic keys only generated in debug mode.
 	Rune // Enter rune.
 )
