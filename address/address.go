@@ -25,6 +25,13 @@ func Receive(desc urtypes.OutputDescriptor, index uint32) (string, error) {
 	return address(desc, index, false)
 }
 
+func Supported(desc urtypes.OutputDescriptor) bool {
+	_, err := Receive(desc, 0)
+	return !errors.Is(err, errUnsupported)
+}
+
+var errUnsupported = errors.New("unsupported descriptor")
+
 func address(desc urtypes.OutputDescriptor, index uint32, change bool) (string, error) {
 	var addr btcutil.Address
 	var network *chaincfg.Params
@@ -37,7 +44,7 @@ func address(desc urtypes.OutputDescriptor, index uint32, change bool) (string, 
 				return "", fmt.Errorf("address: %w", err)
 			}
 			if network != nil && k.Network != network {
-				return "", errors.New("address: multisig descriptor mixes networks")
+				return "", fmt.Errorf("address: multisig descriptor mixes networks: %w", errUnsupported)
 			}
 			network = k.Network
 			addrPub, err := btcutil.NewAddressPubKey(pub.SerializeCompressed(), network)
@@ -60,7 +67,7 @@ func address(desc urtypes.OutputDescriptor, index uint32, change bool) (string, 
 			hash := sha256.Sum256(script)
 			addr, err = btcutil.NewAddressWitnessScriptHash(hash[:], network)
 		default:
-			return "", fmt.Errorf("address: unsupported multisig script: %s", desc.Script)
+			return "", fmt.Errorf("address: multisig script: %s: %w", desc.Script, errUnsupported)
 		}
 		if err != nil {
 			return "", fmt.Errorf("address: %w", err)
@@ -83,13 +90,13 @@ func address(desc urtypes.OutputDescriptor, index uint32, change bool) (string, 
 			tkey := txscript.ComputeTaprootKeyNoScript(pub)
 			addr, err = btcutil.NewAddressTaproot(schnorr.SerializePubKey(tkey), network)
 		default:
-			return "", fmt.Errorf("address: unsupported singlesig script: %s", desc.Script)
+			return "", fmt.Errorf("address: singlesig script: %s: %w", desc.Script, errUnsupported)
 		}
 		if err != nil {
 			return "", fmt.Errorf("address: %w", err)
 		}
 	default:
-		return "", errors.New("address: unsupported descriptor")
+		return "", fmt.Errorf("address: descriptor: %w", errUnsupported)
 	}
 	// Derive wrapped address types.
 	switch desc.Script {
@@ -99,6 +106,9 @@ func address(desc urtypes.OutputDescriptor, index uint32, change bool) (string, 
 			return "", fmt.Errorf("address: %w", err)
 		}
 		addr, err = btcutil.NewAddressScriptHash(script, network)
+		if err != nil {
+			return "", fmt.Errorf("address: %w", err)
+		}
 	}
 	return addr.String(), nil
 }

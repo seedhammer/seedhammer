@@ -2396,6 +2396,14 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				}
 				continue
 			}
+
+			if !address.Supported(desc) {
+				s.warning = &ErrorScreen{
+					Title: "Error",
+					Body:  "The descriptor is not supported.",
+				}
+				continue
+			}
 			s.method = nil
 			desc.Title = backup.TitleString(constant.Font, desc.Title)
 			s.descriptor = &desc
