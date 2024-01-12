@@ -8,7 +8,7 @@ require (
 	github.com/btcsuite/btcd/btcutil v1.1.3
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1
 	github.com/fxamacker/cbor/v2 v2.4.0
-	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
+	github.com/kortschak/qr v0.3.0
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07
 	golang.org/x/crypto v0.7.0
@@ -24,3 +24,5 @@ require (
 	github.com/decred/dcrd/crypto/blake256 v1.0.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 )
+
+replace github.com/kortschak/qr => github.com/seedhammer/kortschak-qr v0.0.0-20240113235555-375796488df0

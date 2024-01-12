@@ -15,7 +15,7 @@ import (
 	"math/rand"
 	"sort"
 
-	"github.com/skip2/go-qrcode"
+	"github.com/kortschak/qr"
 	"github.com/srwiley/rasterx"
 	"golang.org/x/image/math/f32"
 	"golang.org/x/image/math/fixed"
@@ -119,27 +119,27 @@ func Rotate(radians float64, cmd Command) Command {
 	}
 }
 
-func QR(strokeWidth int, scale int, level qrcode.RecoveryLevel, content []byte) (Command, error) {
-	qr, err := qrcode.New(string(content), level)
+func QR(strokeWidth int, scale int, level qr.Level, content []byte) (Command, error) {
+	qr, err := qr.Encode(string(content), level)
 	if err != nil {
 		return nil, err
 	}
-	qr.DisableBorder = true
 	return qrCmd{
 		strokeWidth: strokeWidth,
 		scale:       scale,
-		qr:          qr.Bitmap(),
+		qr:          qr,
 	}, nil
 }
 
 type qrCmd struct {
 	strokeWidth int
 	scale       int
-	qr          [][]bool
+	qr          *qr.Code
 }
 
 func (q qrCmd) Engrave(p Program) {
-	for y, row := range q.qr {
+	dim := q.qr.Size
+	for y := 0; y < dim; y++ {
 		for i := 0; i < q.scale; i++ {
 			draw := false
 			var firstx int
@@ -157,14 +157,14 @@ func (q qrCmd) Engrave(p Program) {
 				p.Line(end)
 				draw = false
 			}
-			for x := -1; x <= len(row); x++ {
+			for x := -1; x <= dim; x++ {
 				xl := x
 				px := x
 				if rev {
-					xl = len(row) - 1 - x
+					xl = dim - 1 - x
 					px = xl - 1
 				}
-				on := 0 <= px && px < len(row) && row[px]
+				on := q.qr.Black(px, y)
 				switch {
 				case !draw && on:
 					draw = true
@@ -183,16 +183,16 @@ const qrMoves = 4
 
 // constantTimeQRModeuls returns the exact number of modules in a constant
 // time QR code, given its version.
-func constantTimeQRModules(version int) int {
+func constantTimeQRModules(dims int) int {
 	// The numbers below are maximum numbers found through fuzzing.
 	// Add a bit more to account for outliers not yet found.
 	const extra = 5
-	switch version {
-	case 1:
+	switch dims {
+	case 21:
 		return 163 + extra
-	case 2:
+	case 25:
 		return 261 + extra
-	case 3:
+	case 29:
 		return 385 + extra
 	}
 	// Not supported, return a low number to force error.
@@ -203,11 +203,12 @@ func constantTimeStartEnd(dim int) (start, end image.Point) {
 	return image.Pt(8+qrMoves, dim-1-qrMoves), image.Pt(dim-1-3, 3)
 }
 
-func bitmapForBools(qr [][]bool) bitmap {
-	bm := NewBitmap(len(qr), len(qr))
-	for y, row := range qr {
-		for x, module := range row {
-			if module {
+func bitmapForQR(qr *qr.Code) bitmap {
+	dim := qr.Size
+	bm := NewBitmap(dim, dim)
+	for y := 0; y < dim; y++ {
+		for x := 0; x < dim; x++ {
+			if qr.Black(x, y) {
 				bm.Set(image.Pt(x, y))
 			}
 		}
@@ -215,7 +216,7 @@ func bitmapForBools(qr [][]bool) bitmap {
 	return bm
 }
 
-func bitmapForQRStatic(ver, dim int) ([]image.Point, []image.Point, bitmap) {
+func bitmapForQRStatic(dim int) ([]image.Point, []image.Point, bitmap) {
 	engraved := NewBitmap(dim, dim)
 	// First 3 position markers.
 	posMarkers := []image.Point{
@@ -228,11 +229,15 @@ func bitmapForQRStatic(ver, dim int) ([]image.Point, []image.Point, bitmap) {
 	}
 	// Ignore aligment markers.
 	var alignMarkers []image.Point
-	switch ver {
-	case 2:
+	switch dim {
+	case 21:
+		// No marker.
+	case 25:
 		alignMarkers = append(alignMarkers, image.Pt(16, 16))
-	case 3:
+	case 29:
 		alignMarkers = append(alignMarkers, image.Pt(20, 20))
+	default:
+		panic("unsupported qr code version")
 	}
 	for _, p := range alignMarkers {
 		fillMarker(engraved, p, alignmentMarker)
@@ -242,17 +247,15 @@ func bitmapForQRStatic(ver, dim int) ([]image.Point, []image.Point, bitmap) {
 
 // ConstantQR is like QR that engraves the QR code in a pattern independent of content,
 // except for the QR code version (size).
-func ConstantQR(strokeWidth, scale int, level qrcode.RecoveryLevel, content []byte) (Command, error) {
-	qrc, err := qrcode.New(string(content), level)
+func ConstantQR(strokeWidth, scale int, level qr.Level, content []byte) (Command, error) {
+	qrc, err := qr.Encode(string(content), level)
 	if err != nil {
 		return nil, err
 	}
-	qrc.DisableBorder = true
-	bm := qrc.Bitmap()
-	dim := len(bm)
-	qr := bitmapForBools(bm)
+	dim := qrc.Size
+	qr := bitmapForQR(qrc)
 	// No need to engrave static features of the QR code.
-	posMarkers, alignMarkers, engraved := bitmapForQRStatic(qrc.VersionNumber, dim)
+	posMarkers, alignMarkers, engraved := bitmapForQRStatic(dim)
 	// Start in the lower-left corner.
 	pos := image.Pt(0, dim-1)
 	// Iterating forward.
@@ -310,10 +313,10 @@ func ConstantQR(strokeWidth, scale int, level qrcode.RecoveryLevel, content []by
 	if err := move(end); err != nil {
 		return nil, err
 	}
-	nmod := constantTimeQRModules(qrc.VersionNumber)
+	nmod := constantTimeQRModules(dim)
 	if len(modules) >= nmod {
-		return nil, fmt.Errorf("too many version %d QR modules for constant time engraving n: %d waste: %d",
-			qrc.VersionNumber, len(modules), waste)
+		return nil, fmt.Errorf("too many dims %d QR modules for constant time engraving n: %d waste: %d",
+			dim, len(modules), waste)
 	}
 	modules = padQRModules(nmod, content, modules)
 	cmd := constantQRCmd{
@@ -324,7 +327,7 @@ func ConstantQR(strokeWidth, scale int, level qrcode.RecoveryLevel, content []by
 		plan:        modules,
 	}
 	// Verify constant-ness without the static markers.
-	if !isConstantQR(cmd, dim, qrc.VersionNumber) {
+	if !isConstantQR(cmd, dim) {
 		panic("constant QR engraving is not constant")
 	}
 	cmd.posMarkers = posMarkers
@@ -743,7 +746,7 @@ func (c *ConstantStringer) String(txt string) Command {
 	return cmd
 }
 
-func isConstantQR(cmd constantQRCmd, dim, ver int) bool {
+func isConstantQR(cmd constantQRCmd, dim int) bool {
 	pt := new(pattern)
 	cmd.Engrave(pt)
 	start, end := constantTimeStartEnd(dim)
@@ -755,7 +758,7 @@ func isConstantQR(cmd constantQRCmd, dim, ver int) bool {
 	}
 	// Constant number of patterns: 2 per module, 1
 	// for the end
-	npatterns := 2*constantTimeQRModules(ver) + 1
+	npatterns := 2*constantTimeQRModules(dim) + 1
 	if len(pt.pattern) != npatterns {
 		return false
 	}

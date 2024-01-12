@@ -13,7 +13,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/skip2/go-qrcode"
+	"github.com/kortschak/qr"
 	"seedhammer.com/backup"
 	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bip32"
@@ -648,11 +648,11 @@ func (r *runner) Frame(t *testing.T) {
 }
 
 func qrFrame(t *testing.T, p *testPlatform, content string) FrameEvent {
-	qr, err := qrcode.New(content, qrcode.Low)
+	qr, err := qr.Encode(content, qr.L)
 	if err != nil {
 		t.Fatal(err)
 	}
-	qrImg := qr.Image(512)
+	qrImg := qr.Image()
 	b := qrImg.Bounds()
 	frameImg := image.NewYCbCr(b, image.YCbCrSubsampleRatio420)
 	for y := b.Min.Y; y < b.Max.Y; y++ {

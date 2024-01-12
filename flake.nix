@@ -364,7 +364,7 @@
               src = ./.;
 
               nativeBuildInputs = with pkgs.buildPackages; [
-                go_1_20
+                go_1_21
                 nukeReferences
               ];
 
@@ -415,7 +415,7 @@
 
               nativeBuildInputs = with pkgs.buildPackages; [
                 cacert
-                go_1_20
+                go_1_21
               ];
 
               installPhase = ''
@@ -426,7 +426,7 @@
 
               outputHashMode = "recursive";
               outputHashAlgo = "sha256";
-              outputHash = "bdiX27i1akVeUL0cob1YfIQPwwUrGsjTs215RtUsmAY=";
+              outputHash = "O0L4CGlWAwuqpMwUEavo4584icNcAii1M7DXGJrqjjM=";
             };
             controller = self.lib.${system}.mkcontroller false;
             controller-debug = self.lib.${system}.mkcontroller true;

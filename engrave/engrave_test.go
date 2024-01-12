@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skip2/go-qrcode"
+	"github.com/kortschak/qr"
 	"seedhammer.com/bip39"
 	"seedhammer.com/font/constant"
 )
@@ -21,20 +21,18 @@ func TestConstantQR(t *testing.T) {
 			if _, err := io.ReadFull(rng, entropy); err != nil {
 				t.Fatal(err)
 			}
-			lvl := qrcode.High
+			lvl := qr.Q
 			cmd, err := ConstantQR(7, 4, lvl, entropy)
 			if err != nil {
 				t.Fatalf("entropy: %x: %v", entropy, err)
 			}
-			qrc, err := qrcode.New(string(entropy), lvl)
+			qrc, err := qr.Encode(string(entropy), lvl)
 			if err != nil {
 				t.Fatal(err)
 			}
-			qrc.DisableBorder = true
-			bm := qrc.Bitmap()
-			dim := len(bm)
-			want := bitmapForBools(bm)
-			_, _, got := bitmapForQRStatic(qrc.VersionNumber, dim)
+			dim := qrc.Size
+			want := bitmapForQR(qrc)
+			_, _, got := bitmapForQRStatic(dim)
 			qrCmd := cmd.(constantQRCmd)
 			for _, p := range qrCmd.plan {
 				got.Set(p)
@@ -67,10 +65,10 @@ func FuzzConstantQR(f *testing.F) {
 		if len(entropy) > 32 {
 			entropy = entropy[:32]
 		}
-		if _, err := ConstantQR(1, 3, qrcode.High, entropy); err != nil {
+		if _, err := ConstantQR(1, 3, qr.Q, entropy); err != nil {
 			t.Fatalf("entropy: %x: %v", entropy, err)
 		}
-		if _, err := ConstantQR(1, 3, qrcode.Low, entropy); err != nil {
+		if _, err := ConstantQR(1, 3, qr.L, entropy); err != nil {
 			t.Fatalf("entropy: %x: %v", entropy, err)
 		}
 	})

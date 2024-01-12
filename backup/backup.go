@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/skip2/go-qrcode"
+	"github.com/kortschak/qr"
 	"seedhammer.com/bc/fountain"
 	"seedhammer.com/bc/ur"
 	"seedhammer.com/bc/urtypes"
@@ -336,7 +336,7 @@ func frontSide(scale func(float32) int, constant *engrave.ConstantStringer, stro
 	cmd(engrave.Offset(scale(44), (plateDims.Y-col1b.Y)/2, col2))
 
 	// Engrave seed QR.
-	qrCmd, err := engrave.ConstantQR(strokeWidth, 3, qrcode.High, seedqr.CompactQR(plate.Mnemonic))
+	qrCmd, err := engrave.ConstantQR(strokeWidth, 3, qr.Q, seedqr.CompactQR(plate.Mnemonic))
 	if err != nil {
 		return nil, err
 	}
@@ -412,7 +412,7 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *vector.Face, 
 	charPerLine := int(width / charWidth)
 	offy := scale(outerMargin)
 	for i, ur := range urs {
-		qrcmd, err := engrave.QR(strokeWidth, 2, qrcode.Medium, []byte(ur))
+		qrcmd, err := engrave.QR(strokeWidth, 2, qr.M, []byte(ur))
 		if err != nil {
 			return nil, err
 		}
