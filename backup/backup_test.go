@@ -49,9 +49,9 @@ func TestEngraveErrors(t *testing.T) {
 				Type:      urtypes.SortedMulti,
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
-			plateDesc := genTestPlate(t, desc, test.path, test.seedLen, 0)
+			_, descDesc := genTestPlate(t, desc, test.path, test.seedLen, 0, LargePlate)
 			const ppmm = 4
-			_, err := Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
+			_, err := EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descDesc)
 			if err == nil {
 				t.Fatalf("no error reported by Engrave, expected %v", test.err)
 			}
@@ -69,27 +69,28 @@ func TestEngrave(t *testing.T) {
 		side      int
 		script    urtypes.Script
 		seedLen   int
+		size      PlateSize
 	}{
 		// Seed only variants.
-		{1, 1, 0, urtypes.P2SH, 12},
-		{1, 1, 0, urtypes.P2TR, 24},
-		{1, 1, 1, urtypes.P2WPKH, 24},
+		{1, 1, 0, urtypes.P2SH, 12, SmallPlate},
+		{1, 1, 0, urtypes.P2TR, 24, SquarePlate},
+		{1, 1, 1, urtypes.P2WPKH, 24, SquarePlate},
 
-		{1, 1, 0, urtypes.P2WSH, 12},
-		{1, 1, 0, urtypes.P2WSH, 24},
-		{3, 5, 1, urtypes.P2SH_P2WSH, 24},
+		{1, 1, 0, urtypes.P2WSH, 12, SmallPlate},
+		{1, 1, 0, urtypes.P2WSH, 24, SquarePlate},
+		{3, 5, 1, urtypes.P2SH_P2WSH, 24, LargePlate},
 
 		// Descriptor variants, seed side.
-		{1, 1, 1, urtypes.P2SH_P2WSH, 12},
-		{1, 1, 1, urtypes.P2SH_P2WSH, 24},
-		{1, 2, 1, urtypes.P2SH_P2WSH, 12},
-		{3, 5, 1, urtypes.P2SH_P2WSH, 24},
+		{1, 1, 1, urtypes.P2SH_P2WSH, 12, SquarePlate},
+		{1, 1, 1, urtypes.P2SH_P2WSH, 24, SquarePlate},
+		{1, 2, 1, urtypes.P2SH_P2WSH, 12, LargePlate},
+		{3, 5, 1, urtypes.P2SH_P2WSH, 24, LargePlate},
 		// Descriptor side.
-		{1, 1, 0, urtypes.P2SH_P2WSH, 12},
-		{1, 2, 0, urtypes.P2SH_P2WSH, 12},
-		{2, 3, 0, urtypes.P2SH_P2WSH, 12},
-		{3, 5, 0, urtypes.P2SH_P2WSH, 12},
-		{9, 10, 0, urtypes.P2SH_P2WSH, 12},
+		{1, 1, 0, urtypes.P2SH_P2WSH, 12, SquarePlate},
+		{1, 2, 0, urtypes.P2SH_P2WSH, 12, LargePlate},
+		{2, 3, 0, urtypes.P2SH_P2WSH, 12, SquarePlate},
+		{3, 5, 0, urtypes.P2SH_P2WSH, 12, LargePlate},
+		{9, 10, 0, urtypes.P2SH_P2WSH, 12, SquarePlate},
 	}
 	for i, test := range tests {
 		i, test := i, test
@@ -108,13 +109,19 @@ func TestEngrave(t *testing.T) {
 				desc.Type = urtypes.SortedMulti
 			}
 			path := desc.Script.DerivationPath()
-			plateDesc := genTestPlate(t, desc, path, test.seedLen, 0)
+			seedDesc, descDesc := genTestPlate(t, desc, path, test.seedLen, 0, test.size)
 			const ppmm = 4
-			plate, err := Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
+			var side engrave.Command
+			var err error
+			if test.side == 0 {
+				side, err = EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descDesc)
+			} else {
+				side, err = EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			bounds := plate.Size.Bounds()
+			bounds := test.size.Bounds()
 			bounds = image.Rectangle{
 				Min: bounds.Min.Mul(ppmm),
 				Max: bounds.Max.Mul(ppmm),
@@ -123,7 +130,7 @@ func TestEngrave(t *testing.T) {
 			golden := filepath.Join("testdata", name)
 			got := image.NewAlpha(bounds)
 			r := engrave.NewRasterizer(got, bounds, ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
-			se := plate.Sides[test.side]
+			se := side
 			se.Engrave(r)
 			r.Rasterize()
 			// Binarize to minimize golden image sizes.
@@ -204,7 +211,7 @@ func TestSplitUR(t *testing.T) {
 				if len(desc.Keys) > 1 {
 					desc.Type = urtypes.SortedMulti
 				}
-				genTestPlate(t, desc, desc.Script.DerivationPath(), 12, 0)
+				genTestPlate(t, desc, desc.Script.DerivationPath(), 12, 0, LargePlate)
 				if !Recoverable(desc) {
 					t.Errorf("%d-of-%d: failed to recover", m, n)
 				}
@@ -218,8 +225,8 @@ func TestTitleString(t *testing.T) {
 		test  string
 		title string
 	}{
-		{"Satoshi's Wallet", "SATOSHI'S WALL"},
-		{"Anø de:Æby09 . asd asd asd as das d asd asdf sdf s fd", "AN DE:BY09 . A"},
+		{"Satoshi's Wallet", "SATOSHI'S WALLET"},
+		{"Anø de:Æby09 . asd asd asd as das d asd asdf sdf s fd", "AN DE:BY09 . ASD A"},
 		{"Æg", "G"},
 		{"🤡 💩", " "},
 		{"$€#,", "#,"},
@@ -232,7 +239,7 @@ func TestTitleString(t *testing.T) {
 	}
 }
 
-func genTestPlate(t *testing.T, desc urtypes.OutputDescriptor, path []uint32, seedlen int, keyIdx int) PlateDesc {
+func genTestPlate(t *testing.T, desc urtypes.OutputDescriptor, path []uint32, seedlen int, keyIdx int, plateSize PlateSize) (Seed, Descriptor) {
 	var mnemonic bip39.Mnemonic
 	for i := range desc.Keys {
 		m := make(bip39.Mnemonic, seedlen)
@@ -270,10 +277,18 @@ func genTestPlate(t *testing.T, desc urtypes.OutputDescriptor, path []uint32, se
 			mnemonic = m
 		}
 	}
-	return PlateDesc{
-		Font:       constant.Font,
-		KeyIdx:     keyIdx,
-		Mnemonic:   mnemonic,
-		Descriptor: desc,
-	}
+	return Seed{
+			Title:             desc.Title,
+			KeyIdx:            keyIdx,
+			Mnemonic:          mnemonic,
+			Keys:              len(desc.Keys),
+			MasterFingerprint: desc.Keys[keyIdx].MasterFingerprint,
+			Font:              constant.Font,
+			Size:              plateSize,
+		}, Descriptor{
+			Descriptor: desc,
+			KeyIdx:     keyIdx,
+			Font:       constant.Font,
+			Size:       plateSize,
+		}
 }

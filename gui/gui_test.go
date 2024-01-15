@@ -702,15 +702,33 @@ func (r *runner) Press(t *testing.T, bs ...Button) {
 }
 
 func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, desc urtypes.OutputDescriptor, mnemonic bip39.Mnemonic, keyIdx int) {
-	plateDesc := backup.PlateDesc{
+	const size = backup.LargePlate
+	descPlate := backup.Descriptor{
 		Descriptor: desc,
-		Mnemonic:   mnemonic,
 		KeyIdx:     keyIdx,
 		Font:       constant.Font,
+		Size:       size,
 	}
-	plate, err := backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
+	descSide, err := backup.EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descPlate)
 	if err != nil {
 		t.Fatal(err)
+	}
+	seedDesc := backup.Seed{
+		Title:             desc.Title,
+		KeyIdx:            keyIdx,
+		Mnemonic:          mnemonic,
+		Keys:              len(desc.Keys),
+		MasterFingerprint: desc.Keys[keyIdx].MasterFingerprint,
+		Font:              constant.Font,
+		Size:              size,
+	}
+	seedSide, err := backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plate := Plate{
+		Size:  size,
+		Sides: []engrave.Command{descSide, seedSide},
 	}
 	r.p.engrave.closed = make(chan []mjolnir.Cmd, len(plate.Sides))
 	for _, side := range plate.Sides {

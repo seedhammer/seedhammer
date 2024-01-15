@@ -25,6 +25,7 @@ import (
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
 	"seedhammer.com/driver/mjolnir"
+	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/assets"
 	"seedhammer.com/gui/layout"
@@ -881,7 +882,7 @@ func (p ProgressImage) RGBA64At(x, y int) color.RGBA64 {
 type EngraveScreen struct {
 	Key          urtypes.KeyDescriptor
 	instructions []Instruction
-	plate        backup.Plate
+	plate        Plate
 
 	cancel *ConfirmWarningScreen
 	step   int
@@ -940,9 +941,14 @@ func validateDescriptor(desc urtypes.OutputDescriptor) error {
 		keys[xpub] = true
 	}
 	// Do a dummy engrave to see whether the backup fits any plate.
-	m := make(bip39.Mnemonic, 24)
-	m = m.FixChecksum()
-	if _, err := engravePlate(desc, 0, m); err != nil {
+	descPlate := backup.Descriptor{
+		Descriptor: desc,
+		KeyIdx:     0,
+		Font:       constant.Font,
+		Size:       backup.LargePlate,
+	}
+	_, err := backup.EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descPlate)
+	if err != nil {
 		return err
 	}
 	// Verify that every permutation of desc.Threshold shares can recover the
@@ -954,14 +960,45 @@ func validateDescriptor(desc urtypes.OutputDescriptor) error {
 	return nil
 }
 
-func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (backup.Plate, error) {
-	plateDesc := backup.PlateDesc{
-		Descriptor: desc,
-		Mnemonic:   m,
-		KeyIdx:     keyIdx,
-		Font:       constant.Font,
+type Plate struct {
+	Size  backup.PlateSize
+	Sides []engrave.Command
+}
+
+func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (Plate, error) {
+	var lastErr error
+	for _, sz := range []backup.PlateSize{backup.SmallPlate, backup.SquarePlate, backup.LargePlate} {
+		descPlate := backup.Descriptor{
+			Descriptor: desc,
+			KeyIdx:     keyIdx,
+			Font:       constant.Font,
+			Size:       sz,
+		}
+		descSide, err := backup.EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descPlate)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		seedDesc := backup.Seed{
+			Title:             desc.Title,
+			KeyIdx:            keyIdx,
+			Mnemonic:          m,
+			Keys:              len(desc.Keys),
+			MasterFingerprint: desc.Keys[keyIdx].MasterFingerprint,
+			Font:              constant.Font,
+			Size:              sz,
+		}
+		seedSide, err := backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return Plate{
+			Size:  sz,
+			Sides: []engrave.Command{descSide, seedSide},
+		}, nil
 	}
-	return backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
+	return Plate{}, lastErr
 }
 
 func NewEngraveScreen(ctx *Context, desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (*EngraveScreen, error) {

@@ -30,6 +30,7 @@ var (
 	dryrun     = flag.Bool("n", false, "dry run")
 	output     = flag.String("o", "plates", "output plates to directory")
 	side       = flag.String("side", "front", "plate side, front or back")
+	size       = flag.String("size", "SH02", "plate size (SH01, SH02, SH03)")
 	descriptor = flag.String("descriptor", "wpkh([97a6d3c2/84h/1h/0h]tpubDD5cTgxiP4qYJgBgkS6arjQH3GsJEHExFZWvumhNGGe4gBShn9u3b4TdpG2DvRg3knNXV7fBdmaw6cH2kKYdk2aXjQZYsnTchA4aFsZWehG)", "output descriptor")
 	mnemonic   = flag.String("mnemonic", "vocal tray giggle tool duck letter category pattern train magnet excite swamp", "seed phrase")
 )
@@ -57,6 +58,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		desc.Title = backup.TitleString(constant.Font, "Satoshi's Stash222")
 	}
 	network := &chaincfg.MainNetParams
 	if len(desc.Keys) > 0 {
@@ -111,69 +113,79 @@ func run() error {
 	if keyIdx == -1 {
 		return errors.New("seed is not among the descriptor keys")
 	}
-	plate := backup.PlateDesc{
-		Font:       constant.Font,
-		Descriptor: desc,
-		KeyIdx:     keyIdx,
-		Mnemonic:   m,
+	var psz backup.PlateSize
+	switch *size {
+	case "SH01":
+		psz = backup.SmallPlate
+	case "SH02":
+		psz = backup.SquarePlate
+	case "SH03":
+		psz = backup.LargePlate
+	default:
+		return fmt.Errorf("-size must be 'SH01', 'SH02' or 'SH03'")
 	}
-	if *serialDev != "" {
-		var s int
-		switch *side {
-		case "back":
-			s = 0
-		case "front":
-			s = 1
-		default:
-			return fmt.Errorf("-side must be 'front' or 'back'")
+	var sideCmd engrave.Command
+	switch *side {
+	case "back":
+		desc := backup.Seed{
+			Title:             desc.Title,
+			KeyIdx:            keyIdx,
+			Mnemonic:          m,
+			Keys:              len(desc.Keys),
+			MasterFingerprint: desc.Keys[keyIdx].MasterFingerprint,
+			Font:              constant.Font,
+			Size:              psz,
 		}
-		err = hammer(plate, s, *serialDev)
+		sideCmd, err = backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, desc)
+	case "front":
+		desc := backup.Descriptor{
+			Descriptor: desc,
+			KeyIdx:     keyIdx,
+			Font:       constant.Font,
+			Size:       psz,
+		}
+		sideCmd, err = backup.EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, desc)
+	default:
+		return fmt.Errorf("-side must be 'front' or 'back'")
+	}
+	if err != nil {
+		return err
+	}
+
+	if *serialDev != "" {
+		err = hammer(sideCmd, *serialDev)
 	} else {
 		if err := os.MkdirAll(*output, 0o755); err != nil {
 			return err
 		}
-		err = dump(plate, *output)
+		err = dump(sideCmd, psz, keyIdx, *output)
 	}
 	return err
 }
 
-func dump(desc backup.PlateDesc, output string) error {
+func dump(sideCmd engrave.Command, size backup.PlateSize, keyIdx int, output string) error {
 	const ppmm = 24
-	plate, err := backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, desc)
-	if err != nil {
-		return err
-	}
-	bounds := plate.Size.Bounds()
+	bounds := size.Bounds()
 	bounds = image.Rectangle{
 		Min: bounds.Min.Mul(ppmm),
 		Max: bounds.Max.Mul(ppmm),
 	}
-	for s := range plate.Sides {
-		img := image.NewNRGBA(bounds)
-		r := engrave.NewRasterizer(img, img.Bounds(), ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
-		se := plate.Sides[s]
-		se.Engrave(r)
-		r.Rasterize()
-		buf := new(bytes.Buffer)
-		if err := png.Encode(buf, img); err != nil {
-			return err
-		}
-		file := filepath.Join(output, fmt.Sprintf("plate-%d-side-%d.png", desc.KeyIdx, s))
-		if err := os.WriteFile(file, buf.Bytes(), 0o644); err != nil {
-			return err
-		}
+	img := image.NewNRGBA(bounds)
+	r := engrave.NewRasterizer(img, img.Bounds(), ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
+	sideCmd.Engrave(r)
+	r.Rasterize()
+	buf := new(bytes.Buffer)
+	if err := png.Encode(buf, img); err != nil {
+		return err
+	}
+	file := filepath.Join(output, fmt.Sprintf("plate-%d-side-%s.png", keyIdx, *side))
+	if err := os.WriteFile(file, buf.Bytes(), 0o644); err != nil {
+		return err
 	}
 	return nil
 }
 
-func hammer(plateDesc backup.PlateDesc, side int, dev string) error {
-	plate, err := backup.Engrave(mjolnir.Millimeter, mjolnir.StrokeWidth, plateDesc)
-	if err != nil {
-		return err
-	}
-	if side >= len(plate.Sides) {
-		return fmt.Errorf("no such side: %d", side)
-	}
+func hammer(side engrave.Command, dev string) error {
 	s, err := mjolnir.Open(dev)
 	if err != nil {
 		return err
@@ -183,7 +195,7 @@ func hammer(plateDesc backup.PlateDesc, side int, dev string) error {
 	prog := &mjolnir.Program{
 		DryRun: *dryrun,
 	}
-	plate.Sides[side].Engrave(prog)
+	side.Engrave(prog)
 	prog.Prepare()
 	quit := make(chan os.Signal, 1)
 	cancel := make(chan struct{})
@@ -199,6 +211,6 @@ func hammer(plateDesc backup.PlateDesc, side int, dev string) error {
 	go func() {
 		engraveErr <- mjolnir.Engrave(s, prog, nil, cancel)
 	}()
-	plate.Sides[side].Engrave(prog)
+	side.Engrave(prog)
 	return <-engraveErr
 }
