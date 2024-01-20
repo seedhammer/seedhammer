@@ -2,7 +2,6 @@
 package gui
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"image"
@@ -12,7 +11,6 @@ import (
 	"log"
 	"math"
 	"strings"
-	"text/template"
 	"time"
 	"unicode/utf8"
 
@@ -961,8 +959,6 @@ func validateDescriptor(desc urtypes.OutputDescriptor) error {
 
 type Plate struct {
 	Size              backup.PlateSize
-	KeyIdx            int
-	NumKeys           int
 	MasterFingerprint uint32
 	Sides             []engrave.Command
 }
@@ -989,8 +985,6 @@ func engraveSeed(m bip39.Mnemonic) (Plate, error) {
 		}
 		return Plate{
 			Sides:             []engrave.Command{seedSide},
-			KeyIdx:            0,
-			NumKeys:           1,
 			Size:              sz,
 			MasterFingerprint: mfp,
 		}, nil
@@ -1044,8 +1038,6 @@ func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (
 		}
 		return Plate{
 			Size:              sz,
-			KeyIdx:            keyIdx,
-			NumKeys:           len(desc.Keys),
 			MasterFingerprint: mfp,
 			Sides:             []engrave.Command{descSide, seedSide},
 		}, nil
@@ -1068,20 +1060,11 @@ func NewEngraveScreen(ctx *Context, plate Plate) *EngraveScreen {
 		plate:        plate,
 		instructions: ins,
 	}
-	args := struct {
-		Name  string
-		Idx   int
-		Total int
-	}{
-		Name:  plateName(plate.Size),
-		Total: plate.NumKeys,
-		Idx:   plate.KeyIdx + 1,
-	}
 	for i, ins := range s.instructions {
-		tmpl := template.Must(template.New("instruction").Parse(ins.Body))
-		buf := new(bytes.Buffer)
-		tmpl.Execute(buf, args)
-		s.instructions[i].resolvedBody = buf.String()
+		repl := strings.NewReplacer(
+			"{{.Name}}", plateName(plate.Size),
+		)
+		s.instructions[i].resolvedBody = repl.Replace(ins.Body)
 		// As a special case, the Sh01 image is a placeholder for the plate-specific image.
 		if ins.Image == assets.Sh01 {
 			s.instructions[i].Image = plateImage(plate.Size)
