@@ -40,8 +40,8 @@
               src = pkgs.fetchFromGitHub {
                 owner = "raspberrypi";
                 repo = "linux";
-                rev = "0afb5e98488aed7017b9bf321b575d0177feb7ed";
-                hash = "sha256-t+xq0HmT163TaE+5/sb2ZkNWDbBoiwbXk3oi6YEYsIA=";
+                rev = "3bb5880ab3dd31f75c07c3c33bf29c5d469b28f3";
+                hash = "sha256-v4ennISbEk0ApnfDRZKCJOHfO8qLdlBNlGjffkOy7LY=";
                 # Remove files that introduce case sensitivity clashes on darwin.
                 postFetch = ''
                   rm $out/include/uapi/linux/netfilter/xt_*.h
