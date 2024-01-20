@@ -1412,7 +1412,7 @@ var (
 			Lead: "seedhammer.com/tip#3",
 		},
 		{
-			Body:  "Place 2 x {{.Name}}\non top of each other.",
+			Body:  "Place a {{.Name}} on top\nof a protective plate.",
 			Image: assets.Sh01,
 			Lead:  "seedhammer.com/tip#4",
 		},
@@ -1421,11 +1421,7 @@ var (
 			Lead: "seedhammer.com/tip#4",
 		},
 		{
-			Body: "Loosen the hammerhead finger screw. Adjust needle distance to 2 mm above the plate.",
-			Lead: "seedhammer.com/tip#5",
-		},
-		{
-			Body: "The needle should barely be able to move freely over the nuts.",
+			Body: "Loosen the hammerhead finger screw. Adjust needle distance to ~1.5 mm above the plate.",
 			Lead: "seedhammer.com/tip#5",
 		},
 		{
@@ -1454,7 +1450,7 @@ var (
 			Lead: "seedhammer.com/tip#1",
 		},
 		{
-			Body:  "Place 2 x {{.Name}}\non top of each other.",
+			Body:  "Place a {{.Name}} on top\nof a protective plate.",
 			Image: assets.Sh01,
 			Lead:  "seedhammer.com/tip#4",
 		},

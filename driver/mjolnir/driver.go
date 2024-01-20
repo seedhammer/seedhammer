@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"image"
 	"io"
-	"math"
 	"runtime"
 
 	"github.com/tarm/serial"
@@ -33,6 +32,8 @@ const (
 	// Millimeters is machine units per millimeter.
 	Millimeter = 1 / Step
 )
+
+var safePoint = image.Pt(119, 43)
 
 const (
 	cmdSize = 10
@@ -320,23 +321,16 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	setSpeeds(300, 300, 0xe6)
 
 	// Prepare the machine: (1) reset the origin and
-	// (2) exercise the needle. The first is necessary because
+	// (2) move to safe point. The first is necessary because
 	// the absolute position of the needle is not known at startup.
-	// The second is because some machine needles are stuck for
-	// the first few engravings.
+	// The second is to avoid needle collision with the tightening
+	// nuts.
 	origin()
-	reset := &Program{
-		DryRun: prog.DryRun,
+	sp := image.Point{
+		X: int(float32(safePoint.X) * Millimeter),
+		Y: int(float32(safePoint.Y) * Millimeter),
 	}
-	runReset := func() {
-		off := int(math.Round(10 * Millimeter))
-		reset.Line(image.Pt(off, off))
-	}
-	runReset()
-	reset.Prepare()
-	go runReset()
-	runProgram(reset, nil)
-	origin()
+	moveTo(sp)
 
 	// 0 lowest, 1 highest.
 	moveSpeed := prog.MoveSpeed
@@ -353,7 +347,12 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	runProgram(prog, progress)
 	if eerr == nil || eerr == ErrCancelled {
 		setSpeeds(300, 300, 0xe6)
-		moveTo(prog.End)
+		if prog.End != (image.Point{}) {
+			moveTo(prog.End)
+		} else {
+			moveTo(sp)
+			origin()
+		}
 	}
 
 	return eerr
