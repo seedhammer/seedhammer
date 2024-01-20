@@ -58,7 +58,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		desc.Title = backup.TitleString(constant.Font, "Satoshi's Stash222")
+		desc.Title = backup.TitleString(constant.Font, "Satoshi's Nice Stash")
 	}
 	network := &chaincfg.MainNetParams
 	if len(desc.Keys) > 0 {

@@ -153,13 +153,23 @@ func TestNonParticipatingSeed(t *testing.T) {
 	}
 }
 
-func TestEngraveScreenCancel(t *testing.T) {
-	p := newPlatform()
-	ctx := NewContext(p)
-	scr, err := NewEngraveScreen(ctx, twoOfThree.Descriptor, 0, twoOfThree.Mnemonic)
+func newTestEngraveScreen(t *testing.T, ctx *Context) *EngraveScreen {
+	desc := twoOfThree.Descriptor
+	const keyIdx = 0
+	plate, err := engravePlate(desc, keyIdx, twoOfThree.Mnemonic)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return NewEngraveScreen(
+		ctx,
+		plate,
+	)
+}
+
+func TestEngraveScreenCancel(t *testing.T) {
+	p := newPlatform()
+	ctx := NewContext(p)
+	scr := newTestEngraveScreen(t, ctx)
 
 	// Back.
 	ctxButton(ctx, Button1)
@@ -176,7 +186,7 @@ func TestEngraveScreenCancel(t *testing.T) {
 	}
 }
 
-func TestEngraveScreenError(t *testing.T) {
+func TestEngraveError(t *testing.T) {
 	nonstdPath := []uint32{
 		hdkeychain.HardenedKeyStart + 86,
 		hdkeychain.HardenedKeyStart + 0,
@@ -194,7 +204,6 @@ func TestEngraveScreenError(t *testing.T) {
 	for i, test := range tests {
 		name := fmt.Sprintf("%d-%d-of-%d", i, test.threshold, test.keys)
 		t.Run(name, func(t *testing.T) {
-			ctx := NewContext(newPlatform())
 			desc := urtypes.OutputDescriptor{
 				Script:    urtypes.P2WSH,
 				Threshold: test.threshold,
@@ -202,7 +211,7 @@ func TestEngraveScreenError(t *testing.T) {
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
 			mnemonic := fillDescriptor(t, desc, test.path, 12, 0)
-			_, err := NewEngraveScreen(ctx, desc, 0, mnemonic)
+			_, err := engravePlate(desc, 0, mnemonic)
 			if err == nil {
 				t.Fatal("invalid descriptor succeeded")
 			}
@@ -218,10 +227,7 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	p.engrave.closed = make(chan []mjolnir.Cmd, 1)
 	p.engrave.connErr = errors.New("failed to connect")
 	ctx := NewContext(p)
-	scr, err := NewEngraveScreen(ctx, twoOfThree.Descriptor, 0, twoOfThree.Mnemonic)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scr := newTestEngraveScreen(t, ctx)
 	// Press next until connect is reached.
 	for scr.instructions[scr.step].Type != ConnectInstruction {
 		ctxButton(ctx, Button3)
@@ -373,6 +379,53 @@ func TestSeedScreenInvalidSeed(t *testing.T) {
 	}
 }
 
+func TestSeed(t *testing.T) {
+	const mnemonic = "doll clerk nice coast caught valid shallow taxi buyer economy lunch roof"
+
+	r := newRunner(t)
+
+	//Seed input method, keyboad input, select 12 words.
+	r.Button(t, Button3, Button3, Button3)
+	r.Frame(t)
+	if r.app.scr.seed == nil {
+		t.Fatal("not on seed screen")
+	}
+
+	m, err := bip39.ParseMnemonic(mnemonic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Mnemonic(t, m)
+
+	// Accept seed, skip descriptor.
+	r.Button(t, Button3, Down, Button3)
+
+	// Accept descriptor, go to engrave.
+	r.Button(t, Button3)
+	r.Frame(t)
+	mk, ok := deriveMasterKey(m, &chaincfg.MainNetParams)
+	if !ok {
+		t.Fatal("failed to derive master key")
+	}
+	mfp, _, err := bip32.Derive(mk, urtypes.Path{0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedDesc := backup.Seed{
+		KeyIdx:            0,
+		Mnemonic:          m,
+		Keys:              1,
+		MasterFingerprint: mfp,
+		Font:              constant.Font,
+		Size:              backup.SmallPlate,
+	}
+	side, err := backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testEngraving(t, r, r.app.scr.engrave, side)
+}
+
 func TestMulti(t *testing.T) {
 	const oneOfTwoDesc = "wsh(sortedmulti(1,[94631f99/48h/0h/0h/2h]xpub6ENfRaMWq2UoFy5FrLRMwiEkdgFdMgjEoikR34RBGzhsx8JzAkn7fyQeR5odirEwERvmxhSEv7rsmV7nuzjSKKKJHBP2aQZVu3R2d5ERgcw,[4bbaa801/48h/0h/0h/2h]xpub6E8mpiqJiVKuJZqxtu5SbHQnwUWWPQpZEy9CVtvfU1gxXZnbb9DG2AvZyMHvyVRtUPAEmu6BuRCy4LK2rKMeNr7jQKXsCyFfr1osgFCMYpc))"
 	mnemonics := []string{
@@ -394,31 +447,7 @@ func TestMulti(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-
-		for _, word := range m {
-			for _, c := range strings.ToUpper(bip39.LabelFor(word)) {
-				r.p.events = append(r.p.events, ButtonEvent{
-					Button:  Rune,
-					Rune:    c,
-					Pressed: true,
-				})
-				r.Frame(t)
-				if r.app.scr.seed.input.kbd.nvalid == 1 {
-					r.Button(t, Button2)
-					r.Frame(t)
-					break
-				}
-			}
-		}
-		r.Frame(t)
-
-		if sc := r.app.scr.seed; sc == nil || !sc.Mnemonic.Valid() {
-			t.Fatalf("got invalid seed %v, wanted %v", sc.Mnemonic, m)
-
-		}
-		if got := r.app.scr.seed.Mnemonic; !reflect.DeepEqual(got, m) {
-			t.Fatalf("got seed %v, wanted %v", got, m)
-		}
+		r.Mnemonic(t, m)
 
 		// Accept seed, go to descriptor scan.
 		r.Button(t, Button3, Button3)
@@ -427,12 +456,42 @@ func TestMulti(t *testing.T) {
 
 		// Accept descriptor, go to engrave.
 		r.Button(t, Button3)
+		r.Frame(t)
 		oneOfTwo, err := nonstandard.OutputDescriptor([]byte(oneOfTwoDesc))
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.Frame(t)
-		testEngraving(t, r, r.app.scr.engrave, oneOfTwo, m, i)
+		const size = backup.LargePlate
+		descPlate := backup.Descriptor{
+			Descriptor: oneOfTwo,
+			KeyIdx:     i,
+			Font:       constant.Font,
+			Size:       size,
+		}
+		descSide, err := backup.EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descPlate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seedDesc := backup.Seed{
+			Title:             oneOfTwo.Title,
+			KeyIdx:            i,
+			Mnemonic:          m,
+			Keys:              len(oneOfTwo.Keys),
+			MasterFingerprint: oneOfTwo.Keys[i].MasterFingerprint,
+			Font:              constant.Font,
+			Size:              size,
+		}
+		seedSide, err := backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plate := Plate{
+			Size:  size,
+			Sides: []engrave.Command{descSide, seedSide},
+		}
+		for _, side := range plate.Sides {
+			testEngraving(t, r, r.app.scr.engrave, side)
+		}
 	}
 }
 
@@ -701,68 +760,66 @@ func (r *runner) Press(t *testing.T, bs ...Button) {
 	}
 }
 
-func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, desc urtypes.OutputDescriptor, mnemonic bip39.Mnemonic, keyIdx int) {
-	const size = backup.LargePlate
-	descPlate := backup.Descriptor{
-		Descriptor: desc,
-		KeyIdx:     keyIdx,
-		Font:       constant.Font,
-		Size:       size,
-	}
-	descSide, err := backup.EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descPlate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedDesc := backup.Seed{
-		Title:             desc.Title,
-		KeyIdx:            keyIdx,
-		Mnemonic:          mnemonic,
-		Keys:              len(desc.Keys),
-		MasterFingerprint: desc.Keys[keyIdx].MasterFingerprint,
-		Font:              constant.Font,
-		Size:              size,
-	}
-	seedSide, err := backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plate := Plate{
-		Size:  size,
-		Sides: []engrave.Command{descSide, seedSide},
-	}
-	r.p.engrave.closed = make(chan []mjolnir.Cmd, len(plate.Sides))
-	for _, side := range plate.Sides {
-	done:
-		for {
-			switch scr.instructions[scr.step].Type {
-			case EngraveInstruction:
-				break done
-			case ConnectInstruction:
-				// Hold connect.
-				r.Press(t, Button3)
-				r.p.timeOffset += confirmDelay
+func (r *runner) Mnemonic(t *testing.T, m bip39.Mnemonic) {
+	for _, word := range m {
+		for _, c := range strings.ToUpper(bip39.LabelFor(word)) {
+			r.p.events = append(r.p.events, ButtonEvent{
+				Button:  Rune,
+				Rune:    c,
+				Pressed: true,
+			})
+			r.Frame(t)
+			if r.app.scr.seed.input.kbd.nvalid == 1 {
+				r.Button(t, Button2)
 				r.Frame(t)
-			default:
-				r.Button(t, Button3)
-				r.Frame(t)
+				break
 			}
 		}
-	received:
-		for {
-			select {
-			case got := <-r.p.engrave.closed:
-				// Verify the step is advanced after engrave completion.
-				for scr.instructions[scr.step].Type == EngraveInstruction {
-					r.Frame(t)
-				}
-				want := simEngrave(t, side)
-				if !reflect.DeepEqual(want, got) {
-					t.Fatalf("engraver commands mismatch for side %v", side)
-				}
-				break received
-			default:
-				r.Frame(t)
+	}
+	r.Frame(t)
+
+	if sc := r.app.scr.seed; sc == nil || !sc.Mnemonic.Valid() {
+		t.Fatalf("got invalid seed %v, wanted %v", sc.Mnemonic, m)
+
+	}
+	if got := r.app.scr.seed.Mnemonic; !reflect.DeepEqual(got, m) {
+		t.Fatalf("got seed %v, wanted %v", got, m)
+	}
+}
+
+func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, side engrave.Command) {
+	r.p.engrave.closed = make(chan []mjolnir.Cmd)
+done:
+	for {
+		switch scr.instructions[scr.step].Type {
+		case EngraveInstruction:
+			break done
+		case ConnectInstruction:
+			// Hold connect.
+			r.Press(t, Button3)
+			r.p.timeOffset += confirmDelay
+			r.Frame(t)
+		default:
+			r.Button(t, Button3)
+			r.Frame(t)
+		}
+	}
+received:
+	for {
+		select {
+		case got := <-r.p.engrave.closed:
+			// Verify the step is advanced after engrave completion.
+			r.Frame(t)
+			if scr.instructions[scr.step].Type == EngraveInstruction {
+				t.Fatalf("instructions didn't progress part engraving screen")
 			}
+			want := simEngrave(t, side)
+			if !reflect.DeepEqual(want, got) {
+				t.Fatalf("engraver commands mismatch for side %v", side)
+			}
+			break received
+		default:
+			r.Frame(t)
 		}
 	}
 }

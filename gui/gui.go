@@ -880,7 +880,6 @@ func (p ProgressImage) RGBA64At(x, y int) color.RGBA64 {
 }
 
 type EngraveScreen struct {
-	Key          urtypes.KeyDescriptor
 	instructions []Instruction
 	plate        Plate
 
@@ -961,11 +960,61 @@ func validateDescriptor(desc urtypes.OutputDescriptor) error {
 }
 
 type Plate struct {
-	Size  backup.PlateSize
-	Sides []engrave.Command
+	Size              backup.PlateSize
+	KeyIdx            int
+	NumKeys           int
+	MasterFingerprint uint32
+	Sides             []engrave.Command
+}
+
+func engraveSeed(m bip39.Mnemonic) (Plate, error) {
+	mfp, err := masterFingerprintFor(m, &chaincfg.MainNetParams)
+	if err != nil {
+		return Plate{}, err
+	}
+	var lastErr error
+	for _, sz := range []backup.PlateSize{backup.SmallPlate, backup.SquarePlate, backup.LargePlate} {
+		seedDesc := backup.Seed{
+			KeyIdx:            0,
+			Mnemonic:          m,
+			Keys:              1,
+			MasterFingerprint: mfp,
+			Font:              constant.Font,
+			Size:              sz,
+		}
+		seedSide, err := backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return Plate{
+			Sides:             []engrave.Command{seedSide},
+			KeyIdx:            0,
+			NumKeys:           1,
+			Size:              sz,
+			MasterFingerprint: mfp,
+		}, nil
+	}
+	return Plate{}, lastErr
+}
+
+func masterFingerprintFor(m bip39.Mnemonic, network *chaincfg.Params) (uint32, error) {
+	mk, ok := deriveMasterKey(m, network)
+	if !ok {
+		return 0, errors.New("failed to derive mnemonic master key")
+	}
+	mfp, _, err := bip32.Derive(mk, urtypes.Path{0})
+	if err != nil {
+		return 0, err
+	}
+	return mfp, nil
 }
 
 func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (Plate, error) {
+	mfp, err := masterFingerprintFor(m, desc.Keys[keyIdx].Network)
+	if err != nil {
+		return Plate{}, err
+	}
 	var lastErr error
 	for _, sz := range []backup.PlateSize{backup.SmallPlate, backup.SquarePlate, backup.LargePlate} {
 		descPlate := backup.Descriptor{
@@ -984,7 +1033,7 @@ func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (
 			KeyIdx:            keyIdx,
 			Mnemonic:          m,
 			Keys:              len(desc.Keys),
-			MasterFingerprint: desc.Keys[keyIdx].MasterFingerprint,
+			MasterFingerprint: mfp,
 			Font:              constant.Font,
 			Size:              sz,
 		}
@@ -994,39 +1043,39 @@ func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (
 			continue
 		}
 		return Plate{
-			Size:  sz,
-			Sides: []engrave.Command{descSide, seedSide},
+			Size:              sz,
+			KeyIdx:            keyIdx,
+			NumKeys:           len(desc.Keys),
+			MasterFingerprint: mfp,
+			Sides:             []engrave.Command{descSide, seedSide},
 		}, nil
 	}
 	return Plate{}, lastErr
 }
 
-func NewEngraveScreen(ctx *Context, desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (*EngraveScreen, error) {
-	plate, err := engravePlate(desc, keyIdx, m)
-	if err != nil {
-		return nil, err
-	}
-	s := &EngraveScreen{
-		Key:   desc.Keys[keyIdx],
-		plate: plate,
-	}
+func NewEngraveScreen(ctx *Context, plate Plate) *EngraveScreen {
+	var ins []Instruction
 	if !ctx.Calibrated {
-		s.instructions = append(s.instructions, EngraveFirstSideA...)
+		ins = append(ins, EngraveFirstSideA...)
 	} else {
-		s.instructions = append(s.instructions, EngraveSideA...)
+		ins = append(ins, EngraveSideA...)
 	}
 	if len(plate.Sides) > 1 {
-		s.instructions = append(s.instructions, EngraveSideB...)
+		ins = append(ins, EngraveSideB...)
 	}
-	s.instructions = append(s.instructions, EngraveSuccess...)
+	ins = append(ins, EngraveSuccess...)
+	s := &EngraveScreen{
+		plate:        plate,
+		instructions: ins,
+	}
 	args := struct {
 		Name  string
 		Idx   int
 		Total int
 	}{
-		Name:  plateName(s.plate.Size),
-		Total: len(desc.Keys),
-		Idx:   keyIdx + 1,
+		Name:  plateName(plate.Size),
+		Total: plate.NumKeys,
+		Idx:   plate.KeyIdx + 1,
 	}
 	for i, ins := range s.instructions {
 		tmpl := template.Must(template.New("instruction").Parse(ins.Body))
@@ -1035,10 +1084,10 @@ func NewEngraveScreen(ctx *Context, desc urtypes.OutputDescriptor, keyIdx int, m
 		s.instructions[i].resolvedBody = buf.String()
 		// As a special case, the Sh01 image is a placeholder for the plate-specific image.
 		if ins.Image == assets.Sh01 {
-			s.instructions[i].Image = plateImage(s.plate.Size)
+			s.instructions[i].Image = plateImage(plate.Size)
 		}
 	}
-	return s, nil
+	return s
 }
 
 type engraveState struct {
@@ -1245,7 +1294,7 @@ loop:
 
 	r := layout.Rectangle{Max: dims}
 	_, subt := r.CutTop(leadingSize)
-	subtsz := widget.Label(ops.Begin(), ctx.Styles.body, th.Text, fmt.Sprintf("%.8x", s.Key.MasterFingerprint))
+	subtsz := widget.Label(ops.Begin(), ctx.Styles.body, th.Text, fmt.Sprintf("%.8x", s.plate.MasterFingerprint))
 	op.Position(ops, ops.End(), subt.N(subtsz).Sub(image.Pt(0, 4)))
 
 	const margin = 8
@@ -2374,7 +2423,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 			th = &descriptorTheme
 		}
 		switch {
-		case s.seed != nil && s.method == nil && s.desc == nil:
+		case s.seed != nil && s.method == nil && s.desc == nil && s.engrave == nil:
 			m, status := s.seed.Layout(ctx, ops.Begin(), th, dims)
 			dialog := ops.End()
 			if status == ResultNone {
@@ -2387,22 +2436,15 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				s.seed = nil
 				continue
 			}
-			valid := s.descriptor != nil
-			if valid {
-				_, ok := descriptorKeyIdx(*s.descriptor, s.mnemonic, "")
-				valid = valid && ok
+			s.method = &ChoiceScreen{
+				Title:   "Descriptor",
+				Lead:    "Choose input method",
+				Choices: []string{"SCAN", "SKIP"},
 			}
-			if valid {
-				s.method = &ChoiceScreen{
-					Title:   "Descriptor",
-					Lead:    "Choose input method",
-					Choices: []string{"SCAN", "RE-USE"},
-				}
-			} else {
-				s.method = &ChoiceScreen{
-					Title:   "Descriptor",
-					Lead:    "Choose input method",
-					Choices: []string{"SCAN"},
+			if s.descriptor != nil {
+				_, match := descriptorKeyIdx(*s.descriptor, s.mnemonic, "")
+				if match {
+					s.method.Choices = append(s.method.Choices, "RE-USE")
 				}
 			}
 			continue
@@ -2449,7 +2491,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				Mnemonic:   s.mnemonic,
 			}
 			continue
-		case s.method != nil && s.warning == nil:
+		case s.method != nil && s.engrave == nil && s.warning == nil:
 			choice, status := s.method.Layout(ctx, ops.Begin(), th, dims, s.warning == nil)
 			dialog := ops.End()
 			switch status {
@@ -2461,12 +2503,20 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				continue
 			}
 			switch choice {
-			case 0: //Scan
+			case 0: // Scan.
 				s.scanner = &ScanScreen{
 					Title: "Scan",
 					Lead:  "Wallet Output Descriptor",
 				}
-			case 1: //Re-use
+			case 1: // Skip descriptor.
+				s.method = nil
+				plate, err := engraveSeed(s.mnemonic)
+				if err != nil {
+					s.warning = NewErrorScreen(err)
+					break
+				}
+				s.engrave = NewEngraveScreen(ctx, plate)
+			case 2: // Re-use.
 				s.method = nil
 				s.desc = &DescriptorScreen{
 					Descriptor: *s.descriptor,
@@ -2500,12 +2550,13 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				s.desc = nil
 				continue
 			}
-			eng, err := NewEngraveScreen(ctx, *s.descriptor, keyIdx, s.mnemonic)
+			desc := *s.descriptor
+			plate, err := engravePlate(desc, keyIdx, s.mnemonic)
 			if err != nil {
 				s.warning = NewErrorScreen(err)
 				break
 			}
-			s.engrave = eng
+			s.engrave = NewEngraveScreen(ctx, plate)
 			continue
 		case s.warning != nil:
 			dismissed := s.warning.Update(ctx)
