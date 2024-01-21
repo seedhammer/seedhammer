@@ -717,7 +717,8 @@ type ErrorScreen struct {
 func (s *ErrorScreen) Update(ctx *Context) bool {
 	for {
 		s.w.Update(ctx)
-		e, ok := ctx.Next(Button3)
+		// Swallow all buttons.
+		e, ok := ctx.Next(Button3, Button2, Button1, Up, Down, Right, Left, Center)
 		if !ok {
 			break
 		}
@@ -813,7 +814,8 @@ func (s *ConfirmWarningScreen) Update(ctx *Context) ConfirmResult {
 		if s.progress == 1 {
 			return ConfirmYes
 		}
-		e, ok := ctx.Next(Button1, Button3)
+		// Swallow all buttons.
+		e, ok := ctx.Next(Button3, Button2, Button1, Up, Down, Right, Left, Center)
 		if !ok {
 			break
 		}
