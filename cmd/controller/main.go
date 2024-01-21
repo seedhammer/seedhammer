@@ -21,7 +21,6 @@ func main() {
 func run() error {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 	version := os.Getenv("sh_version")
-	log.Printf("seedhammer: loading %s...\n", version)
 	p, err := Init()
 	if err != nil {
 		return err
