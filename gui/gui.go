@@ -514,20 +514,6 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (i
 	return 0, ResultNone
 }
 
-func derivationPath(path urtypes.Path) string {
-	var b strings.Builder
-	b.WriteString("m")
-	for _, p := range path {
-		b.WriteString("/")
-		if p >= hdkeychain.HardenedKeyStart {
-			fmt.Fprintf(&b, "%d'", p-hdkeychain.HardenedKeyStart)
-		} else {
-			fmt.Fprintf(&b, "%d", p)
-		}
-	}
-	return b.String()
-}
-
 type ScanScreen struct {
 	Title     string
 	Lead      string
@@ -1506,12 +1492,6 @@ func NewEmptySeedScreen(title string) *SeedScreen {
 		},
 	}
 	return s
-}
-
-func NewSeedScreen(m bip39.Mnemonic) *SeedScreen {
-	return &SeedScreen{
-		Mnemonic: m,
-	}
 }
 
 type SeedScreen struct {

@@ -348,11 +348,17 @@ func TestSeedScreenScanInvalid(t *testing.T) {
 	}
 }
 
+func NewSeedScreen(m bip39.Mnemonic) *SeedScreen {
+	return &SeedScreen{
+		Mnemonic: m,
+	}
+}
+
 func TestSeedScreenInvalidSeed(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
-	scr := NewSeedScreen(make(bip39.Mnemonic, len(twoOfThree.Mnemonic)))
-	copy(scr.Mnemonic, twoOfThree.Mnemonic)
+	scr := &SeedScreen{}
+	scr.Mnemonic = append(scr.Mnemonic, twoOfThree.Mnemonic...)
 	// Invalidate seed.
 	scr.Mnemonic[0] = 0
 	// Accept seed.
