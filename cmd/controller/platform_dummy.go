@@ -6,7 +6,6 @@ import (
 	"errors"
 	"image"
 	"image/draw"
-	"io"
 
 	"seedhammer.com/gui"
 )
@@ -17,7 +16,7 @@ func Init() (*Platform, error) {
 	return new(Platform), nil
 }
 
-func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
+func (p *Platform) Engraver() (gui.Engraver, error) {
 	return nil, errors.New("Engraver not implemented")
 }
 

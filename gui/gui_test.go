@@ -654,12 +654,26 @@ func (w *wrappedEngraver) Close() error {
 	return w.dev.Close()
 }
 
-func (p *testPlatform) Engraver() (io.ReadWriteCloser, error) {
+func (p *testPlatform) Engraver() (Engraver, error) {
 	if err := p.engrave.connErr; err != nil {
 		return nil, err
 	}
 	sim := mjolnir.NewSimulator()
-	return &wrappedEngraver{sim, p.engrave.closed, p.engrave.ioErr}, nil
+	return &engraver{
+		dev: &wrappedEngraver{sim, p.engrave.closed, p.engrave.ioErr},
+	}, nil
+}
+
+type engraver struct {
+	dev io.ReadWriteCloser
+}
+
+func (e *engraver) Engrave(prog *mjolnir.Program, progress chan float32, quit <-chan struct{}) error {
+	return mjolnir.Engrave(e.dev, prog, progress, quit)
+}
+
+func (e *engraver) Close() {
+	e.dev.Close()
 }
 
 func (p *testPlatform) CameraFrame(dims image.Point) {

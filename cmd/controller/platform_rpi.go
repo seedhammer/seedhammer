@@ -126,11 +126,30 @@ func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
 	return p.display.NextChunk()
 }
 
-func (p *Platform) Engraver() (io.ReadWriteCloser, error) {
-	if engraverHook != nil {
-		return engraverHook(), nil
+func (p *Platform) Engraver() (gui.Engraver, error) {
+	var dev io.ReadWriteCloser
+	if engraverHook == nil {
+		var err error
+		dev, err = mjolnir.Open("")
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		dev = engraverHook()
 	}
-	return mjolnir.Open("")
+	return &engraver{dev: dev}, nil
+}
+
+type engraver struct {
+	dev io.ReadWriteCloser
+}
+
+func (e *engraver) Engrave(prog *mjolnir.Program, progress chan float32, quit <-chan struct{}) error {
+	return mjolnir.Engrave(e.dev, prog, progress, quit)
+}
+
+func (e *engraver) Close() {
+	e.dev.Close()
 }
 
 func (p *Platform) ScanQR(img *image.Gray) ([][]byte, error) {

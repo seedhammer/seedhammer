@@ -7,7 +7,6 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"io"
 	"log"
 	"math"
 	"strings"
@@ -1062,7 +1061,7 @@ func NewEngraveScreen(ctx *Context, plate Plate) *EngraveScreen {
 }
 
 type engraveState struct {
-	dev          io.ReadWriteCloser
+	dev          Engraver
 	cancel       chan struct{}
 	progress     chan float32
 	errs         chan error
@@ -1134,7 +1133,7 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 		}()
 		go func() {
 			defer dev.Close()
-			errs <- mjolnir.Engrave(dev, prog, progress, cancel)
+			errs <- dev.Engrave(prog, progress, cancel)
 		}()
 		go s.plate.Sides[ins.Side].Engrave(prog)
 	}
@@ -2745,7 +2744,7 @@ func (s *MainScreen) layoutPager(ops op.Ctx, th *Colors) image.Point {
 type Platform interface {
 	Events() []Event
 	Wakeup()
-	Engraver() (io.ReadWriteCloser, error)
+	Engraver() (Engraver, error)
 	CameraFrame(size image.Point)
 	Now() time.Time
 	DisplaySize() image.Point
@@ -2756,6 +2755,11 @@ type Platform interface {
 	NextChunk() (draw.RGBA64Image, bool)
 	ScanQR(qr *image.Gray) ([][]byte, error)
 	Debug() bool
+}
+
+type Engraver interface {
+	Engrave(prog *mjolnir.Program, progress chan float32, quit <-chan struct{}) error
+	Close()
 }
 
 type FrameEvent interface {
