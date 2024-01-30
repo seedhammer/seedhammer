@@ -6,6 +6,21 @@ import (
 	"testing"
 )
 
+func TestRoundtrip(t *testing.T) {
+	want := make([]byte, 255)
+	for i := range want {
+		want[i] = byte(i)
+	}
+	enc := Encode(want)
+	got, err := Decode(enc)
+	if err != nil {
+		t.Fatalf("%v encoded to %s, but failed to decode: %v", want, enc, err)
+	}
+	if !bytes.Equal(want, got) {
+		t.Errorf("%v encoded to %s, but roundtripped to %v", want, enc, got)
+	}
+}
+
 func TestEncoding(t *testing.T) {
 	tests := []struct {
 		bw      string
