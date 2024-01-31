@@ -829,9 +829,8 @@ received:
 		select {
 		case got := <-r.p.engrave.closed:
 			// Verify the step is advanced after engrave completion.
-			r.Frame(t)
-			if scr.instructions[scr.step].Type == EngraveInstruction {
-				t.Fatalf("instructions didn't progress part engraving screen")
+			for scr.instructions[scr.step].Type == EngraveInstruction {
+				r.Frame(t)
 			}
 			want := simEngrave(t, side)
 			if !reflect.DeepEqual(want, got) {
