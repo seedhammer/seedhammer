@@ -22,15 +22,14 @@ import (
 	"seedhammer.com/font/vector"
 )
 
-type Command interface {
-	Engrave(p Program)
-}
+// Command outputs an engraving to a Program.
+type Command func(p Program)
 
-type Commands []Command
-
-func (c Commands) Engrave(p Program) {
-	for _, c := range c {
-		c.Engrave(p)
+func Commands(cmds ...Command) Command {
+	return func(p Program) {
+		for _, c := range cmds {
+			c(p)
+		}
 	}
 }
 
@@ -92,31 +91,22 @@ func offsetting(x, y int) transform {
 	}
 }
 
-type transformCmd struct {
-	t   transform
-	cmd Command
-}
-
-func (t transformCmd) Engrave(p Program) {
-	p = &transformedProgram{
-		prog:  p,
-		trans: t.t,
+func transformCmd(t transform, cmd Command) Command {
+	return func(p Program) {
+		p = &transformedProgram{
+			prog:  p,
+			trans: t,
+		}
+		cmd(p)
 	}
-	t.cmd.Engrave(p)
 }
 
 func Offset(x, y int, cmd Command) Command {
-	return transformCmd{
-		t:   offsetting(x, y),
-		cmd: cmd,
-	}
+	return transformCmd(offsetting(x, y), cmd)
 }
 
 func Rotate(radians float64, cmd Command) Command {
-	return transformCmd{
-		t:   rotating(radians),
-		cmd: cmd,
-	}
+	return transformCmd(rotating(radians), cmd)
 }
 
 func QR(strokeWidth int, scale int, level qr.Level, content []byte) (Command, error) {
@@ -124,57 +114,45 @@ func QR(strokeWidth int, scale int, level qr.Level, content []byte) (Command, er
 	if err != nil {
 		return nil, err
 	}
-	return qrCmd{
-		strokeWidth: strokeWidth,
-		scale:       scale,
-		qr:          qr,
-	}, nil
-}
-
-type qrCmd struct {
-	strokeWidth int
-	scale       int
-	qr          *qr.Code
-}
-
-func (q qrCmd) Engrave(p Program) {
-	dim := q.qr.Size
-	for y := 0; y < dim; y++ {
-		for i := 0; i < q.scale; i++ {
-			draw := false
-			var firstx int
-			line := y*q.scale + i
-			// Swap direction every other line.
-			rev := line%2 != 0
-			radius := q.strokeWidth / 2
-			if rev {
-				radius = -radius
-			}
-			drawLine := func(endx int) {
-				start := image.Pt(firstx*q.scale*q.strokeWidth+radius, line*q.strokeWidth)
-				end := image.Pt(endx*q.scale*q.strokeWidth-radius, line*q.strokeWidth)
-				p.Move(start)
-				p.Line(end)
-				draw = false
-			}
-			for x := -1; x <= dim; x++ {
-				xl := x
-				px := x
+	return func(p Program) {
+		dim := qr.Size
+		for y := 0; y < dim; y++ {
+			for i := 0; i < scale; i++ {
+				draw := false
+				var firstx int
+				line := y*scale + i
+				// Swap direction every other line.
+				rev := line%2 != 0
+				radius := strokeWidth / 2
 				if rev {
-					xl = dim - 1 - x
-					px = xl - 1
+					radius = -radius
 				}
-				on := q.qr.Black(px, y)
-				switch {
-				case !draw && on:
-					draw = true
-					firstx = xl
-				case draw && !on:
-					drawLine(xl)
+				drawLine := func(endx int) {
+					start := image.Pt(firstx*scale*strokeWidth+radius, line*strokeWidth)
+					end := image.Pt(endx*scale*strokeWidth-radius, line*strokeWidth)
+					p.Move(start)
+					p.Line(end)
+					draw = false
+				}
+				for x := -1; x <= dim; x++ {
+					xl := x
+					px := x
+					if rev {
+						xl = dim - 1 - x
+						px = xl - 1
+					}
+					on := qr.Black(px, y)
+					switch {
+					case !draw && on:
+						draw = true
+						firstx = xl
+					case draw && !on:
+						drawLine(xl)
+					}
 				}
 			}
 		}
-	}
+	}, nil
 }
 
 // qrMoves is the exact number of qrMoves before engraving
@@ -248,6 +226,14 @@ func bitmapForQRStatic(dim int) ([]image.Point, []image.Point, bitmap) {
 // ConstantQR is like QR that engraves the QR code in a pattern independent of content,
 // except for the QR code version (size).
 func ConstantQR(strokeWidth, scale int, level qr.Level, content []byte) (Command, error) {
+	c, err := constantQR(strokeWidth, scale, level, content)
+	if err != nil {
+		return nil, err
+	}
+	return c.engrave, nil
+}
+
+func constantQR(strokeWidth, scale int, level qr.Level, content []byte) (*constantQRCmd, error) {
 	qrc, err := qr.Encode(string(content), level)
 	if err != nil {
 		return nil, err
@@ -319,7 +305,7 @@ func ConstantQR(strokeWidth, scale int, level qr.Level, content []byte) (Command
 			dim, len(modules), waste)
 	}
 	modules = padQRModules(nmod, content, modules)
-	cmd := constantQRCmd{
+	cmd := &constantQRCmd{
 		start:       start,
 		end:         end,
 		strokeWidth: strokeWidth,
@@ -500,7 +486,7 @@ func (q constantQRCmd) centerOf(p image.Point) image.Point {
 	}
 }
 
-func (q constantQRCmd) Engrave(p Program) {
+func (q constantQRCmd) engrave(p Program) {
 	for _, off := range q.posMarkers {
 		q.engravePositionMarker(p, off)
 	}
@@ -734,10 +720,54 @@ func NewConstantStringer(face *vector.Face, em int, shortest, longest int) *Cons
 }
 
 func (c *ConstantStringer) String(txt string) Command {
-	cmd := &constantStringCmd{
-		cs:  c,
-		txt: txt,
+	cmd := func(p Program) {
+		needle := c.wordStart
+		p.Move(needle)
+		repeats := c.longest / len(txt)
+		rest := c.longest - repeats*len(txt)
+		for i, r := range txt {
+			l := c.alphabet[r-'A']
+			extra := 0
+			if rest > 0 {
+				rest--
+				extra = 1
+			}
+			for j := 0; j < repeats+extra; j++ {
+				off := image.Pt(i*c.dims.X, 0)
+				// Move to center. Always equal distance.
+				center := off.Add(image.Pt(c.dims.X/2, c.dims.Y/2))
+				needle = center
+				p.Move(needle)
+				start := l.path[0].Add(off)
+				constantMove(p, start, needle, c.moveDist)
+				needle = start
+				for _, pos := range l.path[1:] {
+					needle = pos.Add(off)
+					p.Line(needle)
+				}
+				constantMove(p, center, needle, c.moveDist)
+				needle = center
+				end := off.Add(image.Pt(c.dims.X, c.dims.Y/2))
+				p.Move(end)
+				needle = end
+			}
+		}
+		// constantMove by itself is correct but risks engraving out of bounds.
+		// To keep movement inside the bounds of the word, move closer so
+		// that the distance is less than half the line height.
+		wantDist := c.finalDist
+		dist := manhattanDist(c.wordEnd, needle)
+		if d := dist - c.dims.Y/2; d > 0 {
+			dir := c.wordEnd.Sub(needle)
+			mid := needle.Add(dir.Mul(d).Div(dist))
+			wantDist -= manhattanDist(mid, needle)
+			needle = mid
+			p.Move(needle)
+		}
+		// Then let constantMove take care of the rest.
+		constantMove(p, c.wordEnd, needle, wantDist)
 	}
+
 	// Verify constant-ness.
 	if !c.isConstant(cmd) {
 		// Should be constant by construction.
@@ -746,9 +776,9 @@ func (c *ConstantStringer) String(txt string) Command {
 	return cmd
 }
 
-func isConstantQR(cmd constantQRCmd, dim int) bool {
+func isConstantQR(cmd *constantQRCmd, dim int) bool {
 	pt := new(pattern)
-	cmd.Engrave(pt)
+	cmd.engrave(pt)
 	start, end := constantTimeStartEnd(dim)
 	start = cmd.centerOf(start)
 	end = cmd.centerOf(end)
@@ -778,7 +808,7 @@ func isConstantQR(cmd constantQRCmd, dim int) bool {
 
 func (c *ConstantStringer) isConstant(cmd Command) bool {
 	pt := new(pattern)
-	cmd.Engrave(pt)
+	cmd(pt)
 	// Constant start and end points.
 	if pt.start != c.wordStart || pt.end != c.wordEnd {
 		return false
@@ -810,59 +840,6 @@ func (c *ConstantStringer) isConstant(cmd Command) bool {
 		line = !line
 	}
 	return true
-}
-
-type constantStringCmd struct {
-	cs  *ConstantStringer
-	txt string
-}
-
-func (s *constantStringCmd) Engrave(p Program) {
-	needle := s.cs.wordStart
-	p.Move(needle)
-	repeats := s.cs.longest / len(s.txt)
-	rest := s.cs.longest - repeats*len(s.txt)
-	for i, r := range s.txt {
-		l := s.cs.alphabet[r-'A']
-		extra := 0
-		if rest > 0 {
-			rest--
-			extra = 1
-		}
-		for j := 0; j < repeats+extra; j++ {
-			off := image.Pt(i*s.cs.dims.X, 0)
-			// Move to center. Always equal distance.
-			center := off.Add(image.Pt(s.cs.dims.X/2, s.cs.dims.Y/2))
-			needle = center
-			p.Move(needle)
-			start := l.path[0].Add(off)
-			constantMove(p, start, needle, s.cs.moveDist)
-			needle = start
-			for _, pos := range l.path[1:] {
-				needle = pos.Add(off)
-				p.Line(needle)
-			}
-			constantMove(p, center, needle, s.cs.moveDist)
-			needle = center
-			end := off.Add(image.Pt(s.cs.dims.X, s.cs.dims.Y/2))
-			p.Move(end)
-			needle = end
-		}
-	}
-	// constantMove by itself is correct but risks engraving out of bounds.
-	// To keep movement inside the bounds of the word, move closer so
-	// that the distance is less than half the line height.
-	wantDist := s.cs.finalDist
-	dist := manhattanDist(s.cs.wordEnd, needle)
-	if d := dist - s.cs.dims.Y/2; d > 0 {
-		dir := s.cs.wordEnd.Sub(needle)
-		mid := needle.Add(dir.Mul(d).Div(dist))
-		wantDist -= manhattanDist(mid, needle)
-		needle = mid
-		p.Move(needle)
-	}
-	// Then let constantMove take care of the rest.
-	constantMove(p, s.cs.wordEnd, needle, wantDist)
 }
 
 // constantMove moves to dst from src in exactly dist manhattan distance.
@@ -1127,7 +1104,7 @@ func Measure(c Command) image.Rectangle {
 	measure := measureProgram{
 		bounds: inf,
 	}
-	c.Engrave(&measure)
+	c(&measure)
 	b := measure.bounds
 	if b == inf {
 		b = image.Rectangle{}

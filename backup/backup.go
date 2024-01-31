@@ -280,7 +280,7 @@ const plateSmallFontSize = 3.
 
 func frontSideSeed(scale func(float32) int, strokeWidth int, plate Seed, plateDims image.Point) (engrave.Command, error) {
 	constant := engrave.NewConstantStringer(plate.Font, scale(plateFontSize), bip39.ShortestWord, bip39.LongestWord)
-	var cmds engrave.Commands
+	var cmds []engrave.Command
 	cmd := func(c engrave.Command) {
 		cmds = append(cmds, c)
 	}
@@ -302,19 +302,19 @@ func frontSideSeed(scale func(float32) int, strokeWidth int, plate Seed, plateDi
 	mfp := strings.ToUpper(fmt.Sprintf("%.8x", plate.MasterFingerprint))
 	switch plate.Size {
 	case SmallPlate:
-		pagec, _ := dims(engrave.String(plate.Font, scale(plateSmallFontSize), page))
+		pagec, _ := dims(engrave.String(plate.Font, scale(plateSmallFontSize), page).Engrave)
 		cmd(engrave.Offset(margin, plateDims.Y-innerMargin, engrave.Rotate(-math.Pi/2, pagec)))
-		mfpc, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), mfp)))
+		mfpc, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), mfp).Engrave))
 		cmd(engrave.Offset(margin, (plateDims.Y-sz.Y)/2, mfpc))
-		txt, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), version)))
+		txt, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), version).Engrave))
 		cmd(engrave.Offset(margin, innerMargin, txt))
 	default:
 		offy := (plateDims.Y-col1b.Y)/2 - metaMargin
-		pagec, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), page))
+		pagec, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), page).Engrave)
 		cmd(engrave.Offset(innerMargin, offy-sz.Y, pagec))
-		mfpc, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), mfp))
+		mfpc, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), mfp).Engrave)
 		cmd(engrave.Offset((plateDims.X-sz.X)/2, offy-sz.Y, mfpc))
-		txt, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), version))
+		txt, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), version).Engrave)
 		cmd(engrave.Offset(plateDims.X-sz.X-innerMargin, offy-sz.Y, txt))
 	}
 
@@ -347,22 +347,23 @@ func frontSideSeed(scale func(float32) int, strokeWidth int, plate Seed, plateDi
 	title := strings.ToUpper(plate.Title)
 	switch plate.Size {
 	case SmallPlate:
-		title, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), title)))
+		title, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), title).Engrave))
 		cmd(engrave.Offset(plateDims.X-margin-sz.X, (plateDims.Y-sz.Y)/2, title))
 	default:
 		offy := (plateDims.Y+col1b.Y)/2 + metaMargin
-		title, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), title))
+		title, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), title).Engrave)
 		cmd(engrave.Offset((plateDims.X-sz.X)/2, offy, title))
 	}
+	all := engrave.Commands(cmds...)
 	if plate.Size == LargePlate {
 		// Avoid the middle holes.
-		return engrave.Offset(0, scale(24.5), cmds), nil
+		return engrave.Offset(0, scale(24.5), all), nil
 	}
-	return cmds, nil
+	return all, nil
 }
 
 func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize int, mnemonic bip39.Mnemonic, start, end int) engrave.Command {
-	var cmds engrave.Commands
+	var cmds []engrave.Command
 	y := 0
 	for i := start; i < end; i++ {
 		num := engrave.String(font, fontSize, fmt.Sprintf("%2d ", i+1))
@@ -371,22 +372,22 @@ func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize 
 		word := strings.ToUpper(bip39.LabelFor(w))
 		txt := constant.String(word)
 		cmds = append(cmds,
-			engrave.Offset(0, y, num),
+			engrave.Offset(0, y, num.Engrave),
 			engrave.Offset(d.X, y, txt),
 		)
 		y += d.Y
 	}
-	return cmds
+	return engrave.Commands(cmds...)
 }
 
 func descriptorSide(scale func(float32) int, strokeWidth int, fnt *vector.Face, urs []string, size PlateSize, plateDims image.Point) (engrave.Command, error) {
-	var cmds engrave.Commands
+	var cmds []engrave.Command
 	cmd := func(c engrave.Command) {
 		cmds = append(cmds, c)
 	}
 	fontSize := scale(plateFontSizeUR)
 	str := func(s string) engrave.Command {
-		return engrave.String(fnt, fontSize, s)
+		return engrave.String(fnt, fontSize, s).Engrave
 	}
 
 	// Compute character width, assuming the font is fixed width.
@@ -456,5 +457,5 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *vector.Face, 
 		}
 	}
 
-	return cmds, nil
+	return engrave.Commands(cmds...), nil
 }

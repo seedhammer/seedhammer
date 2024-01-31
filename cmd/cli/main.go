@@ -172,7 +172,7 @@ func dump(sideCmd engrave.Command, size backup.PlateSize, keyIdx int, output str
 	}
 	img := image.NewNRGBA(bounds)
 	r := engrave.NewRasterizer(img, img.Bounds(), ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
-	sideCmd.Engrave(r)
+	sideCmd(r)
 	r.Rasterize()
 	buf := new(bytes.Buffer)
 	if err := png.Encode(buf, img); err != nil {
@@ -195,7 +195,7 @@ func hammer(side engrave.Command, dev string) error {
 	prog := &mjolnir.Program{
 		DryRun: *dryrun,
 	}
-	side.Engrave(prog)
+	side(prog)
 	prog.Prepare()
 	quit := make(chan os.Signal, 1)
 	cancel := make(chan struct{})
@@ -211,6 +211,6 @@ func hammer(side engrave.Command, dev string) error {
 	go func() {
 		engraveErr <- mjolnir.Engrave(s, prog, nil, cancel)
 	}()
-	side.Engrave(prog)
+	side(prog)
 	return <-engraveErr
 }

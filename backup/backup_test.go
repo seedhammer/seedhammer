@@ -131,7 +131,7 @@ func TestEngrave(t *testing.T) {
 			got := image.NewAlpha(bounds)
 			r := engrave.NewRasterizer(got, bounds, ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
 			se := side
-			se.Engrave(r)
+			se(r)
 			r.Rasterize()
 			// Binarize to minimize golden image sizes.
 			for i, p := range got.Pix {

@@ -848,13 +848,13 @@ func simEngrave(t *testing.T, plate engrave.Command) []mjolnir.Cmd {
 	sim := mjolnir.NewSimulator()
 	defer sim.Close()
 	prog := &mjolnir.Program{}
-	plate.Engrave(prog)
+	plate(prog)
 	prog.Prepare()
 	errs := make(chan error, 1)
 	go func() {
 		errs <- mjolnir.Engrave(sim, prog, nil, nil)
 	}()
-	plate.Engrave(prog)
+	plate(prog)
 	if err := <-errs; err != nil {
 		t.Fatal(err)
 	}

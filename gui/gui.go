@@ -1104,7 +1104,7 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 		prog := &mjolnir.Program{
 			DryRun: s.dryRun.enabled,
 		}
-		s.plate.Sides[ins.Side].Engrave(prog)
+		s.plate.Sides[ins.Side](prog)
 		prog.Prepare()
 		cancel := make(chan struct{})
 		errs := make(chan error, 1)
@@ -1135,7 +1135,7 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 			defer dev.Close()
 			errs <- dev.Engrave(prog, progress, cancel)
 		}()
-		go s.plate.Sides[ins.Side].Engrave(prog)
+		go s.plate.Sides[ins.Side](prog)
 	}
 	return false
 }

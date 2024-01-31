@@ -22,7 +22,7 @@ func TestConstantQR(t *testing.T) {
 				t.Fatal(err)
 			}
 			lvl := qr.Q
-			cmd, err := ConstantQR(7, 4, lvl, entropy)
+			cmd, err := constantQR(7, 4, lvl, entropy)
 			if err != nil {
 				t.Fatalf("entropy: %x: %v", entropy, err)
 			}
@@ -33,8 +33,7 @@ func TestConstantQR(t *testing.T) {
 			dim := qrc.Size
 			want := bitmapForQR(qrc)
 			_, _, got := bitmapForQRStatic(dim)
-			qrCmd := cmd.(constantQRCmd)
-			for _, p := range qrCmd.plan {
+			for _, p := range cmd.plan {
 				got.Set(p)
 			}
 			if !reflect.DeepEqual(got, want) {
@@ -98,7 +97,7 @@ func measureMoves(c Command) image.Rectangle {
 	measure := measureMovesProgram{
 		bounds: inf,
 	}
-	c.Engrave(&measure)
+	c(&measure)
 	b := measure.bounds
 	if b == inf {
 		b = image.Rectangle{}
