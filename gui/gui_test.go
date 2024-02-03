@@ -493,7 +493,7 @@ func TestMulti(t *testing.T) {
 		}
 		plate := Plate{
 			Size:  size,
-			Sides: []engrave.Command{descSide, seedSide},
+			Sides: []engrave.Plan{descSide, seedSide},
 		}
 		for _, side := range plate.Sides {
 			testEngraving(t, r, r.app.scr.engrave, side)
@@ -807,7 +807,7 @@ func (r *runner) Mnemonic(t *testing.T, m bip39.Mnemonic) {
 	}
 }
 
-func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, side engrave.Command) {
+func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, side engrave.Plan) {
 	r.p.engrave.closed = make(chan []mjolnir.Cmd)
 done:
 	for {
@@ -843,17 +843,17 @@ received:
 	}
 }
 
-func simEngrave(t *testing.T, plate engrave.Command) []mjolnir.Cmd {
+func simEngrave(t *testing.T, plate engrave.Plan) []mjolnir.Cmd {
 	sim := mjolnir.NewSimulator()
 	defer sim.Close()
 	prog := &mjolnir.Program{}
-	plate(prog)
+	plate(prog.Command)
 	prog.Prepare()
 	errs := make(chan error, 1)
 	go func() {
 		errs <- mjolnir.Engrave(sim, prog, nil, nil)
 	}()
-	plate(prog)
+	plate(prog.Command)
 	if err := <-errs; err != nil {
 		t.Fatal(err)
 	}

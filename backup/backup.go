@@ -73,7 +73,7 @@ type Descriptor struct {
 	Size       PlateSize
 }
 
-func dims(c engrave.Command) (engrave.Command, image.Point) {
+func dims(c engrave.Plan) (engrave.Plan, image.Point) {
 	b := engrave.Measure(c)
 	return engrave.Offset(-b.Min.X, -b.Min.Y, c), b.Size()
 }
@@ -99,9 +99,9 @@ func TitleString(face *vector.Face, s string) string {
 	return res
 }
 
-type engraveFunc func(scale func(float32) int, plateDims image.Point) (engrave.Command, error)
+type engraveFunc func(scale func(float32) int, plateDims image.Point) (engrave.Plan, error)
 
-func engraveSide(scale float32, size PlateSize, eng engraveFunc) (engrave.Command, error) {
+func engraveSide(scale float32, size PlateSize, eng engraveFunc) (engrave.Plan, error) {
 	scalef := func(v float32) int {
 		return int(math.Round(float64(v * scale)))
 	}
@@ -122,15 +122,15 @@ func engraveSide(scale float32, size PlateSize, eng engraveFunc) (engrave.Comman
 	return engrave.Offset(b.Min.X, b.Min.Y, side), nil
 }
 
-func EngraveSeed(scale, strokeWidth float32, plate Seed) (engrave.Command, error) {
-	return engraveSide(scale, plate.Size, func(scale func(v float32) int, plateDims image.Point) (engrave.Command, error) {
+func EngraveSeed(scale, strokeWidth float32, plate Seed) (engrave.Plan, error) {
+	return engraveSide(scale, plate.Size, func(scale func(v float32) int, plateDims image.Point) (engrave.Plan, error) {
 		sw := scale(strokeWidth)
 		return frontSideSeed(scale, sw, plate, plateDims)
 	})
 }
 
-func EngraveDescriptor(scale, strokeWidth float32, plate Descriptor) (engrave.Command, error) {
-	return engraveSide(scale, plate.Size, func(scale func(v float32) int, plateDims image.Point) (engrave.Command, error) {
+func EngraveDescriptor(scale, strokeWidth float32, plate Descriptor) (engrave.Plan, error) {
+	return engraveSide(scale, plate.Size, func(scale func(v float32) int, plateDims image.Point) (engrave.Plan, error) {
 		sw := scale(strokeWidth)
 		urs := splitUR(plate.Descriptor, plate.KeyIdx)
 		return descriptorSide(scale, sw, plate.Font, urs, plate.Size, plateDims)
@@ -278,10 +278,10 @@ const plateFontSize = 4.1
 const plateFontSizeUR = 3.8
 const plateSmallFontSize = 3.
 
-func frontSideSeed(scale func(float32) int, strokeWidth int, plate Seed, plateDims image.Point) (engrave.Command, error) {
+func frontSideSeed(scale func(float32) int, strokeWidth int, plate Seed, plateDims image.Point) (engrave.Plan, error) {
 	constant := engrave.NewConstantStringer(plate.Font, scale(plateFontSize), bip39.ShortestWord, bip39.LongestWord)
-	var cmds []engrave.Command
-	cmd := func(c engrave.Command) {
+	var cmds []engrave.Plan
+	cmd := func(c engrave.Plan) {
 		cmds = append(cmds, c)
 	}
 
@@ -362,8 +362,8 @@ func frontSideSeed(scale func(float32) int, strokeWidth int, plate Seed, plateDi
 	return all, nil
 }
 
-func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize int, mnemonic bip39.Mnemonic, start, end int) engrave.Command {
-	var cmds []engrave.Command
+func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize int, mnemonic bip39.Mnemonic, start, end int) engrave.Plan {
+	var cmds []engrave.Plan
 	y := 0
 	for i := start; i < end; i++ {
 		num := engrave.String(font, fontSize, fmt.Sprintf("%2d ", i+1))
@@ -380,13 +380,13 @@ func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize 
 	return engrave.Commands(cmds...)
 }
 
-func descriptorSide(scale func(float32) int, strokeWidth int, fnt *vector.Face, urs []string, size PlateSize, plateDims image.Point) (engrave.Command, error) {
-	var cmds []engrave.Command
-	cmd := func(c engrave.Command) {
+func descriptorSide(scale func(float32) int, strokeWidth int, fnt *vector.Face, urs []string, size PlateSize, plateDims image.Point) (engrave.Plan, error) {
+	var cmds []engrave.Plan
+	cmd := func(c engrave.Plan) {
 		cmds = append(cmds, c)
 	}
 	fontSize := scale(plateFontSizeUR)
-	str := func(s string) engrave.Command {
+	str := func(s string) engrave.Plan {
 		return engrave.String(fnt, fontSize, s).Engrave
 	}
 

@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"seedhammer.com/driver/mjolnir"
+	"seedhammer.com/engrave"
 )
 
 var (
@@ -47,13 +48,13 @@ func main() {
 			Y: int(float32(vals[i*2+1]) * mjolnir.Millimeter),
 		}
 	}
-	if err := engrave(*serialDev, points); err != nil {
+	if err := Engrave(*serialDev, points); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to engrave: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func engrave(dev string, coords []image.Point) error {
+func Engrave(dev string, coords []image.Point) error {
 	s, err := mjolnir.Open(dev)
 	if err != nil {
 		return err
@@ -76,14 +77,14 @@ func engrave(dev string, coords []image.Point) error {
 				if left.X < 0 {
 					left.X = 0
 				}
-				prog.Move(left)
-				prog.Line(c.Add(image.Pt(+sz, 0)))
+				prog.Command(engrave.Move(left))
+				prog.Command(engrave.Line(c.Add(image.Pt(+sz, 0))))
 				top := c.Add(image.Pt(0, -sz))
 				if top.Y < 0 {
 					top.Y = 0
 				}
-				prog.Move(top)
-				prog.Line(c.Add(image.Pt(0, +sz)))
+				prog.Command(engrave.Move(top))
+				prog.Command(engrave.Line(c.Add(image.Pt(0, +sz))))
 			}
 		}
 	}

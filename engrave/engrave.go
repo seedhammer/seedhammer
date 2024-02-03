@@ -22,48 +22,20 @@ import (
 	"seedhammer.com/font/vector"
 )
 
-// Command outputs an engraving to a Program.
-type Command func(p Program)
+// Plan is an iterator over the commands of an engraving.
+type Plan func(yield func(Command))
 
-func Commands(cmds ...Command) Command {
-	return func(p Program) {
-		for _, c := range cmds {
-			c(p)
+type Command struct {
+	Line  bool
+	Coord image.Point
+}
+
+func Commands(plans ...Plan) Plan {
+	return func(yield func(Command)) {
+		for _, p := range plans {
+			p(yield)
 		}
 	}
-}
-
-// Program is an interface to output an engraving.
-type Program interface {
-	Move(p image.Point)
-	Line(p image.Point)
-}
-
-type transformedProgram struct {
-	prog  Program
-	trans transform
-}
-
-func (t *transformedProgram) Move(p image.Point) {
-	t.prog.Move(t.trans.transform(p))
-}
-
-func (t *transformedProgram) Line(p image.Point) {
-	t.prog.Line(t.trans.transform(p))
-}
-
-type offsetProgram struct {
-	prog Program
-	off  image.Point
-}
-
-func (o *offsetProgram) Move(p image.Point) {
-	o.prog.Move(p.Add(o.off))
-
-}
-
-func (o *offsetProgram) Line(p image.Point) {
-	o.prog.Line(p.Add(o.off))
 }
 
 type transform [6]int
@@ -91,30 +63,43 @@ func offsetting(x, y int) transform {
 	}
 }
 
-func transformCmd(t transform, cmd Command) Command {
-	return func(p Program) {
-		p = &transformedProgram{
-			prog:  p,
-			trans: t,
-		}
-		cmd(p)
+func transformPlan(t transform, p Plan) Plan {
+	return func(yield func(Command)) {
+		p(func(c Command) {
+			c.Coord = t.transform(c.Coord)
+			yield(c)
+		})
 	}
 }
 
-func Offset(x, y int, cmd Command) Command {
-	return transformCmd(offsetting(x, y), cmd)
+func Offset(x, y int, cmd Plan) Plan {
+	return transformPlan(offsetting(x, y), cmd)
 }
 
-func Rotate(radians float64, cmd Command) Command {
-	return transformCmd(rotating(radians), cmd)
+func Rotate(radians float64, cmd Plan) Plan {
+	return transformPlan(rotating(radians), cmd)
 }
 
-func QR(strokeWidth int, scale int, level qr.Level, content []byte) (Command, error) {
+func Move(p image.Point) Command {
+	return Command{
+		Line:  false,
+		Coord: p,
+	}
+}
+
+func Line(p image.Point) Command {
+	return Command{
+		Line:  true,
+		Coord: p,
+	}
+}
+
+func QR(strokeWidth int, scale int, level qr.Level, content []byte) (Plan, error) {
 	qr, err := qr.Encode(string(content), level)
 	if err != nil {
 		return nil, err
 	}
-	return func(p Program) {
+	return func(yield func(Command)) {
 		dim := qr.Size
 		for y := 0; y < dim; y++ {
 			for i := 0; i < scale; i++ {
@@ -130,8 +115,8 @@ func QR(strokeWidth int, scale int, level qr.Level, content []byte) (Command, er
 				drawLine := func(endx int) {
 					start := image.Pt(firstx*scale*strokeWidth+radius, line*strokeWidth)
 					end := image.Pt(endx*scale*strokeWidth-radius, line*strokeWidth)
-					p.Move(start)
-					p.Line(end)
+					yield(Move(start))
+					yield(Line(end))
 					draw = false
 				}
 				for x := -1; x <= dim; x++ {
@@ -225,7 +210,7 @@ func bitmapForQRStatic(dim int) ([]image.Point, []image.Point, bitmap) {
 
 // ConstantQR is like QR that engraves the QR code in a pattern independent of content,
 // except for the QR code version (size).
-func ConstantQR(strokeWidth, scale int, level qr.Level, content []byte) (Command, error) {
+func ConstantQR(strokeWidth, scale int, level qr.Level, content []byte) (Plan, error) {
 	c, err := constantQR(strokeWidth, scale, level, content)
 	if err != nil {
 		return nil, err
@@ -461,19 +446,19 @@ type constantQRCmd struct {
 	plan         []image.Point
 }
 
-func (q constantQRCmd) engraveAlignMarker(p Program, off image.Point) {
+func (q constantQRCmd) engraveAlignMarker(yield func(Command), off image.Point) {
 	for _, m := range alignmentMarker {
 		center := q.centerOf(m.Add(off))
-		p.Move(center)
-		q.engraveModule(p, center)
+		yield(Move(center))
+		q.engraveModule(yield, center)
 	}
 }
 
-func (q constantQRCmd) engravePositionMarker(p Program, off image.Point) {
+func (q constantQRCmd) engravePositionMarker(yield func(Command), off image.Point) {
 	for _, m := range positionMarker {
 		center := q.centerOf(m.Add(off))
-		p.Move(center)
-		q.engraveModule(p, center)
+		yield(Move(center))
+		q.engraveModule(yield, center)
 	}
 }
 
@@ -486,46 +471,46 @@ func (q constantQRCmd) centerOf(p image.Point) image.Point {
 	}
 }
 
-func (q constantQRCmd) engrave(p Program) {
+func (q constantQRCmd) engrave(yield func(Command)) {
 	for _, off := range q.posMarkers {
-		q.engravePositionMarker(p, off)
+		q.engravePositionMarker(yield, off)
 	}
 	for _, off := range q.alignMarkers {
-		q.engraveAlignMarker(p, off)
+		q.engraveAlignMarker(yield, off)
 	}
 	sw := q.strokeWidth
 	prev := q.centerOf(q.start)
-	p.Move(prev)
+	yield(Move(prev))
 	moveDist := qrMoves * sw * q.scale
 	for _, m := range q.plan {
 		center := q.centerOf(m)
-		constantMove(p, center, prev, moveDist)
+		constantMove(yield, center, prev, moveDist)
 		prev = center
-		q.engraveModule(p, center)
-		p.Line(center)
+		q.engraveModule(yield, center)
+		yield(Line(center))
 	}
 	end := q.centerOf(q.end)
-	constantMove(p, end, prev, moveDist)
+	constantMove(yield, end, prev, moveDist)
 }
 
-func (q constantQRCmd) engraveModule(p Program, center image.Point) {
+func (q constantQRCmd) engraveModule(yield func(Command), center image.Point) {
 	sw := q.strokeWidth
 	switch q.scale {
 	case 3:
-		p.Line(center.Add(image.Pt(sw, 0)))
-		p.Line(center.Add(image.Pt(sw, sw)))
-		p.Line(center.Add(image.Pt(-sw, sw)))
-		p.Line(center.Add(image.Pt(-sw, -sw)))
-		p.Line(center.Add(image.Pt(sw, -sw)))
+		yield(Line(center.Add(image.Pt(sw, 0))))
+		yield(Line(center.Add(image.Pt(sw, sw))))
+		yield(Line(center.Add(image.Pt(-sw, sw))))
+		yield(Line(center.Add(image.Pt(-sw, -sw))))
+		yield(Line(center.Add(image.Pt(sw, -sw))))
 	case 4:
-		p.Line(center.Add(image.Pt(-sw, 0)))
-		p.Line(center.Add(image.Pt(-sw, -sw)))
-		p.Line(center.Add(image.Pt(2*sw, -sw)))
-		p.Line(center.Add(image.Pt(2*sw, 2*sw)))
-		p.Line(center.Add(image.Pt(-sw, 2*sw)))
-		p.Line(center.Add(image.Pt(-sw, sw)))
-		p.Line(center.Add(image.Pt(sw, sw)))
-		p.Line(center.Add(image.Pt(sw, 0)))
+		yield(Line(center.Add(image.Pt(-sw, 0))))
+		yield(Line(center.Add(image.Pt(-sw, -sw))))
+		yield(Line(center.Add(image.Pt(2*sw, -sw))))
+		yield(Line(center.Add(image.Pt(2*sw, 2*sw))))
+		yield(Line(center.Add(image.Pt(-sw, 2*sw))))
+		yield(Line(center.Add(image.Pt(-sw, sw))))
+		yield(Line(center.Add(image.Pt(sw, sw))))
+		yield(Line(center.Add(image.Pt(sw, 0))))
 	}
 }
 
@@ -578,12 +563,12 @@ func (b bitmap) Get(p image.Point) bool {
 
 type Rect image.Rectangle
 
-func (r Rect) Engrave(p Program) {
-	p.Move(r.Min)
-	p.Line(image.Pt(r.Max.X, r.Min.Y))
-	p.Line(r.Max)
-	p.Line(image.Pt(r.Min.X, r.Max.Y))
-	p.Line(r.Min)
+func (r Rect) Engrave(yield func(Command)) {
+	yield(Move(r.Min))
+	yield(Line(image.Pt(r.Max.X, r.Min.Y)))
+	yield(Line(r.Max))
+	yield(Line(image.Pt(r.Min.X, r.Max.Y)))
+	yield(Line(r.Min))
 }
 
 const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -604,7 +589,7 @@ type constantRune struct {
 	path []image.Point
 }
 
-func engraveConstantRune(p Program, face *vector.Face, em int, r rune) image.Point {
+func engraveConstantRune(yield func(Command), face *vector.Face, em int, r rune) image.Point {
 	m := face.Metrics()
 	adv, segs, found := face.Decode(r)
 	if !found {
@@ -622,9 +607,9 @@ func engraveConstantRune(p Program, face *vector.Face, em int, r rune) image.Poi
 		}
 		switch seg.Op {
 		case vector.SegmentOpMoveTo:
-			p.Move(pos.Add(p1))
+			yield(Move(pos.Add(p1)))
 		case vector.SegmentOpLineTo:
-			p.Line(pos.Add(p1))
+			yield(Line(pos.Add(p1)))
 		default:
 			panic("constant rune has unsupported segment type")
 		}
@@ -640,7 +625,7 @@ func NewConstantStringer(face *vector.Face, em int, shortest, longest int) *Cons
 	// Collects path for every letter.
 	for _, r := range alphabet {
 		c := new(collectProgram)
-		cs.dims = engraveConstantRune(c, face, em, r)
+		cs.dims = engraveConstantRune(c.Command, face, em, r)
 		if c.len > cs.engraveDist {
 			cs.engraveDist = c.len
 		}
@@ -719,10 +704,10 @@ func NewConstantStringer(face *vector.Face, em int, shortest, longest int) *Cons
 	return cs
 }
 
-func (c *ConstantStringer) String(txt string) Command {
-	cmd := func(p Program) {
+func (c *ConstantStringer) String(txt string) Plan {
+	cmd := func(yield func(Command)) {
 		needle := c.wordStart
-		p.Move(needle)
+		yield(Move(needle))
 		repeats := c.longest / len(txt)
 		rest := c.longest - repeats*len(txt)
 		for i, r := range txt {
@@ -737,18 +722,18 @@ func (c *ConstantStringer) String(txt string) Command {
 				// Move to center. Always equal distance.
 				center := off.Add(image.Pt(c.dims.X/2, c.dims.Y/2))
 				needle = center
-				p.Move(needle)
+				yield(Move(needle))
 				start := l.path[0].Add(off)
-				constantMove(p, start, needle, c.moveDist)
+				constantMove(yield, start, needle, c.moveDist)
 				needle = start
 				for _, pos := range l.path[1:] {
 					needle = pos.Add(off)
-					p.Line(needle)
+					yield(Line(needle))
 				}
-				constantMove(p, center, needle, c.moveDist)
+				constantMove(yield, center, needle, c.moveDist)
 				needle = center
 				end := off.Add(image.Pt(c.dims.X, c.dims.Y/2))
-				p.Move(end)
+				yield(Move(end))
 				needle = end
 			}
 		}
@@ -762,10 +747,10 @@ func (c *ConstantStringer) String(txt string) Command {
 			mid := needle.Add(dir.Mul(d).Div(dist))
 			wantDist -= manhattanDist(mid, needle)
 			needle = mid
-			p.Move(needle)
+			yield(Move(needle))
 		}
 		// Then let constantMove take care of the rest.
-		constantMove(p, c.wordEnd, needle, wantDist)
+		constantMove(yield, c.wordEnd, needle, wantDist)
 	}
 
 	// Verify constant-ness.
@@ -778,7 +763,7 @@ func (c *ConstantStringer) String(txt string) Command {
 
 func isConstantQR(cmd *constantQRCmd, dim int) bool {
 	pt := new(pattern)
-	cmd.engrave(pt)
+	cmd.engrave(pt.Command)
 	start, end := constantTimeStartEnd(dim)
 	start = cmd.centerOf(start)
 	end = cmd.centerOf(end)
@@ -806,9 +791,9 @@ func isConstantQR(cmd *constantQRCmd, dim int) bool {
 	return true
 }
 
-func (c *ConstantStringer) isConstant(cmd Command) bool {
+func (c *ConstantStringer) isConstant(cmd Plan) bool {
 	pt := new(pattern)
-	cmd(pt)
+	cmd(pt.Command)
 	// Constant start and end points.
 	if pt.start != c.wordStart || pt.end != c.wordEnd {
 		return false
@@ -848,7 +833,7 @@ func (c *ConstantStringer) isConstant(cmd Command) bool {
 // constantMove assumes the distance between dst and src is less than or
 // equal to dist.
 // constantMove panics if dst equals src and dist is 1.
-func constantMove(p Program, dst, src image.Point, dist int) {
+func constantMove(yield func(Command), dst, src image.Point, dist int) {
 	// extra is the distance to spend.
 	extra := dist - manhattanDist(dst, src)
 	if dst == src {
@@ -860,10 +845,10 @@ func constantMove(p Program, dst, src image.Point, dist int) {
 		// Instead move half of extra away and continue from there.
 		d := extra / 2
 		src = src.Add(image.Pt(d, 0))
-		p.Move(src)
+		yield(Move(src))
 		extra -= d * 2
 	}
-	defer p.Move(dst)
+	defer yield(Move(dst))
 	dp := src.Sub(dst)
 	d := manhattanLen(dp)
 	// axis is the direction from dst to src along the longest axis.
@@ -884,7 +869,7 @@ func constantMove(p Program, dst, src image.Point, dist int) {
 		}
 		extra -= moveDist
 		src = src.Add(axis.Mul(moveDist))
-		p.Move(src)
+		yield(Move(src))
 	}
 }
 
@@ -893,24 +878,23 @@ type collectProgram struct {
 	len  int
 }
 
-func (m *collectProgram) Line(p image.Point) {
-	if len(m.path) == 0 {
-		panic("no start point for constant rune")
+func (m *collectProgram) Command(c Command) {
+	if c.Line {
+		if len(m.path) == 0 {
+			panic("no start point for constant rune")
+		}
+		needle := m.path[len(m.path)-1]
+		d := manhattanDist(needle, c.Coord)
+		if d == 0 {
+			return
+		}
+		m.len += d
+	} else {
+		if len(m.path) > 0 {
+			panic("move during constant rune")
+		}
 	}
-	needle := m.path[len(m.path)-1]
-	d := manhattanDist(needle, p)
-	if d == 0 {
-		return
-	}
-	m.len += d
-	m.path = append(m.path, p)
-}
-
-func (m *collectProgram) Move(p image.Point) {
-	if len(m.path) > 0 {
-		panic("move during constant rune")
-	}
-	m.path = append(m.path, p)
+	m.path = append(m.path, c.Coord)
 }
 
 // pattern records the pattern of the engraving instructions
@@ -925,30 +909,22 @@ type patternElem struct {
 	len  int
 }
 
-func (c *pattern) Line(p image.Point) {
-	c.instruct(p, true)
-}
-
-func (c *pattern) Move(p image.Point) {
-	c.instruct(p, false)
-}
-
-func (c *pattern) instruct(p image.Point, line bool) {
+func (c *pattern) Command(cmd Command) {
 	if len(c.pattern) == 0 {
-		c.start = p
-		c.end = p
-		c.pattern = append(c.pattern, patternElem{line: line})
+		c.start = cmd.Coord
+		c.end = cmd.Coord
+		c.pattern = append(c.pattern, patternElem{line: cmd.Line})
 		return
 	}
 	prev := c.end
 	elem := &c.pattern[len(c.pattern)-1]
-	dist := manhattanDist(prev, p)
-	if elem.line != line {
-		c.pattern = append(c.pattern, patternElem{line: line, len: dist})
+	dist := manhattanDist(prev, cmd.Coord)
+	if elem.line != cmd.Line {
+		c.pattern = append(c.pattern, patternElem{line: cmd.Line, len: dist})
 	} else {
 		elem.len += dist
 	}
-	c.end = p
+	c.end = cmd.Coord
 }
 
 func String(face *vector.Face, em int, txt string) *StringCmd {
@@ -968,15 +944,15 @@ type StringCmd struct {
 	txt  string
 }
 
-func (s *StringCmd) Engrave(p Program) {
-	s.engrave(p)
+func (s *StringCmd) Engrave(yield func(Command)) {
+	s.engrave(yield)
 }
 
 func (s *StringCmd) Measure() image.Point {
 	return s.engrave(nil)
 }
 
-func (s *StringCmd) engrave(p Program) image.Point {
+func (s *StringCmd) engrave(yield func(Command)) image.Point {
 	m := s.face.Metrics()
 	pos := image.Pt(0, (int(m.Ascent)*s.em+int(m.Height)-1)/int(m.Height))
 	addScale := func(p1, p2 image.Point) image.Point {
@@ -996,7 +972,7 @@ func (s *StringCmd) engrave(p Program) image.Point {
 		if !found {
 			panic(fmt.Errorf("unsupported rune: %s", string(r)))
 		}
-		if p != nil {
+		if yield != nil {
 			for {
 				seg, ok := segs.Next()
 				if !ok {
@@ -1005,10 +981,10 @@ func (s *StringCmd) engrave(p Program) image.Point {
 				switch seg.Op {
 				case vector.SegmentOpMoveTo:
 					p1 := addScale(pos, seg.Arg)
-					p.Move(p1)
+					yield(Move(p1))
 				case vector.SegmentOpLineTo:
 					p1 := addScale(pos, seg.Arg)
-					p.Line(p1)
+					yield(Line(p1))
 				default:
 					panic(errors.New("unsupported segment"))
 				}
@@ -1027,28 +1003,24 @@ type Rasterizer struct {
 	scale   float32
 }
 
-func (r *Rasterizer) Line(p image.Point) {
+func (r *Rasterizer) Command(cmd Command) {
 	pf := f32.Vec2{
-		float32(p.X)*r.scale - float32(r.img.Bounds().Min.X),
-		float32(p.Y)*r.scale - float32(r.img.Bounds().Min.Y),
+		float32(cmd.Coord.X)*r.scale - float32(r.img.Bounds().Min.X),
+		float32(cmd.Coord.Y)*r.scale - float32(r.img.Bounds().Min.Y),
 	}
-	if !r.started {
-		r.dasher.Start(rasterx.ToFixedP(float64(r.p[0]), float64(r.p[1])))
-		r.started = true
+	if cmd.Line {
+		if !r.started {
+			r.dasher.Start(rasterx.ToFixedP(float64(r.p[0]), float64(r.p[1])))
+			r.started = true
+		}
+		r.dasher.Line(rasterx.ToFixedP(float64(pf[0]), float64(pf[1])))
+	} else {
+		if r.started {
+			r.dasher.Stop(false)
+			r.started = false
+		}
+		r.p = pf
 	}
-	r.dasher.Line(rasterx.ToFixedP(float64(pf[0]), float64(pf[1])))
-}
-
-func (r *Rasterizer) Move(p image.Point) {
-	pf := f32.Vec2{
-		float32(p.X)*r.scale - float32(r.img.Bounds().Min.X),
-		float32(p.Y)*r.scale - float32(r.img.Bounds().Min.Y),
-	}
-	if r.started {
-		r.dasher.Stop(false)
-		r.started = false
-	}
-	r.p = pf
 }
 
 func NewRasterizer(img draw.Image, dr image.Rectangle, scale, strokeWidth float32) *Rasterizer {
@@ -1077,9 +1049,13 @@ type measureProgram struct {
 	bounds image.Rectangle
 }
 
-func (m *measureProgram) Line(p image.Point) {
-	m.expand(p)
-	m.expand(m.p)
+func (m *measureProgram) Command(cmd Command) {
+	if cmd.Line {
+		m.expand(cmd.Coord)
+		m.expand(m.p)
+	} else {
+		m.p = cmd.Coord
+	}
 }
 
 func (m *measureProgram) expand(p image.Point) {
@@ -1095,16 +1071,12 @@ func (m *measureProgram) expand(p image.Point) {
 	}
 }
 
-func (m *measureProgram) Move(p image.Point) {
-	m.p = p
-}
-
-func Measure(c Command) image.Rectangle {
+func Measure(c Plan) image.Rectangle {
 	inf := image.Rectangle{Min: image.Pt(1e6, 1e6), Max: image.Pt(-1e6, -1e6)}
-	measure := measureProgram{
+	measure := &measureProgram{
 		bounds: inf,
 	}
-	c(&measure)
+	c(measure.Command)
 	b := measure.bounds
 	if b == inf {
 		b = image.Rectangle{}

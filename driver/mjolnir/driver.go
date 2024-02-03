@@ -12,6 +12,7 @@ import (
 	"runtime"
 
 	"github.com/tarm/serial"
+	"seedhammer.com/engrave"
 )
 
 type Program struct {
@@ -310,7 +311,7 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 			DryRun: prog.DryRun,
 		}
 		f := func() {
-			move.Move(p)
+			move.Command(engrave.Move(p))
 		}
 		f()
 		move.Prepare()
@@ -388,28 +389,19 @@ func (p *Program) Prepare() {
 	p.cmds = make(chan [cmdSize]byte)
 }
 
-func (p *Program) Move(to image.Point) {
+func (p *Program) Command(c engrave.Command) {
 	var cmd [cmdSize]byte
-	cmd[0] = moveCmd
-	coords := mkcoords(to)
+	coords := mkcoords(c.Coord)
 	copy(cmd[1:], coords[:])
+	if c.Line && !p.DryRun {
+		cmd[0] = lineCmd
+	} else {
+		cmd[0] = moveCmd
+	}
 	p.cmd(cmd)
 	p.pause()
 }
 
 func (p *Program) pause() {
 	//	p.cmd([...]byte{0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
-}
-
-func (p *Program) Line(to image.Point) {
-	if p.DryRun {
-		p.Move(to)
-		return
-	}
-	var cmd [cmdSize]byte
-	cmd[0] = lineCmd
-	coords := mkcoords(to)
-	copy(cmd[1:], coords[:])
-	p.cmd(cmd)
-	p.pause()
 }

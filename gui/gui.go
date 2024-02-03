@@ -947,7 +947,7 @@ func validateDescriptor(desc urtypes.OutputDescriptor) error {
 type Plate struct {
 	Size              backup.PlateSize
 	MasterFingerprint uint32
-	Sides             []engrave.Command
+	Sides             []engrave.Plan
 }
 
 func engraveSeed(m bip39.Mnemonic) (Plate, error) {
@@ -971,7 +971,7 @@ func engraveSeed(m bip39.Mnemonic) (Plate, error) {
 			continue
 		}
 		return Plate{
-			Sides:             []engrave.Command{seedSide},
+			Sides:             []engrave.Plan{seedSide},
 			Size:              sz,
 			MasterFingerprint: mfp,
 		}, nil
@@ -1026,7 +1026,7 @@ func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (
 		return Plate{
 			Size:              sz,
 			MasterFingerprint: mfp,
-			Sides:             []engrave.Command{descSide, seedSide},
+			Sides:             []engrave.Plan{descSide, seedSide},
 		}, nil
 	}
 	return Plate{}, lastErr
@@ -1104,7 +1104,7 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 		prog := &mjolnir.Program{
 			DryRun: s.dryRun.enabled,
 		}
-		s.plate.Sides[ins.Side](prog)
+		s.plate.Sides[ins.Side](prog.Command)
 		prog.Prepare()
 		cancel := make(chan struct{})
 		errs := make(chan error, 1)
@@ -1135,7 +1135,7 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 			defer dev.Close()
 			errs <- dev.Engrave(prog, progress, cancel)
 		}()
-		go s.plate.Sides[ins.Side](prog)
+		go s.plate.Sides[ins.Side](prog.Command)
 	}
 	return false
 }

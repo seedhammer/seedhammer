@@ -111,7 +111,7 @@ func TestEngrave(t *testing.T) {
 			path := desc.Script.DerivationPath()
 			seedDesc, descDesc := genTestPlate(t, desc, path, test.seedLen, 0, test.size)
 			const ppmm = 4
-			var side engrave.Command
+			var side engrave.Plan
 			var err error
 			if test.side == 0 {
 				side, err = EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descDesc)
@@ -131,7 +131,7 @@ func TestEngrave(t *testing.T) {
 			got := image.NewAlpha(bounds)
 			r := engrave.NewRasterizer(got, bounds, ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
 			se := side
-			se(r)
+			se(r.Command)
 			r.Rasterize()
 			// Binarize to minimize golden image sizes.
 			for i, p := range got.Pix {

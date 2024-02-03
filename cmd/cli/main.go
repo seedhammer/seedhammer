@@ -124,7 +124,7 @@ func run() error {
 	default:
 		return fmt.Errorf("-size must be 'SH01', 'SH02' or 'SH03'")
 	}
-	var sideCmd engrave.Command
+	var sideCmd engrave.Plan
 	switch *side {
 	case "back":
 		desc := backup.Seed{
@@ -163,7 +163,7 @@ func run() error {
 	return err
 }
 
-func dump(sideCmd engrave.Command, size backup.PlateSize, keyIdx int, output string) error {
+func dump(sideCmd engrave.Plan, size backup.PlateSize, keyIdx int, output string) error {
 	const ppmm = 24
 	bounds := size.Bounds()
 	bounds = image.Rectangle{
@@ -172,7 +172,7 @@ func dump(sideCmd engrave.Command, size backup.PlateSize, keyIdx int, output str
 	}
 	img := image.NewNRGBA(bounds)
 	r := engrave.NewRasterizer(img, img.Bounds(), ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
-	sideCmd(r)
+	sideCmd(r.Command)
 	r.Rasterize()
 	buf := new(bytes.Buffer)
 	if err := png.Encode(buf, img); err != nil {
@@ -185,7 +185,7 @@ func dump(sideCmd engrave.Command, size backup.PlateSize, keyIdx int, output str
 	return nil
 }
 
-func hammer(side engrave.Command, dev string) error {
+func hammer(side engrave.Plan, dev string) error {
 	s, err := mjolnir.Open(dev)
 	if err != nil {
 		return err
@@ -195,7 +195,7 @@ func hammer(side engrave.Command, dev string) error {
 	prog := &mjolnir.Program{
 		DryRun: *dryrun,
 	}
-	side(prog)
+	side(prog.Command)
 	prog.Prepare()
 	quit := make(chan os.Signal, 1)
 	cancel := make(chan struct{})
@@ -211,6 +211,6 @@ func hammer(side engrave.Command, dev string) error {
 	go func() {
 		engraveErr <- mjolnir.Engrave(s, prog, nil, cancel)
 	}()
-	side(prog)
+	side(prog.Command)
 	return <-engraveErr
 }

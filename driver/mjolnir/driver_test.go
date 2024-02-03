@@ -3,6 +3,8 @@ package mjolnir
 import (
 	"image"
 	"testing"
+
+	"seedhammer.com/engrave"
 )
 
 func TestEndToEnd(t *testing.T) {
@@ -12,9 +14,9 @@ func TestEndToEnd(t *testing.T) {
 	prog := &Program{}
 	design := func() {
 		for i := 0; i < 2000; i++ {
-			prog.Line(image.Pt(i, i*2))
-			prog.Line(image.Pt(i*4, i*3))
-			prog.Move(image.Pt(i, i))
+			prog.Command(engrave.Line(image.Pt(i, i*2)))
+			prog.Command(engrave.Line(image.Pt(i*4, i*3)))
+			prog.Command(engrave.Move(image.Pt(i, i)))
 		}
 	}
 	design()

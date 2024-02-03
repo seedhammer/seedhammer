@@ -73,34 +73,27 @@ func FuzzConstantQR(f *testing.F) {
 	})
 }
 
-type measureMovesProgram struct {
-	bounds image.Rectangle
-}
-
-func (m *measureMovesProgram) Line(p image.Point) {}
-
-func (m *measureMovesProgram) Move(p image.Point) {
-	if p.X < m.bounds.Min.X {
-		m.bounds.Min.X = p.X
-	} else if p.X > m.bounds.Max.X {
-		m.bounds.Max.X = p.X
-	}
-	if p.Y < m.bounds.Min.Y {
-		m.bounds.Min.Y = p.Y
-	} else if p.Y > m.bounds.Max.Y {
-		m.bounds.Max.Y = p.Y
-	}
-}
-
-func measureMoves(c Command) image.Rectangle {
+func measureMoves(p Plan) image.Rectangle {
 	inf := image.Rectangle{Min: image.Pt(1e6, 1e6), Max: image.Pt(-1e6, -1e6)}
-	measure := measureMovesProgram{
-		bounds: inf,
+	bounds := inf
+	p(func(cmd Command) {
+		if cmd.Line {
+			return
+		}
+		p := cmd.Coord
+		if p.X < bounds.Min.X {
+			bounds.Min.X = p.X
+		} else if p.X > bounds.Max.X {
+			bounds.Max.X = p.X
+		}
+		if p.Y < bounds.Min.Y {
+			bounds.Min.Y = p.Y
+		} else if p.Y > bounds.Max.Y {
+			bounds.Max.Y = p.Y
+		}
+	})
+	if bounds == inf {
+		bounds = image.Rectangle{}
 	}
-	c(&measure)
-	b := measure.bounds
-	if b == inf {
-		b = image.Rectangle{}
-	}
-	return b
+	return bounds
 }
