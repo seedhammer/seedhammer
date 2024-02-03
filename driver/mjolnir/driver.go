@@ -16,7 +16,6 @@ import (
 )
 
 type Program struct {
-	DryRun     bool
 	MoveSpeed  float32
 	PrintSpeed float32
 	End        image.Point
@@ -307,9 +306,7 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	}
 
 	moveTo := func(p image.Point) {
-		move := &Program{
-			DryRun: prog.DryRun,
-		}
+		move := &Program{}
 		f := func() {
 			move.Command(engrave.Move(p))
 		}
@@ -393,7 +390,7 @@ func (p *Program) Command(c engrave.Command) {
 	var cmd [cmdSize]byte
 	coords := mkcoords(c.Coord)
 	copy(cmd[1:], coords[:])
-	if c.Line && !p.DryRun {
+	if c.Line {
 		cmd[0] = lineCmd
 	} else {
 		cmd[0] = moveCmd

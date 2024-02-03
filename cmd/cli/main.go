@@ -192,9 +192,10 @@ func hammer(side engrave.Plan, dev string) error {
 	}
 	defer s.Close()
 
-	prog := &mjolnir.Program{
-		DryRun: *dryrun,
+	if *dryrun {
+		side = engrave.DryRun(side)
 	}
+	prog := &mjolnir.Program{}
 	side(prog.Command)
 	prog.Prepare()
 	quit := make(chan os.Signal, 1)

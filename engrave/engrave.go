@@ -94,6 +94,15 @@ func Line(p image.Point) Command {
 	}
 }
 
+func DryRun(p Plan) Plan {
+	return func(yield func(Command)) {
+		p(func(cmd Command) {
+			cmd.Line = false
+			yield(cmd)
+		})
+	}
+}
+
 func QR(strokeWidth int, scale int, level qr.Level, content []byte) (Plan, error) {
 	qr, err := qr.Encode(string(content), level)
 	if err != nil {

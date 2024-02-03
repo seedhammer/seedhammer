@@ -1101,10 +1101,12 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 	}
 	ins = s.instructions[s.step]
 	if ins.Type == EngraveInstruction {
-		prog := &mjolnir.Program{
-			DryRun: s.dryRun.enabled,
+		plan := s.plate.Sides[ins.Side]
+		if s.dryRun.enabled {
+			plan = engrave.DryRun(plan)
 		}
-		s.plate.Sides[ins.Side](prog.Command)
+		prog := &mjolnir.Program{}
+		plan(prog.Command)
 		prog.Prepare()
 		cancel := make(chan struct{})
 		errs := make(chan error, 1)
@@ -1135,7 +1137,7 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 			defer dev.Close()
 			errs <- dev.Engrave(prog, progress, cancel)
 		}()
-		go s.plate.Sides[ins.Side](prog.Command)
+		go plan(prog.Command)
 	}
 	return false
 }

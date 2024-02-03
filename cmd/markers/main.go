@@ -61,13 +61,7 @@ func Engrave(dev string, coords []image.Point) error {
 	}
 	defer s.Close()
 
-	prog := &mjolnir.Program{
-		DryRun:     *dryrun,
-		MoveSpeed:  0.9, // If commented out, use default from mjolnir/driver.go
-		PrintSpeed: 0,   // If commented out, use default from mjolnir/driver.go
-		End:        coords[len(coords)-1],
-	}
-	design := func() {
+	design := func(yield func(engrave.Command)) {
 		for i := 0; i < *repeat; i++ {
 			for _, c := range coords {
 				szf := 2.0 * mjolnir.Millimeter
@@ -77,18 +71,26 @@ func Engrave(dev string, coords []image.Point) error {
 				if left.X < 0 {
 					left.X = 0
 				}
-				prog.Command(engrave.Move(left))
-				prog.Command(engrave.Line(c.Add(image.Pt(+sz, 0))))
+				yield(engrave.Move(left))
+				yield(engrave.Line(c.Add(image.Pt(+sz, 0))))
 				top := c.Add(image.Pt(0, -sz))
 				if top.Y < 0 {
 					top.Y = 0
 				}
-				prog.Command(engrave.Move(top))
-				prog.Command(engrave.Line(c.Add(image.Pt(0, +sz))))
+				yield(engrave.Move(top))
+				yield(engrave.Line(c.Add(image.Pt(0, +sz))))
 			}
 		}
 	}
-	design()
+	if *dryrun {
+		design = engrave.DryRun(design)
+	}
+	prog := &mjolnir.Program{
+		MoveSpeed:  0.9, // If commented out, use default from mjolnir/driver.go
+		PrintSpeed: 0,   // If commented out, use default from mjolnir/driver.go
+		End:        coords[len(coords)-1],
+	}
+	design(prog.Command)
 	prog.Prepare()
 	quit := make(chan os.Signal, 1)
 	cancel := make(chan struct{})
@@ -104,6 +106,6 @@ func Engrave(dev string, coords []image.Point) error {
 	go func() {
 		engraveErr <- mjolnir.Engrave(s, prog, nil, cancel)
 	}()
-	design()
+	design(prog.Command)
 	return <-engraveErr
 }
