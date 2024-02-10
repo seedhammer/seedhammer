@@ -85,13 +85,11 @@ func Engrave(dev string, coords []image.Point) error {
 	if *dryrun {
 		design = engrave.DryRun(design)
 	}
-	prog := &mjolnir.Program{
+	opts := engrave.Options{
 		MoveSpeed:  0.9, // If commented out, use default from mjolnir/driver.go
 		PrintSpeed: 0,   // If commented out, use default from mjolnir/driver.go
 		End:        coords[len(coords)-1],
 	}
-	design(prog.Command)
-	prog.Prepare()
 	quit := make(chan os.Signal, 1)
 	cancel := make(chan struct{})
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
@@ -103,9 +101,5 @@ func Engrave(dev string, coords []image.Point) error {
 		<-engraveErr
 		os.Exit(1)
 	}()
-	go func() {
-		engraveErr <- mjolnir.Engrave(s, prog, nil, cancel)
-	}()
-	design(prog.Command)
-	return <-engraveErr
+	return mjolnir.Engrave(s, opts, design, cancel)
 }

@@ -15,13 +15,10 @@ import (
 	"seedhammer.com/engrave"
 )
 
-type Program struct {
-	MoveSpeed  float32
-	PrintSpeed float32
-	End        image.Point
-	cmds       chan [cmdSize]byte
-	count      int
-	sent       int
+type program struct {
+	cmds  chan [cmdSize]byte
+	count int
+	sent  int
 }
 
 const (
@@ -109,13 +106,8 @@ const (
 // The engraver expects program commands in batches.
 const progBatchSize = 80
 
-func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-chan struct{}) (eerr error) {
+func Engrave(dev io.ReadWriter, opts engrave.Options, plan engrave.Plan, quit <-chan struct{}) (eerr error) {
 	bufw := bufio.NewWriterSize(dev, progBatchSize*cmdSize)
-	defer func() {
-		for i := prog.sent; i < prog.count; i++ {
-			<-prog.cmds
-		}
-	}()
 	writeMut := make(chan struct{}, 1)
 	writeMut <- struct{}{}
 	flush := func() {
@@ -238,7 +230,16 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 
 	// Init done.
 
-	runProgram := func(p *Program, progress chan float32) {
+	runProgram := func(plan engrave.Plan) {
+		p := &program{}
+		plan(p.Command)
+		p.Prepare()
+		defer func() {
+			for i := p.sent; i < p.count; i++ {
+				<-p.cmds
+			}
+		}()
+		go plan(p.Command)
 		p.sent = 0
 		// Round up to nearest batch size. Note that the rounding
 		// adds another, empty, batch in case we fill up the last one.
@@ -249,7 +250,6 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 			return
 		}
 		wr(initProgramCmd, byte(nbatches), byte(nbatches>>8))
-		completed := 0
 	done:
 		for {
 			status := r(1)
@@ -281,19 +281,6 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 					wr(pad[:]...)
 				}
 			case programStepStatus:
-				completed++
-				if progress == nil {
-					break
-				}
-				// Don't spam the progress channel.
-				if completed%10 != 0 && completed < paddedCount {
-					break
-				}
-				select {
-				case <-progress:
-				default:
-				}
-				progress <- float32(completed) / float32(paddedCount)
 			case programCompleteStatus:
 				break done
 			case cancellingStatus:
@@ -306,14 +293,9 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	}
 
 	moveTo := func(p image.Point) {
-		move := &Program{}
-		f := func() {
-			move.Command(engrave.Move(p))
-		}
-		f()
-		move.Prepare()
-		go f()
-		runProgram(move, nil)
+		runProgram(func(yield func(engrave.Command)) {
+			yield(engrave.Move(p))
+		})
 	}
 
 	setSpeeds(300, 300, 0xe6)
@@ -335,8 +317,8 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	moveTo(sp)
 
 	// 0 lowest, 1 highest.
-	moveSpeed := prog.MoveSpeed
-	printSpeed := prog.PrintSpeed
+	moveSpeed := opts.MoveSpeed
+	printSpeed := opts.PrintSpeed
 	if moveSpeed == 0 {
 		moveSpeed = defaultMoveSpeed
 	}
@@ -346,11 +328,11 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	mms := int(moveSpeed*float32(30) + (1.-moveSpeed)*float32(1000))
 	mps := int(printSpeed*float32(30) + (1.-printSpeed)*float32(1000))
 	setSpeeds(mps, mms, 0xe6)
-	runProgram(prog, progress)
+	runProgram(plan)
 	if eerr == nil || eerr == ErrCancelled {
 		setSpeeds(300, 300, 0xe6)
-		if prog.End != (image.Point{}) {
-			moveTo(prog.End)
+		if opts.End != (image.Point{}) {
+			moveTo(opts.End)
 		} else {
 			moveTo(sp)
 			origin()
@@ -374,7 +356,7 @@ func mkcoords(p image.Point) [9]byte {
 	}
 }
 
-func (p *Program) cmd(c [cmdSize]byte) {
+func (p *program) cmd(c [cmdSize]byte) {
 	if p.cmds != nil {
 		p.cmds <- c
 	} else {
@@ -382,11 +364,11 @@ func (p *Program) cmd(c [cmdSize]byte) {
 	}
 }
 
-func (p *Program) Prepare() {
+func (p *program) Prepare() {
 	p.cmds = make(chan [cmdSize]byte)
 }
 
-func (p *Program) Command(c engrave.Command) {
+func (p *program) Command(c engrave.Command) {
 	var cmd [cmdSize]byte
 	coords := mkcoords(c.Coord)
 	copy(cmd[1:], coords[:])
@@ -399,6 +381,6 @@ func (p *Program) Command(c engrave.Command) {
 	p.pause()
 }
 
-func (p *Program) pause() {
+func (p *program) pause() {
 	//	p.cmd([...]byte{0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 }

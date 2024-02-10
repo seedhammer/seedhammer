@@ -19,6 +19,7 @@ import (
 	"seedhammer.com/driver/libcamera"
 	"seedhammer.com/driver/mjolnir"
 	"seedhammer.com/driver/wshat"
+	"seedhammer.com/engrave"
 	"seedhammer.com/gui"
 	"seedhammer.com/zbar"
 )
@@ -144,8 +145,8 @@ type engraver struct {
 	dev io.ReadWriteCloser
 }
 
-func (e *engraver) Engrave(prog *mjolnir.Program, progress chan float32, quit <-chan struct{}) error {
-	return mjolnir.Engrave(e.dev, prog, progress, quit)
+func (e *engraver) Engrave(opts engrave.Options, plan engrave.Plan, quit <-chan struct{}) error {
+	return mjolnir.Engrave(e.dev, opts, plan, quit)
 }
 
 func (e *engraver) Close() {

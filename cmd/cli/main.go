@@ -195,9 +195,6 @@ func hammer(side engrave.Plan, dev string) error {
 	if *dryrun {
 		side = engrave.DryRun(side)
 	}
-	prog := &mjolnir.Program{}
-	side(prog.Command)
-	prog.Prepare()
 	quit := make(chan os.Signal, 1)
 	cancel := make(chan struct{})
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
@@ -209,9 +206,5 @@ func hammer(side engrave.Plan, dev string) error {
 		<-engraveErr
 		os.Exit(1)
 	}()
-	go func() {
-		engraveErr <- mjolnir.Engrave(s, prog, nil, cancel)
-	}()
-	side(prog.Command)
-	return <-engraveErr
+	return mjolnir.Engrave(s, engrave.Options{}, side, cancel)
 }

@@ -22,6 +22,12 @@ import (
 	"seedhammer.com/font/vector"
 )
 
+type Options struct {
+	MoveSpeed  float32
+	PrintSpeed float32
+	End        image.Point
+}
+
 // Plan is an iterator over the commands of an engraving.
 type Plan func(yield func(Command))
 
@@ -273,7 +279,7 @@ func constantQR(strokeWidth, scale int, level qr.Level, content []byte) (*consta
 			if len(modules) > 0 {
 				needle = modules[len(modules)-1]
 			}
-			dist := manhattanDist(pos, needle)
+			dist := ManhattanDist(pos, needle)
 			if dist > qrMoves {
 				if err := move(pos); err != nil {
 					return nil, err
@@ -413,7 +419,7 @@ func fillMarker(engraved bitmap, off image.Point, points []image.Point) {
 }
 
 func findPath(modules []image.Point, visited, qr, engraved bitmap, to, from image.Point) ([]image.Point, bool) {
-	if manhattanDist(from, to) <= qrMoves {
+	if ManhattanDist(from, to) <= qrMoves {
 		return modules, true
 	}
 	var candidates []image.Point
@@ -429,7 +435,7 @@ func findPath(modules []image.Point, visited, qr, engraved bitmap, to, from imag
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		pi, pj := candidates[i], candidates[j]
-		di, dj := manhattanDist(pi, to), manhattanDist(pj, to)
+		di, dj := ManhattanDist(pi, to), ManhattanDist(pj, to)
 		if di == dj {
 			// Equal distance; prefer the un-engraved path.
 			return engraved.Get(pj)
@@ -523,7 +529,7 @@ func (q constantQRCmd) engraveModule(yield func(Command), center image.Point) {
 	}
 }
 
-func manhattanDist(p1, p2 image.Point) int {
+func ManhattanDist(p1, p2 image.Point) int {
 	return manhattanLen(p1.Sub(p2))
 }
 
@@ -666,7 +672,7 @@ func NewConstantStringer(face *vector.Face, em int, shortest, longest int) *Cons
 			idx += dir
 			needle := path[len(path)-1]
 			p := path[idx]
-			dist := manhattanDist(needle, p)
+			dist := ManhattanDist(needle, p)
 			// Shorten path segment if required.
 			if overflow := n + dist - cs.engraveDist; overflow > 0 {
 				d := p.Sub(needle)
@@ -703,10 +709,10 @@ func NewConstantStringer(face *vector.Face, em int, shortest, longest int) *Cons
 			path: path,
 		}
 		start, end := path[0], path[len(path)-1]
-		if d := manhattanDist(center, start); d > cs.moveDist {
+		if d := ManhattanDist(center, start); d > cs.moveDist {
 			cs.moveDist = d
 		}
-		if d := manhattanDist(center, end); d > cs.moveDist {
+		if d := ManhattanDist(center, end); d > cs.moveDist {
 			cs.moveDist = d
 		}
 	}
@@ -750,11 +756,11 @@ func (c *ConstantStringer) String(txt string) Plan {
 		// To keep movement inside the bounds of the word, move closer so
 		// that the distance is less than half the line height.
 		wantDist := c.finalDist
-		dist := manhattanDist(c.wordEnd, needle)
+		dist := ManhattanDist(c.wordEnd, needle)
 		if d := dist - c.dims.Y/2; d > 0 {
 			dir := c.wordEnd.Sub(needle)
 			mid := needle.Add(dir.Mul(d).Div(dist))
-			wantDist -= manhattanDist(mid, needle)
+			wantDist -= ManhattanDist(mid, needle)
 			needle = mid
 			yield(Move(needle))
 		}
@@ -844,7 +850,7 @@ func (c *ConstantStringer) isConstant(cmd Plan) bool {
 // constantMove panics if dst equals src and dist is 1.
 func constantMove(yield func(Command), dst, src image.Point, dist int) {
 	// extra is the distance to spend.
-	extra := dist - manhattanDist(dst, src)
+	extra := dist - ManhattanDist(dst, src)
 	if dst == src {
 		if extra == 1 {
 			panic("dst and src coincides and dist allows no movement")
@@ -893,7 +899,7 @@ func (m *collectProgram) Command(c Command) {
 			panic("no start point for constant rune")
 		}
 		needle := m.path[len(m.path)-1]
-		d := manhattanDist(needle, c.Coord)
+		d := ManhattanDist(needle, c.Coord)
 		if d == 0 {
 			return
 		}
@@ -927,7 +933,7 @@ func (c *pattern) Command(cmd Command) {
 	}
 	prev := c.end
 	elem := &c.pattern[len(c.pattern)-1]
-	dist := manhattanDist(prev, cmd.Coord)
+	dist := ManhattanDist(prev, cmd.Coord)
 	if elem.line != cmd.Line {
 		c.pattern = append(c.pattern, patternElem{line: cmd.Line, len: dist})
 	} else {

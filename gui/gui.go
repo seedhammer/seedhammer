@@ -1105,39 +1105,47 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 		if s.dryRun.enabled {
 			plan = engrave.DryRun(plan)
 		}
-		prog := &mjolnir.Program{}
-		plan(prog.Command)
-		prog.Prepare()
+		totalDist := 0
+		pen := image.Point{}
+		plan(func(cmd engrave.Command) {
+			totalDist += engrave.ManhattanDist(pen, cmd.Coord)
+			pen = cmd.Coord
+		})
 		cancel := make(chan struct{})
 		errs := make(chan error, 1)
 		progress := make(chan float32, 1)
 		s.engrave.cancel = cancel
-		s.engrave.errs = make(chan error, 1)
-		s.engrave.progress = make(chan float32, 1)
+		s.engrave.errs = errs
+		s.engrave.progress = progress
 		dev := s.engrave.dev
 		wakeup := ctx.Platform.Wakeup
 		go func() {
-			for {
-				select {
-				case p := <-progress:
+			defer wakeup()
+			defer dev.Close()
+			pplan := func(yield func(cmd engrave.Command)) {
+				dist := 0
+				completed := 0
+				pen := image.Point{}
+				plan(func(cmd engrave.Command) {
+					yield(cmd)
+					completed++
+					dist += engrave.ManhattanDist(pen, cmd.Coord)
+					pen = cmd.Coord
+					// Don't spam the progress channel.
+					if completed%10 != 0 && dist < totalDist {
+						return
+					}
 					select {
-					case <-s.engrave.progress:
+					case <-progress:
 					default:
 					}
-					s.engrave.progress <- p
+					p := float32(dist) / float32(totalDist)
+					progress <- p
 					wakeup()
-				case err := <-errs:
-					s.engrave.errs <- err
-					wakeup()
-					return
-				}
+				})
 			}
+			errs <- dev.Engrave(engrave.Options{}, pplan, cancel)
 		}()
-		go func() {
-			defer dev.Close()
-			errs <- dev.Engrave(prog, progress, cancel)
-		}()
-		go plan(prog.Command)
 	}
 	return false
 }
@@ -2760,7 +2768,7 @@ type Platform interface {
 }
 
 type Engraver interface {
-	Engrave(prog *mjolnir.Program, progress chan float32, quit <-chan struct{}) error
+	Engrave(opts engrave.Options, plan engrave.Plan, quit <-chan struct{}) error
 	Close()
 }
 
