@@ -171,7 +171,7 @@ func dump(sideCmd engrave.Plan, size backup.PlateSize, keyIdx int, output string
 		Max: bounds.Max.Mul(ppmm),
 	}
 	img := image.NewNRGBA(bounds)
-	r := engrave.NewRasterizer(img, img.Bounds(), ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
+	r := engrave.NewRasterizer(img, img.Bounds(), float32(ppmm)/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm/mjolnir.Millimeter)
 	sideCmd(r.Command)
 	r.Rasterize()
 	buf := new(bytes.Buffer)

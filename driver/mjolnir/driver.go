@@ -22,12 +22,10 @@ type program struct {
 }
 
 const (
-	// StrokeWidth in millimeters.
-	StrokeWidth = 0.3
-	// Step is the step distance in millimeters per machine unit.
-	Step = 0.00796
+	// StrokeWidth in machine units.
+	StrokeWidth = 38
 	// Millimeters is machine units per millimeter.
-	Millimeter = 1 / Step
+	Millimeter = 126
 )
 
 var safePoint = image.Pt(119, 43)

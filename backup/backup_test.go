@@ -129,7 +129,7 @@ func TestEngrave(t *testing.T) {
 			name := fmt.Sprintf("plate-%d-side-%d-%d-of-%d-words-%d.png", i, test.side, desc.Threshold, len(desc.Keys), test.seedLen)
 			golden := filepath.Join("testdata", name)
 			got := image.NewAlpha(bounds)
-			r := engrave.NewRasterizer(got, bounds, ppmm/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm)
+			r := engrave.NewRasterizer(got, bounds, float32(ppmm)/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm/mjolnir.Millimeter)
 			se := side
 			se(r.Command)
 			r.Rasterize()

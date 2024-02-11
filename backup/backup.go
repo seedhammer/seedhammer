@@ -82,8 +82,8 @@ var ErrDescriptorTooLarge = errors.New("output descriptor is too large to backup
 
 const MaxTitleLen = 18
 
-const outerMargin float32 = 3
-const innerMargin float32 = 10
+const outerMargin = 3
+const innerMargin = 10
 
 func TitleString(face *vector.Face, s string) string {
 	s = strings.ToUpper(s)
@@ -99,41 +99,36 @@ func TitleString(face *vector.Face, s string) string {
 	return res
 }
 
-type engraveFunc func(scale func(float32) int, plateDims image.Point) (engrave.Plan, error)
+type engraveFunc func(scale int, plateDims image.Point) (engrave.Plan, error)
 
-func engraveSide(scale float32, size PlateSize, eng engraveFunc) (engrave.Plan, error) {
-	scalef := func(v float32) int {
-		return int(math.Round(float64(v * scale)))
-	}
+func engraveSide(scale int, size PlateSize, eng engraveFunc) (engrave.Plan, error) {
 	b := size.Bounds()
 	b = image.Rect(
-		scalef(float32(b.Min.X)), scalef(float32(b.Min.Y)),
-		scalef(float32(b.Max.X)), scalef(float32(b.Max.Y)),
+		b.Min.X*scale, b.Min.Y*scale,
+		b.Max.X*scale, b.Max.Y*scale,
 	)
-	side, err := eng(scalef, b.Size())
+	side, err := eng(scale, b.Size())
 	if err != nil {
 		return nil, err
 	}
 	bounds := engrave.Measure(side)
-	safetyMargin := image.Pt(scalef(outerMargin), scalef(outerMargin))
+	safetyMargin := image.Pt(outerMargin*scale, outerMargin*scale)
 	if !bounds.In(image.Rectangle{Min: safetyMargin, Max: b.Size().Sub(safetyMargin)}) {
 		return nil, ErrDescriptorTooLarge
 	}
 	return engrave.Offset(b.Min.X, b.Min.Y, side), nil
 }
 
-func EngraveSeed(scale, strokeWidth float32, plate Seed) (engrave.Plan, error) {
-	return engraveSide(scale, plate.Size, func(scale func(v float32) int, plateDims image.Point) (engrave.Plan, error) {
-		sw := scale(strokeWidth)
-		return frontSideSeed(scale, sw, plate, plateDims)
+func EngraveSeed(scale, strokeWidth int, plate Seed) (engrave.Plan, error) {
+	return engraveSide(scale, plate.Size, func(scale int, plateDims image.Point) (engrave.Plan, error) {
+		return frontSideSeed(scale, strokeWidth, plate, plateDims)
 	})
 }
 
-func EngraveDescriptor(scale, strokeWidth float32, plate Descriptor) (engrave.Plan, error) {
-	return engraveSide(scale, plate.Size, func(scale func(v float32) int, plateDims image.Point) (engrave.Plan, error) {
-		sw := scale(strokeWidth)
+func EngraveDescriptor(scale, strokeWidth int, plate Descriptor) (engrave.Plan, error) {
+	return engraveSide(scale, plate.Size, func(scale int, plateDims image.Point) (engrave.Plan, error) {
 		urs := splitUR(plate.Descriptor, plate.KeyIdx)
-		return descriptorSide(scale, sw, plate.Font, urs, plate.Size, plateDims)
+		return descriptorSide(scale, strokeWidth, plate.Font, urs, plate.Size, plateDims)
 	})
 }
 
@@ -278,8 +273,12 @@ const plateFontSize = 4.1
 const plateFontSizeUR = 3.8
 const plateSmallFontSize = 3.
 
-func frontSideSeed(scale func(float32) int, strokeWidth int, plate Seed, plateDims image.Point) (engrave.Plan, error) {
-	constant := engrave.NewConstantStringer(plate.Font, scale(plateFontSize), bip39.ShortestWord, bip39.LongestWord)
+func scalef(scale int, v float32) int {
+	return int(math.Round(float64(v * float32(scale))))
+}
+
+func frontSideSeed(scale, strokeWidth int, plate Seed, plateDims image.Point) (engrave.Plan, error) {
+	constant := engrave.NewConstantStringer(plate.Font, scalef(scale, plateFontSize), bip39.ShortestWord, bip39.LongestWord)
 	var cmds []engrave.Plan
 	cmd := func(c engrave.Plan) {
 		cmds = append(cmds, c)
@@ -291,30 +290,30 @@ func frontSideSeed(scale func(float32) int, strokeWidth int, plate Seed, plateDi
 	if endCol1 > len(plate.Mnemonic) {
 		endCol1 = len(plate.Mnemonic)
 	}
-	col1, col1b := dims(wordColumn(constant, plate.Font, scale(plateFontSize), plate.Mnemonic, 0, endCol1))
+	col1, col1b := dims(wordColumn(constant, plate.Font, scalef(scale, plateFontSize), plate.Mnemonic, 0, endCol1))
 
 	// Engrave version, mfp and page.
 	const version = "V1"
-	margin := scale(outerMargin)
-	innerMargin := scale(innerMargin)
-	metaMargin := scale(4)
+	margin := outerMargin * scale
+	innerMargin := innerMargin * scale
+	metaMargin := scale * 4
 	page := fmt.Sprintf("%d/%d", plate.KeyIdx+1, plate.Keys)
 	mfp := strings.ToUpper(fmt.Sprintf("%.8x", plate.MasterFingerprint))
 	switch plate.Size {
 	case SmallPlate:
-		pagec, _ := dims(engrave.String(plate.Font, scale(plateSmallFontSize), page).Engrave)
+		pagec, _ := dims(engrave.String(plate.Font, scalef(scale, plateSmallFontSize), page).Engrave)
 		cmd(engrave.Offset(margin, plateDims.Y-innerMargin, engrave.Rotate(-math.Pi/2, pagec)))
-		mfpc, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), mfp).Engrave))
+		mfpc, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scalef(scale, plateSmallFontSize), mfp).Engrave))
 		cmd(engrave.Offset(margin, (plateDims.Y-sz.Y)/2, mfpc))
-		txt, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), version).Engrave))
+		txt, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scalef(scale, plateSmallFontSize), version).Engrave))
 		cmd(engrave.Offset(margin, innerMargin, txt))
 	default:
 		offy := (plateDims.Y-col1b.Y)/2 - metaMargin
-		pagec, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), page).Engrave)
+		pagec, sz := dims(engrave.String(plate.Font, scalef(scale, plateSmallFontSize), page).Engrave)
 		cmd(engrave.Offset(innerMargin, offy-sz.Y, pagec))
-		mfpc, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), mfp).Engrave)
+		mfpc, sz := dims(engrave.String(plate.Font, scalef(scale, plateSmallFontSize), mfp).Engrave)
 		cmd(engrave.Offset((plateDims.X-sz.X)/2, offy-sz.Y, mfpc))
-		txt, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), version).Engrave)
+		txt, sz := dims(engrave.String(plate.Font, scalef(scale, plateSmallFontSize), version).Engrave)
 		cmd(engrave.Offset(plateDims.X-sz.X-innerMargin, offy-sz.Y, txt))
 	}
 
@@ -326,8 +325,8 @@ func frontSideSeed(scale func(float32) int, strokeWidth int, plate Seed, plateDi
 	if endCol2 > len(plate.Mnemonic) {
 		endCol2 = len(plate.Mnemonic)
 	}
-	col2, _ := dims(wordColumn(constant, plate.Font, scale(plateFontSize), plate.Mnemonic, endCol1, endCol2))
-	cmd(engrave.Offset(scale(44), (plateDims.Y-col1b.Y)/2, col2))
+	col2, _ := dims(wordColumn(constant, plate.Font, scalef(scale, plateFontSize), plate.Mnemonic, endCol1, endCol2))
+	cmd(engrave.Offset(scale*44, (plateDims.Y-col1b.Y)/2, col2))
 
 	// Engrave seed QR.
 	qrCmd, err := engrave.ConstantQR(strokeWidth, 3, qr.Q, seedqr.CompactQR(plate.Mnemonic))
@@ -335,29 +334,29 @@ func frontSideSeed(scale func(float32) int, strokeWidth int, plate Seed, plateDi
 		return nil, err
 	}
 	qr, sz := dims(qrCmd)
-	cmd(engrave.Offset(scale(60)-sz.X/2, (plateDims.Y-sz.Y)/2, qr))
+	cmd(engrave.Offset(scale*60-sz.X/2, (plateDims.Y-sz.Y)/2, qr))
 
 	if plate.Size != SmallPlate {
 		// Engrave bottom of column 2.
-		col2, col2b := dims(wordColumn(constant, plate.Font, scale(plateFontSize), plate.Mnemonic, endCol2, len(plate.Mnemonic)))
-		cmd(engrave.Offset(scale(44), (plateDims.Y+col1b.Y)/2-col2b.Y, col2))
+		col2, col2b := dims(wordColumn(constant, plate.Font, scalef(scale, plateFontSize), plate.Mnemonic, endCol2, len(plate.Mnemonic)))
+		cmd(engrave.Offset(scale*44, (plateDims.Y+col1b.Y)/2-col2b.Y, col2))
 	}
 
 	// Engrave title.
 	title := strings.ToUpper(plate.Title)
 	switch plate.Size {
 	case SmallPlate:
-		title, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scale(plateSmallFontSize), title).Engrave))
+		title, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, scalef(scale, plateSmallFontSize), title).Engrave))
 		cmd(engrave.Offset(plateDims.X-margin-sz.X, (plateDims.Y-sz.Y)/2, title))
 	default:
 		offy := (plateDims.Y+col1b.Y)/2 + metaMargin
-		title, sz := dims(engrave.String(plate.Font, scale(plateSmallFontSize), title).Engrave)
+		title, sz := dims(engrave.String(plate.Font, scalef(scale, plateSmallFontSize), title).Engrave)
 		cmd(engrave.Offset((plateDims.X-sz.X)/2, offy, title))
 	}
 	all := engrave.Commands(cmds...)
 	if plate.Size == LargePlate {
 		// Avoid the middle holes.
-		return engrave.Offset(0, scale(24.5), all), nil
+		return engrave.Offset(0, scalef(scale, 24.5), all), nil
 	}
 	return all, nil
 }
@@ -380,12 +379,12 @@ func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize 
 	return engrave.Commands(cmds...)
 }
 
-func descriptorSide(scale func(float32) int, strokeWidth int, fnt *vector.Face, urs []string, size PlateSize, plateDims image.Point) (engrave.Plan, error) {
+func descriptorSide(scale, strokeWidth int, fnt *vector.Face, urs []string, size PlateSize, plateDims image.Point) (engrave.Plan, error) {
 	var cmds []engrave.Plan
 	cmd := func(c engrave.Plan) {
 		cmds = append(cmds, c)
 	}
-	fontSize := scale(plateFontSizeUR)
+	fontSize := scalef(scale, plateFontSizeUR)
 	str := func(s string) engrave.Plan {
 		return engrave.String(fnt, fontSize, s).Engrave
 	}
@@ -396,8 +395,8 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *vector.Face, 
 		panic("W not in font")
 	}
 	charWidth := int(float32(charWidthf*fontSize) / float32(fnt.Metrics().Height))
-	margin := scale(outerMargin)
-	innerMargin := scale(innerMargin)
+	margin := scale * outerMargin
+	innerMargin := scale * innerMargin
 	if size == LargePlate {
 		margin = innerMargin
 	}
@@ -405,14 +404,14 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *vector.Face, 
 	holeLines := int(math.Ceil(float64(innerMargin-margin) / float64(fontSize)))
 	width := plateDims.X - 2*margin
 	charPerLine := int(width / charWidth)
-	offy := scale(outerMargin)
+	offy := scale * outerMargin
 	for i, ur := range urs {
 		qrcmd, err := engrave.QR(strokeWidth, 2, qr.M, []byte(ur))
 		if err != nil {
 			return nil, err
 		}
 		qr, qrsz := dims(qrcmd)
-		qrBorder := scale(2)
+		qrBorder := scale * 2
 		charPerQRLine := (width - 2*qrBorder - qrsz.X) / charWidth
 		qrLines := (qrsz.Y + 2*qrBorder + fontSize - 1) / fontSize
 		qrLineStart := holeLines
@@ -453,7 +452,7 @@ func descriptorSide(scale func(float32) int, strokeWidth int, fnt *vector.Face, 
 		offy += lineno * fontSize
 		if i != len(urs)-1 {
 			// Space UR sections.
-			offy += scale(1)
+			offy += scale * 1
 		}
 	}
 

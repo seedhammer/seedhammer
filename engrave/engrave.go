@@ -1038,7 +1038,7 @@ func (r *Rasterizer) Command(cmd Command) {
 	}
 }
 
-func NewRasterizer(img draw.Image, dr image.Rectangle, scale, strokeWidth float32) *Rasterizer {
+func NewRasterizer(img draw.Image, dr image.Rectangle, scale float32, strokeWidth int) *Rasterizer {
 	width, height := dr.Dx(), dr.Dy()
 	scanner := rasterx.NewScannerGV(width, height, img, img.Bounds())
 	r := &Rasterizer{
@@ -1046,8 +1046,7 @@ func NewRasterizer(img draw.Image, dr image.Rectangle, scale, strokeWidth float3
 		img:    img,
 		scale:  scale,
 	}
-	stroke := strokeWidth * 64
-	r.dasher.SetStroke(fixed.Int26_6(stroke), 0, rasterx.RoundCap, rasterx.RoundCap, rasterx.RoundGap, rasterx.ArcClip, nil, 0)
+	r.dasher.SetStroke(fixed.I(strokeWidth), 0, rasterx.RoundCap, rasterx.RoundCap, rasterx.RoundGap, rasterx.ArcClip, nil, 0)
 	r.dasher.SetColor(color.Black)
 	return r
 }
