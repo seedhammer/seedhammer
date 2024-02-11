@@ -91,7 +91,7 @@ func TestValidateDescriptor(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateDescriptor(test.desc)
+			err := validateDescriptor(mjolnir.Params, test.desc)
 			if err == nil {
 				t.Fatal("validateDescriptor accepted an unsupported descriptor")
 			}
@@ -156,7 +156,7 @@ func TestNonParticipatingSeed(t *testing.T) {
 func newTestEngraveScreen(t *testing.T, ctx *Context) *EngraveScreen {
 	desc := twoOfThree.Descriptor
 	const keyIdx = 0
-	plate, err := engravePlate(desc, keyIdx, twoOfThree.Mnemonic)
+	plate, err := engravePlate(mjolnir.Params, desc, keyIdx, twoOfThree.Mnemonic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestEngraveError(t *testing.T) {
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
 			mnemonic := fillDescriptor(t, desc, test.path, 12, 0)
-			_, err := engravePlate(desc, 0, mnemonic)
+			_, err := engravePlate(mjolnir.Params, desc, 0, mnemonic)
 			if err == nil {
 				t.Fatal("invalid descriptor succeeded")
 			}
@@ -425,7 +425,7 @@ func TestSeed(t *testing.T) {
 		Font:              constant.Font,
 		Size:              backup.SmallPlate,
 	}
-	side, err := backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
+	side, err := backup.EngraveSeed(r.p.EngraverParams(), seedDesc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +474,7 @@ func TestMulti(t *testing.T) {
 			Font:       constant.Font,
 			Size:       size,
 		}
-		descSide, err := backup.EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descPlate)
+		descSide, err := backup.EngraveDescriptor(r.p.EngraverParams(), descPlate)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -487,7 +487,7 @@ func TestMulti(t *testing.T) {
 			Font:              constant.Font,
 			Size:              size,
 		}
-		seedSide, err := backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
+		seedSide, err := backup.EngraveSeed(r.p.EngraverParams(), seedDesc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -652,6 +652,10 @@ func (w *wrappedEngraver) Close() error {
 		w.closed <- w.dev.Cmds
 	}
 	return w.dev.Close()
+}
+
+func (p *testPlatform) EngraverParams() engrave.Params {
+	return mjolnir.Params
 }
 
 func (p *testPlatform) Engraver() (Engraver, error) {

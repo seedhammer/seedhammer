@@ -21,7 +21,6 @@ import (
 	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
-	"seedhammer.com/driver/mjolnir"
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/assets"
@@ -423,7 +422,7 @@ func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (i
 			if !e.Click {
 				break
 			}
-			if err := validateDescriptor(s.Descriptor); err != nil {
+			if err := validateDescriptor(ctx.Platform.EngraverParams(), s.Descriptor); err != nil {
 				s.warning = NewErrorScreen(err)
 				continue
 			}
@@ -913,7 +912,7 @@ func NewErrorScreen(err error) *ErrorScreen {
 
 }
 
-func validateDescriptor(desc urtypes.OutputDescriptor) error {
+func validateDescriptor(params engrave.Params, desc urtypes.OutputDescriptor) error {
 	keys := make(map[string]bool)
 	for _, k := range desc.Keys {
 		xpub := k.String()
@@ -931,7 +930,7 @@ func validateDescriptor(desc urtypes.OutputDescriptor) error {
 		Font:       constant.Font,
 		Size:       backup.LargePlate,
 	}
-	_, err := backup.EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descPlate)
+	_, err := backup.EngraveDescriptor(params, descPlate)
 	if err != nil {
 		return err
 	}
@@ -950,7 +949,7 @@ type Plate struct {
 	Sides             []engrave.Plan
 }
 
-func engraveSeed(m bip39.Mnemonic) (Plate, error) {
+func engraveSeed(params engrave.Params, m bip39.Mnemonic) (Plate, error) {
 	mfp, err := masterFingerprintFor(m, &chaincfg.MainNetParams)
 	if err != nil {
 		return Plate{}, err
@@ -965,7 +964,7 @@ func engraveSeed(m bip39.Mnemonic) (Plate, error) {
 			Font:              constant.Font,
 			Size:              sz,
 		}
-		seedSide, err := backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
+		seedSide, err := backup.EngraveSeed(params, seedDesc)
 		if err != nil {
 			lastErr = err
 			continue
@@ -991,7 +990,7 @@ func masterFingerprintFor(m bip39.Mnemonic, network *chaincfg.Params) (uint32, e
 	return mfp, nil
 }
 
-func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (Plate, error) {
+func engravePlate(params engrave.Params, desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (Plate, error) {
 	mfp, err := masterFingerprintFor(m, desc.Keys[keyIdx].Network)
 	if err != nil {
 		return Plate{}, err
@@ -1004,7 +1003,7 @@ func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (
 			Font:       constant.Font,
 			Size:       sz,
 		}
-		descSide, err := backup.EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descPlate)
+		descSide, err := backup.EngraveDescriptor(params, descPlate)
 		if err != nil {
 			lastErr = err
 			continue
@@ -1018,7 +1017,7 @@ func engravePlate(desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (
 			Font:              constant.Font,
 			Size:              sz,
 		}
-		seedSide, err := backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
+		seedSide, err := backup.EngraveSeed(params, seedDesc)
 		if err != nil {
 			lastErr = err
 			continue
@@ -2480,7 +2479,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				}
 			case 1: // Skip descriptor.
 				s.method = nil
-				plate, err := engraveSeed(s.mnemonic)
+				plate, err := engraveSeed(ctx.Platform.EngraverParams(), s.mnemonic)
 				if err != nil {
 					s.warning = NewErrorScreen(err)
 					break
@@ -2521,7 +2520,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				continue
 			}
 			desc := *s.descriptor
-			plate, err := engravePlate(desc, keyIdx, s.mnemonic)
+			plate, err := engravePlate(ctx.Platform.EngraverParams(), desc, keyIdx, s.mnemonic)
 			if err != nil {
 				s.warning = NewErrorScreen(err)
 				break
@@ -2755,6 +2754,7 @@ type Platform interface {
 	Events() []Event
 	Wakeup()
 	Engraver() (Engraver, error)
+	EngraverParams() engrave.Params
 	CameraFrame(size image.Point)
 	Now() time.Time
 	DisplaySize() image.Point

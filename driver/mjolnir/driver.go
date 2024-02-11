@@ -21,12 +21,10 @@ type program struct {
 	sent  int
 }
 
-const (
-	// StrokeWidth in machine units.
-	StrokeWidth = 38
-	// Millimeters is machine units per millimeter.
-	Millimeter = 126
-)
+var Params = engrave.Params{
+	StrokeWidth: 38,
+	Millimeter:  126,
+}
 
 var safePoint = image.Pt(119, 43)
 
@@ -305,12 +303,12 @@ func Engrave(dev io.ReadWriter, opts engrave.Options, plan engrave.Plan, quit <-
 	// nuts.
 	origin()
 	// Avoid a false home by moving out and re-homing.
-	falseHome := float32(5 * Millimeter)
-	moveTo(image.Pt(int(falseHome), int(falseHome)))
+	falseHome := 5 * Params.Millimeter
+	moveTo(image.Pt(falseHome, falseHome))
 	origin()
 	sp := image.Point{
-		X: int(float32(safePoint.X) * Millimeter),
-		Y: int(float32(safePoint.Y) * Millimeter),
+		X: safePoint.X * Params.Millimeter,
+		Y: safePoint.Y * Params.Millimeter,
 	}
 	moveTo(sp)
 

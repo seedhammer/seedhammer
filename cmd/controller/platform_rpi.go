@@ -127,6 +127,10 @@ func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
 	return p.display.NextChunk()
 }
 
+func (p *Platform) EngraverParams() engrave.Params {
+	return mjolnir.Params
+}
+
 func (p *Platform) Engraver() (gui.Engraver, error) {
 	var dev io.ReadWriteCloser
 	if engraverHook == nil {

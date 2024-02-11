@@ -51,7 +51,7 @@ func TestEngraveErrors(t *testing.T) {
 			}
 			_, descDesc := genTestPlate(t, desc, test.path, test.seedLen, 0, LargePlate)
 			const ppmm = 4
-			_, err := EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descDesc)
+			_, err := EngraveDescriptor(mjolnir.Params, descDesc)
 			if err == nil {
 				t.Fatalf("no error reported by Engrave, expected %v", test.err)
 			}
@@ -111,12 +111,13 @@ func TestEngrave(t *testing.T) {
 			path := desc.Script.DerivationPath()
 			seedDesc, descDesc := genTestPlate(t, desc, path, test.seedLen, 0, test.size)
 			const ppmm = 4
+			params := mjolnir.Params
 			var side engrave.Plan
 			var err error
 			if test.side == 0 {
-				side, err = EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, descDesc)
+				side, err = EngraveDescriptor(params, descDesc)
 			} else {
-				side, err = EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, seedDesc)
+				side, err = EngraveSeed(params, seedDesc)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -129,7 +130,7 @@ func TestEngrave(t *testing.T) {
 			name := fmt.Sprintf("plate-%d-side-%d-%d-of-%d-words-%d.png", i, test.side, desc.Threshold, len(desc.Keys), test.seedLen)
 			golden := filepath.Join("testdata", name)
 			got := image.NewAlpha(bounds)
-			r := engrave.NewRasterizer(got, bounds, float32(ppmm)/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm/mjolnir.Millimeter)
+			r := engrave.NewRasterizer(got, bounds, float32(ppmm)/float32(params.Millimeter), params.StrokeWidth*ppmm/params.Millimeter)
 			se := side
 			se(r.Command)
 			r.Rasterize()

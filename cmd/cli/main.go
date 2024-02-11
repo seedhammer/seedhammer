@@ -124,6 +124,7 @@ func run() error {
 	default:
 		return fmt.Errorf("-size must be 'SH01', 'SH02' or 'SH03'")
 	}
+	params := mjolnir.Params
 	var sideCmd engrave.Plan
 	switch *side {
 	case "back":
@@ -136,7 +137,7 @@ func run() error {
 			Font:              constant.Font,
 			Size:              psz,
 		}
-		sideCmd, err = backup.EngraveSeed(mjolnir.Millimeter, mjolnir.StrokeWidth, desc)
+		sideCmd, err = backup.EngraveSeed(params, desc)
 	case "front":
 		desc := backup.Descriptor{
 			Descriptor: desc,
@@ -144,7 +145,7 @@ func run() error {
 			Font:       constant.Font,
 			Size:       psz,
 		}
-		sideCmd, err = backup.EngraveDescriptor(mjolnir.Millimeter, mjolnir.StrokeWidth, desc)
+		sideCmd, err = backup.EngraveDescriptor(params, desc)
 	default:
 		return fmt.Errorf("-side must be 'front' or 'back'")
 	}
@@ -171,7 +172,8 @@ func dump(sideCmd engrave.Plan, size backup.PlateSize, keyIdx int, output string
 		Max: bounds.Max.Mul(ppmm),
 	}
 	img := image.NewNRGBA(bounds)
-	r := engrave.NewRasterizer(img, img.Bounds(), float32(ppmm)/mjolnir.Millimeter, mjolnir.StrokeWidth*ppmm/mjolnir.Millimeter)
+	params := mjolnir.Params
+	r := engrave.NewRasterizer(img, img.Bounds(), float32(ppmm)/float32(params.Millimeter), params.StrokeWidth*ppmm/params.Millimeter)
 	sideCmd(r.Command)
 	r.Rasterize()
 	buf := new(bytes.Buffer)

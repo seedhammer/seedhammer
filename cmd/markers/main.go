@@ -42,10 +42,11 @@ func main() {
 		vals[i] = float32(f)
 	}
 	points := make([]image.Point, len(vals)/2)
+	params := mjolnir.Params
 	for i := range points {
 		points[i] = image.Point{
-			X: int(float32(vals[i*2]) * mjolnir.Millimeter),
-			Y: int(float32(vals[i*2+1]) * mjolnir.Millimeter),
+			X: params.F(vals[i*2]),
+			Y: params.F(vals[i*2+1]),
 		}
 	}
 	if err := Engrave(*serialDev, points); err != nil {
@@ -61,10 +62,11 @@ func Engrave(dev string, coords []image.Point) error {
 	}
 	defer s.Close()
 
+	params := mjolnir.Params
 	design := func(yield func(engrave.Command)) {
 		for i := 0; i < *repeat; i++ {
 			for _, c := range coords {
-				szf := 2.0 * mjolnir.Millimeter
+				szf := params.I(2.0)
 				sz := int(szf)
 
 				left := c.Add(image.Pt(-sz, 0))

@@ -22,6 +22,23 @@ import (
 	"seedhammer.com/font/vector"
 )
 
+// Params decribe the physical characteristics of an
+// engraver.
+type Params struct {
+	// The StrokeWidth measured in machine units.
+	StrokeWidth int
+	// A Millimeter measured in machine units.
+	Millimeter int
+}
+
+func (p Params) F(v float32) int {
+	return int(math.Round(float64(v * float32(p.Millimeter))))
+}
+
+func (p Params) I(v int) int {
+	return p.Millimeter * v
+}
+
 type Options struct {
 	MoveSpeed  float32
 	PrintSpeed float32
