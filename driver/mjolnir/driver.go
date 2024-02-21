@@ -26,6 +26,12 @@ var Params = engrave.Params{
 	Millimeter:  126,
 }
 
+type Options struct {
+	MoveSpeed  float32
+	PrintSpeed float32
+	End        image.Point
+}
+
 var safePoint = image.Pt(119, 43)
 
 const (
@@ -102,7 +108,7 @@ const (
 // The engraver expects program commands in batches.
 const progBatchSize = 80
 
-func Engrave(dev io.ReadWriter, opts engrave.Options, plan engrave.Plan, quit <-chan struct{}) (eerr error) {
+func Engrave(dev io.ReadWriter, opts Options, plan engrave.Plan, quit <-chan struct{}) (eerr error) {
 	bufw := bufio.NewWriterSize(dev, progBatchSize*cmdSize)
 	writeMut := make(chan struct{}, 1)
 	writeMut <- struct{}{}

@@ -672,8 +672,8 @@ type engraver struct {
 	dev io.ReadWriteCloser
 }
 
-func (e *engraver) Engrave(opts engrave.Options, plan engrave.Plan, quit <-chan struct{}) error {
-	return mjolnir.Engrave(e.dev, opts, plan, quit)
+func (e *engraver) Engrave(plan engrave.Plan, quit <-chan struct{}) error {
+	return mjolnir.Engrave(e.dev, mjolnir.Options{}, plan, quit)
 }
 
 func (e *engraver) Close() {
@@ -850,7 +850,7 @@ received:
 func simEngrave(t *testing.T, plate engrave.Plan) []mjolnir.Cmd {
 	sim := mjolnir.NewSimulator()
 	defer sim.Close()
-	if err := mjolnir.Engrave(sim, engrave.Options{}, plate, nil); err != nil {
+	if err := mjolnir.Engrave(sim, mjolnir.Options{}, plate, nil); err != nil {
 		t.Fatal(err)
 	}
 	return sim.Cmds

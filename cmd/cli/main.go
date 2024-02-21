@@ -208,5 +208,5 @@ func hammer(side engrave.Plan, dev string) error {
 		<-engraveErr
 		os.Exit(1)
 	}()
-	return mjolnir.Engrave(s, engrave.Options{}, side, cancel)
+	return mjolnir.Engrave(s, mjolnir.Options{}, side, cancel)
 }

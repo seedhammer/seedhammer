@@ -18,7 +18,7 @@ func TestEndToEnd(t *testing.T) {
 			yield(engrave.Move(image.Pt(i, i)))
 		}
 	}
-	if err := Engrave(s, engrave.Options{}, design, nil); err != nil {
+	if err := Engrave(s, Options{}, design, nil); err != nil {
 		t.Error(err)
 	}
 }

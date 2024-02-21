@@ -39,12 +39,6 @@ func (p Params) I(v int) int {
 	return p.Millimeter * v
 }
 
-type Options struct {
-	MoveSpeed  float32
-	PrintSpeed float32
-	End        image.Point
-}
-
 // Plan is an iterator over the commands of an engraving.
 type Plan func(yield func(Command))
 

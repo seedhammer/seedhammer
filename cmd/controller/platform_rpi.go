@@ -149,8 +149,8 @@ type engraver struct {
 	dev io.ReadWriteCloser
 }
 
-func (e *engraver) Engrave(opts engrave.Options, plan engrave.Plan, quit <-chan struct{}) error {
-	return mjolnir.Engrave(e.dev, opts, plan, quit)
+func (e *engraver) Engrave(plan engrave.Plan, quit <-chan struct{}) error {
+	return mjolnir.Engrave(e.dev, mjolnir.Options{}, plan, quit)
 }
 
 func (e *engraver) Close() {

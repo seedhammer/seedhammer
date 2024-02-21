@@ -87,7 +87,7 @@ func Engrave(dev string, coords []image.Point) error {
 	if *dryrun {
 		design = engrave.DryRun(design)
 	}
-	opts := engrave.Options{
+	opts := mjolnir.Options{
 		MoveSpeed:  0.9, // If commented out, use default from mjolnir/driver.go
 		PrintSpeed: 0,   // If commented out, use default from mjolnir/driver.go
 		End:        coords[len(coords)-1],
