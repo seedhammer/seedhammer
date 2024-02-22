@@ -166,12 +166,8 @@ func run() error {
 
 func dump(sideCmd engrave.Plan, size backup.PlateSize, keyIdx int, output string) error {
 	const ppmm = 24
-	bounds := size.Bounds()
-	bounds = image.Rectangle{
-		Min: bounds.Min.Mul(ppmm),
-		Max: bounds.Max.Mul(ppmm),
-	}
-	img := image.NewNRGBA(bounds)
+	dims := size.Dims().Mul(ppmm)
+	img := image.NewNRGBA(image.Rectangle{Max: dims})
 	params := mjolnir.Params
 	r := engrave.NewRasterizer(img, img.Bounds(), float32(ppmm)/float32(params.Millimeter), params.StrokeWidth*ppmm/params.Millimeter)
 	sideCmd(r.Command)

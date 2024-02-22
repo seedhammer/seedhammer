@@ -678,7 +678,7 @@ type engraver struct {
 	dev io.ReadWriteCloser
 }
 
-func (e *engraver) Engrave(plan engrave.Plan, quit <-chan struct{}) error {
+func (e *engraver) Engrave(sz backup.PlateSize, plan engrave.Plan, quit <-chan struct{}) error {
 	return mjolnir.Engrave(e.dev, mjolnir.Options{}, plan, quit)
 }
 

@@ -28,32 +28,16 @@ const (
 	LargePlate
 )
 
-func (p PlateSize) Bounds() image.Rectangle {
-	w, h := p.dims()
-	x, y := p.offset()
-	return image.Rect(x, y, x+w, y+h)
-}
-
-func (p PlateSize) dims() (int, int) {
+func (p PlateSize) Dims() image.Point {
 	switch p {
 	case SmallPlate:
-		return 85, 55
+		return image.Pt(85, 55)
 	case SquarePlate:
-		return 85, 85
+		return image.Pt(85, 85)
 	case LargePlate:
-		return 85, 134
+		return image.Pt(85, 134)
 	}
 	panic("unreachable")
-}
-
-func (p PlateSize) offset() (int, int) {
-	const x = 97
-	switch p {
-	case SquarePlate:
-		return x, 49
-	default:
-		return x, 0
-	}
 }
 
 type Seed struct {
@@ -102,21 +86,17 @@ func TitleString(face *vector.Face, s string) string {
 type engraveFunc func(plateDims image.Point) (engrave.Plan, error)
 
 func engraveSide(scale int, size PlateSize, eng engraveFunc) (engrave.Plan, error) {
-	b := size.Bounds()
-	b = image.Rect(
-		b.Min.X*scale, b.Min.Y*scale,
-		b.Max.X*scale, b.Max.Y*scale,
-	)
-	side, err := eng(b.Size())
+	sz := size.Dims().Mul(scale)
+	side, err := eng(sz)
 	if err != nil {
 		return nil, err
 	}
 	bounds := engrave.Measure(side)
 	safetyMargin := image.Pt(outerMargin*scale, outerMargin*scale)
-	if !bounds.In(image.Rectangle{Min: safetyMargin, Max: b.Size().Sub(safetyMargin)}) {
+	if !bounds.In(image.Rectangle{Min: safetyMargin, Max: sz.Sub(safetyMargin)}) {
 		return nil, ErrDescriptorTooLarge
 	}
-	return engrave.Offset(b.Min.X, b.Min.Y, side), nil
+	return side, nil
 }
 
 func EngraveSeed(params engrave.Params, plate Seed) (engrave.Plan, error) {

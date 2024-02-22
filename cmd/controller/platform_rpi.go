@@ -154,7 +154,15 @@ type engraver struct {
 	dev io.ReadWriteCloser
 }
 
-func (e *engraver) Engrave(plan engrave.Plan, quit <-chan struct{}) error {
+func (e *engraver) Engrave(sz backup.PlateSize, plan engrave.Plan, quit <-chan struct{}) error {
+	const x = 97
+	y := 0
+	switch sz {
+	case backup.SquarePlate:
+		y = 49
+	}
+	mm := mjolnir.Params.Millimeter
+	plan = engrave.Offset(x*mm, y*mm, plan)
 	return mjolnir.Engrave(e.dev, mjolnir.Options{}, plan, quit)
 }
 

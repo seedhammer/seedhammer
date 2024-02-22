@@ -122,10 +122,9 @@ func TestEngrave(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			bounds := test.size.Bounds()
-			bounds = image.Rectangle{
-				Min: bounds.Min.Mul(ppmm),
-				Max: bounds.Max.Mul(ppmm),
+			sz := test.size.Dims().Mul(ppmm)
+			bounds := image.Rectangle{
+				Max: sz,
 			}
 			name := fmt.Sprintf("plate-%d-side-%d-%d-of-%d-words-%d.png", i, test.side, desc.Threshold, len(desc.Keys), test.seedLen)
 			golden := filepath.Join("testdata", name)

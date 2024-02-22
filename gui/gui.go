@@ -1143,7 +1143,7 @@ func (s *EngraveScreen) moveStep(ctx *Context) bool {
 					wakeup()
 				})
 			}
-			errs <- dev.Engrave(pplan, cancel)
+			errs <- dev.Engrave(s.plate.Size, pplan, cancel)
 		}()
 	}
 	return false
@@ -2769,7 +2769,7 @@ type Platform interface {
 }
 
 type Engraver interface {
-	Engrave(plan engrave.Plan, quit <-chan struct{}) error
+	Engrave(sz backup.PlateSize, plan engrave.Plan, quit <-chan struct{}) error
 	Close()
 }
 
