@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/draw"
 
+	"seedhammer.com/backup"
 	"seedhammer.com/engrave"
 	"seedhammer.com/gui"
 )
@@ -15,6 +16,10 @@ type Platform struct{}
 
 func Init() (*Platform, error) {
 	return new(Platform), nil
+}
+
+func (p *Platform) PlateSizes() []backup.PlateSize {
+	return nil
 }
 
 func (p *Platform) EngraverParams() engrave.Params {

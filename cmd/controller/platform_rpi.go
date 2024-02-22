@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+	"seedhammer.com/backup"
 	"seedhammer.com/driver/drm"
 	"seedhammer.com/driver/libcamera"
 	"seedhammer.com/driver/mjolnir"
@@ -125,6 +126,10 @@ func (p *Platform) Dirty(r image.Rectangle) error {
 
 func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
 	return p.display.NextChunk()
+}
+
+func (p *Platform) PlateSizes() []backup.PlateSize {
+	return []backup.PlateSize{backup.SmallPlate, backup.SquarePlate, backup.LargePlate}
 }
 
 func (p *Platform) EngraverParams() engrave.Params {

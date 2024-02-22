@@ -156,7 +156,7 @@ func TestNonParticipatingSeed(t *testing.T) {
 func newTestEngraveScreen(t *testing.T, ctx *Context) *EngraveScreen {
 	desc := twoOfThree.Descriptor
 	const keyIdx = 0
-	plate, err := engravePlate(mjolnir.Params, desc, keyIdx, twoOfThree.Mnemonic)
+	plate, err := engravePlate(plateSizes, mjolnir.Params, desc, keyIdx, twoOfThree.Mnemonic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestEngraveError(t *testing.T) {
 				Keys:      make([]urtypes.KeyDescriptor, test.keys),
 			}
 			mnemonic := fillDescriptor(t, desc, test.path, 12, 0)
-			_, err := engravePlate(mjolnir.Params, desc, 0, mnemonic)
+			_, err := engravePlate(plateSizes, mjolnir.Params, desc, 0, mnemonic)
 			if err == nil {
 				t.Fatal("invalid descriptor succeeded")
 			}
@@ -656,6 +656,12 @@ func (w *wrappedEngraver) Close() error {
 
 func (p *testPlatform) EngraverParams() engrave.Params {
 	return mjolnir.Params
+}
+
+var plateSizes = []backup.PlateSize{backup.SmallPlate, backup.SquarePlate, backup.LargePlate}
+
+func (p *testPlatform) PlateSizes() []backup.PlateSize {
+	return plateSizes
 }
 
 func (p *testPlatform) Engraver() (Engraver, error) {

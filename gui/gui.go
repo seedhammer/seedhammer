@@ -949,13 +949,13 @@ type Plate struct {
 	Sides             []engrave.Plan
 }
 
-func engraveSeed(params engrave.Params, m bip39.Mnemonic) (Plate, error) {
+func engraveSeed(sizes []backup.PlateSize, params engrave.Params, m bip39.Mnemonic) (Plate, error) {
 	mfp, err := masterFingerprintFor(m, &chaincfg.MainNetParams)
 	if err != nil {
 		return Plate{}, err
 	}
 	var lastErr error
-	for _, sz := range []backup.PlateSize{backup.SmallPlate, backup.SquarePlate, backup.LargePlate} {
+	for _, sz := range sizes {
 		seedDesc := backup.Seed{
 			KeyIdx:            0,
 			Mnemonic:          m,
@@ -990,13 +990,13 @@ func masterFingerprintFor(m bip39.Mnemonic, network *chaincfg.Params) (uint32, e
 	return mfp, nil
 }
 
-func engravePlate(params engrave.Params, desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (Plate, error) {
+func engravePlate(sizes []backup.PlateSize, params engrave.Params, desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (Plate, error) {
 	mfp, err := masterFingerprintFor(m, desc.Keys[keyIdx].Network)
 	if err != nil {
 		return Plate{}, err
 	}
 	var lastErr error
-	for _, sz := range []backup.PlateSize{backup.SmallPlate, backup.SquarePlate, backup.LargePlate} {
+	for _, sz := range sizes {
 		descPlate := backup.Descriptor{
 			Descriptor: desc,
 			KeyIdx:     keyIdx,
@@ -2479,7 +2479,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				}
 			case 1: // Skip descriptor.
 				s.method = nil
-				plate, err := engraveSeed(ctx.Platform.EngraverParams(), s.mnemonic)
+				plate, err := engraveSeed(ctx.Platform.PlateSizes(), ctx.Platform.EngraverParams(), s.mnemonic)
 				if err != nil {
 					s.warning = NewErrorScreen(err)
 					break
@@ -2520,7 +2520,7 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 				continue
 			}
 			desc := *s.descriptor
-			plate, err := engravePlate(ctx.Platform.EngraverParams(), desc, keyIdx, s.mnemonic)
+			plate, err := engravePlate(ctx.Platform.PlateSizes(), ctx.Platform.EngraverParams(), desc, keyIdx, s.mnemonic)
 			if err != nil {
 				s.warning = NewErrorScreen(err)
 				break
@@ -2753,6 +2753,7 @@ func (s *MainScreen) layoutPager(ops op.Ctx, th *Colors) image.Point {
 type Platform interface {
 	Events() []Event
 	Wakeup()
+	PlateSizes() []backup.PlateSize
 	Engraver() (Engraver, error)
 	EngraverParams() engrave.Params
 	CameraFrame(size image.Point)
