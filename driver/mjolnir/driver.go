@@ -326,6 +326,10 @@ func Engrave(dev io.ReadWriter, prog *Program, progress chan float32, quit <-cha
 	// The second is to avoid needle collision with the tightening
 	// nuts.
 	origin()
+	// Avoid a false home by moving out and re-homing.
+	falseHome := float32(5 * Millimeter)
+	moveTo(image.Pt(int(falseHome), int(falseHome)))
+	origin()
 	sp := image.Point{
 		X: int(float32(safePoint.X) * Millimeter),
 		Y: int(float32(safePoint.Y) * Millimeter),
