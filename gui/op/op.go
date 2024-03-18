@@ -275,30 +275,6 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 	)
 }
 
-func ScaledImageOp(ops Ctx, dst image.Rectangle, img image.Image) {
-	ops.addDrawOp(scaledImageOp{dst, ops.ops.intern(img)})
-}
-
-type scaledImageOp struct {
-	r   image.Rectangle
-	src image.Image
-}
-
-func (im scaledImageOp) bounds() image.Rectangle {
-	return im.r
-}
-
-func (im scaledImageOp) draw(dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point) {
-	if mask != nil {
-		panic("not supported")
-	}
-	draw.NearestNeighbor.Scale(
-		dst, dr.Intersect(im.r.Add(pos)),
-		im.src, im.src.Bounds().Sub(pos),
-		draw.Over, nil,
-	)
-}
-
 type CallOp struct {
 	startIdx int
 }
