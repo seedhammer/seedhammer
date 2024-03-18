@@ -7,6 +7,7 @@ import (
 	"golang.org/x/image/draw"
 	"golang.org/x/image/math/fixed"
 	"seedhammer.com/font/bitmap"
+	"seedhammer.com/image/alpha4"
 	"seedhammer.com/image/ninepatch"
 	"seedhammer.com/image/rgb565"
 )
@@ -20,6 +21,8 @@ type Ops struct {
 	prevOps  map[frameOp]bool
 	frameOps map[frameOp]bool
 	frame    []frameOp
+
+	scratch scratch
 }
 
 type Ctx struct {
@@ -123,6 +126,10 @@ type drawState struct {
 	maskp image.Point
 }
 
+type scratch struct {
+	glyph alpha4.Image
+}
+
 func (o *Ops) Clip(dst image.Rectangle) image.Rectangle {
 	o.frameOps, o.prevOps = o.prevOps, o.frameOps
 	// Clear for GC.
@@ -158,7 +165,7 @@ func (o *Ops) Draw(dst draw.Image) {
 		}
 		pos := clip.Min.Sub(op.state.pos)
 		maskp := clip.Min.Sub(op.state.maskp)
-		op.op.draw(dst, clip, op.state.mask, maskp, pos)
+		op.op.draw(&o.scratch, dst, clip, op.state.mask, maskp, pos)
 	}
 }
 
@@ -198,7 +205,7 @@ func (o *Ops) serialize(state drawState, from int) {
 		case CallOp:
 			o.serialize(state, op.startIdx)
 		case drawOp:
-			r := op.bounds().Add(state.pos)
+			r := op.bounds(&o.scratch).Add(state.pos)
 			state.clip = state.clip.Intersect(r)
 			if !state.clip.Empty() {
 				o.frame = append(o.frame, frameOp{state, op})
@@ -249,11 +256,11 @@ type imageOp struct {
 	src image.Image
 }
 
-func (im imageOp) bounds() image.Rectangle {
+func (im imageOp) bounds(scr *scratch) image.Rectangle {
 	return im.src.Bounds()
 }
 
-func (im imageOp) draw(dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point) {
+func (im imageOp) draw(_ *scratch, dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point) {
 	drawMask(dst, dr, im.src, pos, mask, maskp)
 }
 
@@ -290,8 +297,8 @@ type beginOp struct{}
 type endOp struct{}
 
 type drawOp interface {
-	bounds() image.Rectangle
-	draw(dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point)
+	bounds(scratch *scratch) image.Rectangle
+	draw(scratch *scratch, dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point)
 }
 
 type TextOp struct {
@@ -302,16 +309,16 @@ type TextOp struct {
 	LetterSpacing int
 }
 
-func (t TextOp) bounds() image.Rectangle {
-	b := t.drawBounds(nil, image.Rectangle{}, nil, image.Point{}, image.Point{})
+func (t TextOp) bounds(scr *scratch) image.Rectangle {
+	b := t.drawBounds(scr, nil, image.Rectangle{}, nil, image.Point{}, image.Point{})
 	return b.Intersect(t.Src.Bounds())
 }
 
-func (t TextOp) draw(dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point) {
-	t.drawBounds(dst, dr, mask, maskp, pos)
+func (t TextOp) draw(scr *scratch, dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point) {
+	t.drawBounds(scr, dst, dr, mask, maskp, pos)
 }
 
-func (t TextOp) drawBounds(dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point) image.Rectangle {
+func (t TextOp) drawBounds(scr *scratch, dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point) image.Rectangle {
 	var orig draw.Image
 	src := t.Src
 	tpos := pos
@@ -337,7 +344,8 @@ func (t TextOp) drawBounds(dst draw.Image, dr image.Rectangle, mask image.Image,
 		advance += fixed.I(t.LetterSpacing)
 		bounds = bounds.Union(gdr)
 		if dst != nil {
-			drawMask(dst, dr, src, tpos, mask, pos.Sub(off))
+			scr.glyph = mask
+			drawMask(dst, dr, src, tpos, &scr.glyph, pos.Sub(off))
 		}
 		dot += advance
 		prevC = c

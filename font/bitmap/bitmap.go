@@ -111,15 +111,15 @@ func (f *Face) Kern(r1, r2 rune) fixed.Int26_6 {
 	return fixed.Int26_6(bo.Uint32(kerns[i*KernElemSize+2:]))
 }
 
-func (f *Face) Glyph(r rune) (*alpha4.Image, fixed.Int26_6, bool) {
+func (f *Face) Glyph(r rune) (alpha4.Image, fixed.Int26_6, bool) {
 	g, ok := f.glyphFor(r)
 	if !ok {
-		return nil, 0, false
+		return alpha4.Image{}, 0, false
 	}
 	start := int(g.ImageOff)
 	bounds := g.Rect.Rect()
 	npixels := bounds.Dx() * bounds.Dy()
-	return &alpha4.Image{
+	return alpha4.Image{
 		Pix:  f.data[start : start+(npixels+1)/2],
 		Rect: g.Rect,
 	}, g.Advance, true
