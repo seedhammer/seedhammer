@@ -42,10 +42,6 @@ func (o *Ctx) add(op any) {
 	o.ops.ops = append(o.ops.ops, op)
 }
 
-func (o *Ctx) addDrawOp(op drawOp) {
-	o.add(op)
-}
-
 func (o *Ctx) Begin() Ctx {
 	if o.ops == nil {
 		return Ctx{}
@@ -172,8 +168,7 @@ func (o *Ops) Draw(dst draw.Image) {
 func (o *Ops) serialize(state drawState, from int) {
 	macros := 0
 	origState := state
-	for i := from; i < len(o.ops); i++ {
-		op := o.ops[i]
+	for _, op := range o.ops[from:] {
 		switch op.(type) {
 		case beginOp:
 			macros++
@@ -249,7 +244,7 @@ type maskOp struct {
 }
 
 func ImageOp(ops Ctx, img image.Image) {
-	ops.addDrawOp(imageOp{ops.ops.intern(img)})
+	ops.add(imageOp{ops.ops.intern(img)})
 }
 
 type imageOp struct {
@@ -359,5 +354,5 @@ func (t TextOp) drawBounds(scr *scratch, dst draw.Image, dr image.Rectangle, mas
 func (t TextOp) Add(ops Ctx) {
 	t2 := t
 	t2.Src = ops.ops.intern(t2.Src)
-	ops.addDrawOp(t2)
+	ops.add(t2)
 }
