@@ -1576,6 +1576,14 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 				}
 				continue
 			}
+			_, ok = deriveMasterKey(seed, &chaincfg.MainNetParams)
+			if !ok {
+				s.warning = &ErrorScreen{
+					Title: "Invalid Seed",
+					Body:  "The seed is invalid.",
+				}
+				continue
+			}
 			s.method = nil
 			s.Mnemonic = seed
 			continue
@@ -1695,6 +1703,14 @@ func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 					s.warning.Body = "Electrum seeds are not supported."
 				} else {
 					s.warning.Body = "The seed phrase is invalid.\n\nCheck the words and try again."
+				}
+				break
+			}
+			_, ok = deriveMasterKey(s.Mnemonic, &chaincfg.MainNetParams)
+			if !ok {
+				s.warning = &ErrorScreen{
+					Title: "Invalid Seed",
+					Body:  "The seed is invalid.",
 				}
 				break
 			}
@@ -2451,6 +2467,10 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 					Body:  "The descriptor is not supported.",
 				}
 				continue
+			}
+			if len(desc.Keys) == 1 && desc.Keys[0].MasterFingerprint == 0 {
+				mfp, _ := masterFingerprintFor(s.mnemonic, &chaincfg.MainNetParams)
+				desc.Keys[0].MasterFingerprint = mfp
 			}
 			s.method = nil
 			desc.Title = backup.TitleString(constant.Font, desc.Title)

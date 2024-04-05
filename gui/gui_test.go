@@ -385,6 +385,47 @@ func TestSeedScreenInvalidSeed(t *testing.T) {
 	}
 }
 
+func TestXpubMasterFingerprintSinglesig(t *testing.T) {
+	const mnemonic = "upset toe sheriff cotton vibrant shock torch waste congress innocent company review"
+	const desciptor = "zpub6qiC7jMrWkhNEu7YamFTWx8YHQaDFynLYQCUmxjCWpBiLQ4Qp6c6PEwpZpkN27XmUtBjX7hVLyyBKa7zhgaB5B2qvdckaP21ADwx7oYgYD6"
+
+	r := newRunner(t)
+	//Seed input method, keyboad input, select 12 words.
+	r.Button(t, Button3, Button3, Button3)
+	r.Frame(t)
+	if r.app.scr.seed == nil {
+		t.Fatal("not on seed screen")
+	}
+
+	m, err := bip39.ParseMnemonic(mnemonic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Mnemonic(t, m)
+
+	// Accept seed, go to descriptor scan.
+	r.Button(t, Button3, Button3)
+
+	r.QR(t, func() { r.Frame(t) }, desciptor)
+
+	// Accept descriptor, go to engrave.
+	r.Button(t, Button3)
+
+	r.Frame(t)
+	desc, err := nonstandard.OutputDescriptor([]byte(desciptor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mfp, err := masterFingerprintFor(m, &chaincfg.MainNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc.Keys[0].MasterFingerprint = mfp
+	if !reflect.DeepEqual(desc, *r.app.scr.descriptor) {
+		t.Fatal(err)
+	}
+}
+
 func TestSeed(t *testing.T) {
 	const mnemonic = "doll clerk nice coast caught valid shallow taxi buyer economy lunch roof"
 
@@ -406,8 +447,6 @@ func TestSeed(t *testing.T) {
 	// Accept seed, skip descriptor.
 	r.Button(t, Button3, Down, Button3)
 
-	// Accept descriptor, go to engrave.
-	r.Button(t, Button3)
 	r.Frame(t)
 	mk, ok := deriveMasterKey(m, &chaincfg.MainNetParams)
 	if !ok {
