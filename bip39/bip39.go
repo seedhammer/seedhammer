@@ -27,6 +27,8 @@ type Roll [5]int
 
 const NumWords = Word(len(index))
 
+var ErrInvalidChecksum = errors.New("bip39: invalid checksum")
+
 // DiceToWord converts a dice roll to its bip39 word index. It returns
 // false if the roll doesn't have a word defined.
 func DiceToWord(roll Roll) (Word, bool) {
@@ -198,7 +200,7 @@ func ParseMnemonic(mnemonic string) (Mnemonic, error) {
 		bip39s[i] = closest
 	}
 	if !bip39s.Valid() {
-		return nil, errors.New("bip39: invalid checksum")
+		return nil, ErrInvalidChecksum
 	}
 	return bip39s, nil
 }

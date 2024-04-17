@@ -64,29 +64,35 @@ func (o *Ctx) End() CallOp {
 	return call
 }
 
-func (o *Ops) Reset() Ctx {
+func (o *Ops) Context() Ctx {
+	return Ctx{ops: o}
+}
+
+func (o *Ops) Reset() {
 	o.ops = o.ops[:0]
-	if o.uniforms == nil {
-		o.uniforms = make(map[color.Color]*image.Uniform)
-	}
-	if o.ninep == nil {
-		o.ninep = make(map[ninepatch.Image]*ninepatch.Image)
-	}
-	if o.colors == nil {
-		o.colors = make(map[color.NRGBA]*image.Uniform)
-	}
 	if o.frameOps == nil {
 		o.frameOps = make(map[frameOp]bool)
 	}
 	if o.prevOps == nil {
 		o.prevOps = make(map[frameOp]bool)
 	}
-	return Ctx{ops: o}
+	o.frameOps, o.prevOps = o.prevOps, o.frameOps
+	// Clear for GC.
+	for i := range o.frameOps {
+		delete(o.frameOps, i)
+	}
+	for i := range o.frame {
+		o.frame[i] = frameOp{}
+	}
+	o.frame = o.frame[:0]
 }
 
 func (o *Ops) nrgba(c color.NRGBA) *image.Uniform {
 	if o == nil {
 		return image.NewUniform(c)
+	}
+	if o.colors == nil {
+		o.colors = make(map[color.NRGBA]*image.Uniform)
 	}
 	if u, ok := o.colors[c]; ok {
 		return u
@@ -102,11 +108,17 @@ func (o *Ops) intern(img image.Image) image.Image {
 	}
 	switch img := img.(type) {
 	case *image.Uniform:
+		if o.uniforms == nil {
+			o.uniforms = make(map[color.Color]*image.Uniform)
+		}
 		if img, ok := o.uniforms[img.C]; ok {
 			return img
 		}
 		o.uniforms[img.C] = img
 	case *ninepatch.Image:
+		if o.ninep == nil {
+			o.ninep = make(map[ninepatch.Image]*ninepatch.Image)
+		}
 		if img, ok := o.ninep[*img]; ok {
 			return img
 		}
@@ -126,16 +138,18 @@ type scratch struct {
 	glyph alpha4.Image
 }
 
+func (o *Ops) ExtractText(dst image.Rectangle) []string {
+	o.serialize(drawState{clip: dst}, 0)
+	var text []string
+	for _, op := range o.frame {
+		if op, ok := op.op.(TextOp); ok {
+			text = append(text, op.Txt)
+		}
+	}
+	return text
+}
+
 func (o *Ops) Clip(dst image.Rectangle) image.Rectangle {
-	o.frameOps, o.prevOps = o.prevOps, o.frameOps
-	// Clear for GC.
-	for i := range o.frameOps {
-		delete(o.frameOps, i)
-	}
-	for i := range o.frame {
-		o.frame[i] = frameOp{}
-	}
-	o.frame = o.frame[:0]
 	o.serialize(drawState{clip: dst}, 0)
 	var clip image.Rectangle
 	for _, op := range o.frame {

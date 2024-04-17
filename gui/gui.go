@@ -36,14 +36,18 @@ import (
 const nbuttons = 8
 
 type Context struct {
-	Buttons      [nbuttons]bool
-	Repeats      [nbuttons]time.Time
-	Platform     Platform
-	Styles       Styles
-	Version      string
-	Calibrated   bool
-	NoSDCard     bool
-	RotateCamera bool
+	Buttons  [nbuttons]bool
+	Repeats  [nbuttons]time.Time
+	Platform Platform
+	Styles   Styles
+	Frame    func()
+
+	// Global UI state.
+	Version        string
+	Calibrated     bool
+	EmptySDSlot    bool
+	RotateCamera   bool
+	LastDescriptor *urtypes.OutputDescriptor
 
 	events []Event
 	wakeup struct {
@@ -143,7 +147,7 @@ func (c *Context) Events(evts ...Event) {
 	}
 }
 
-func (c *Context) Frame() (FrameEvent, bool) {
+func (c *Context) FrameEvent() (FrameEvent, bool) {
 	for i, e := range c.events {
 		if e, ok := e.(FrameEvent); ok {
 			c.events = append(c.events[:i], c.events[i+1:]...)
@@ -177,12 +181,6 @@ const (
 	backupWallet program = iota
 )
 
-type AddressesScreen struct {
-	addresses [2][]string
-	page      int
-	scroll    int
-}
-
 type linePos struct {
 	W op.CallOp
 	Y int
@@ -212,6 +210,12 @@ func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA,
 	r.Y += lines[len(lines)-1].Dot.Y
 }
 
+type AddressesScreen struct {
+	addresses [2][]string
+	page      int
+	scroll    int
+}
+
 func NewAddressesScreen(desc urtypes.OutputDescriptor) *AddressesScreen {
 	s := new(AddressesScreen)
 	for i := 0; i < 20; i++ {
@@ -231,109 +235,103 @@ func NewAddressesScreen(desc urtypes.OutputDescriptor) *AddressesScreen {
 	return s
 }
 
-func shortenAddress(n int, addr string) string {
-	if len(addr) <= n {
-		return addr
-	}
-	return addr[:n/2] + "......" + addr[len(addr)-n/2:]
-}
-
-func (s *AddressesScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) bool {
+func (s *AddressesScreen) Show(ctx *Context, ops op.Ctx, th *Colors) {
 	const linesPerPage = 8
 	const linesPerScroll = linesPerPage - 3
 
 	const maxPage = len(s.addresses)
 	for {
-		e, ok := ctx.Next(Button1, Left, Right, Up, Down)
-		if !ok {
-			break
+		for {
+			e, ok := ctx.Next(Button1, Left, Right, Up, Down)
+			if !ok {
+				break
+			}
+			switch e.Button {
+			case Button1:
+				if e.Click {
+					return
+				}
+			case Left:
+				if e.Pressed {
+					s.page = (s.page - 1 + maxPage) % maxPage
+					s.scroll = 0
+				}
+			case Right:
+				if e.Pressed {
+					s.page = (s.page + 1) % maxPage
+					s.scroll = 0
+				}
+			case Up:
+				if e.Pressed {
+					s.scroll -= linesPerScroll
+				}
+			case Down:
+				if e.Pressed {
+					s.scroll += linesPerScroll
+				}
+			}
 		}
-		switch e.Button {
-		case Button1:
-			if e.Click {
-				return true
-			}
-		case Left:
-			if e.Pressed {
-				s.page = (s.page - 1 + maxPage) % maxPage
-				s.scroll = 0
-			}
-		case Right:
-			if e.Pressed {
-				s.page = (s.page + 1) % maxPage
-				s.scroll = 0
-			}
-		case Up:
-			if e.Pressed {
-				s.scroll -= linesPerScroll
-			}
-		case Down:
-			if e.Pressed {
-				s.scroll += linesPerScroll
-			}
+		op.ColorOp(ops, th.Background)
+		dims := ctx.Platform.DisplaySize()
+
+		// Title.
+		r := layout.Rectangle{Max: dims}
+		title := "Receive"
+		if s.page == 1 {
+			title = "Change"
 		}
+		layoutTitle(ctx, ops, dims.X, th.Text, title)
+
+		op.MaskOp(ops.Begin(), assets.ArrowLeft)
+		op.ColorOp(ops, th.Text)
+		left := ops.End()
+
+		op.MaskOp(ops.Begin(), assets.ArrowRight)
+		op.ColorOp(ops, th.Text)
+		right := ops.End()
+
+		leftsz := assets.ArrowLeft.Bounds().Size()
+		rightsz := assets.ArrowRight.Bounds().Size()
+
+		content := r.Shrink(0, 12, 0, 12)
+		body := content.Shrink(leadingSize, rightsz.X+12, 0, leftsz.X+12)
+		inner := body.Shrink(scrollFadeDist, 0, scrollFadeDist, 0)
+
+		bodyst := ctx.Styles.body
+		var bodytxt richText
+		addrs := s.addresses[s.page]
+		for i, addr := range addrs {
+			bodytxt.Add(ops, bodyst, body.Dx(), th.Text, fmt.Sprintf("%d: %s", i+1, addr))
+		}
+
+		op.Position(ops, left, content.W(leftsz))
+		op.Position(ops, right, content.E(rightsz))
+		maxScroll := len(bodytxt.Lines) - linesPerPage
+		if s.scroll > maxScroll {
+			s.scroll = maxScroll
+		}
+		if s.scroll < 0 {
+			s.scroll = 0
+		}
+		off := bodytxt.Lines[s.scroll].Y - bodytxt.Lines[0].Y
+		ops.Begin()
+		for _, l := range bodytxt.Lines {
+			op.Position(ops, l.W, inner.Min.Sub(image.Pt(0, off)))
+		}
+		fadeClip(ops, ops.End(), image.Rectangle(body))
+
+		layoutNavigation(ctx, ops, th, dims,
+			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
+		)
+		ctx.Frame()
 	}
-	th := &descriptorTheme
-	op.ColorOp(ops, th.Background)
-
-	// Title.
-	r := layout.Rectangle{Max: dims}
-	title := "Receive"
-	if s.page == 1 {
-		title = "Change"
-	}
-	layoutTitle(ctx, ops, dims.X, th.Text, title)
-
-	op.MaskOp(ops.Begin(), assets.ArrowLeft)
-	op.ColorOp(ops, th.Text)
-	left := ops.End()
-
-	op.MaskOp(ops.Begin(), assets.ArrowRight)
-	op.ColorOp(ops, th.Text)
-	right := ops.End()
-
-	leftsz := assets.ArrowLeft.Bounds().Size()
-	rightsz := assets.ArrowRight.Bounds().Size()
-
-	content := r.Shrink(0, 12, 0, 12)
-	body := content.Shrink(leadingSize, rightsz.X+12, 0, leftsz.X+12)
-	inner := body.Shrink(scrollFadeDist, 0, scrollFadeDist, 0)
-
-	bodyst := ctx.Styles.body
-	var bodytxt richText
-	addrs := s.addresses[s.page]
-	for i, addr := range addrs {
-		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, fmt.Sprintf("%d: %s", i+1, addr))
-	}
-
-	op.Position(ops, left, content.W(leftsz))
-	op.Position(ops, right, content.E(rightsz))
-	maxScroll := len(bodytxt.Lines) - linesPerPage
-	if s.scroll > maxScroll {
-		s.scroll = maxScroll
-	}
-	if s.scroll < 0 {
-		s.scroll = 0
-	}
-	off := bodytxt.Lines[s.scroll].Y - bodytxt.Lines[0].Y
-	ops.Begin()
-	for _, l := range bodytxt.Lines {
-		op.Position(ops, l.W, inner.Min.Sub(image.Pt(0, off)))
-	}
-	fadeClip(ops, ops.End(), image.Rectangle(body))
-
-	layoutNavigation(ctx, ops, th, dims,
-		NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-	)
-	return false
 }
 
-type DescriptorScreen struct {
-	Descriptor urtypes.OutputDescriptor
-	Mnemonic   bip39.Mnemonic
-	addresses  *AddressesScreen
-	confirm    *ConfirmWarningScreen
-	warning    *ErrorScreen
+func shortenAddress(n int, addr string) string {
+	if len(addr) <= n {
+		return addr
+	}
+	return addr[:n/2] + "......" + addr[len(addr)-n/2:]
 }
 
 func descriptorKeyIdx(desc urtypes.OutputDescriptor, m bip39.Mnemonic, pass string) (int, bool) {
@@ -371,258 +369,116 @@ func deriveMasterKey(m bip39.Mnemonic, net *chaincfg.Params) (*hdkeychain.Extend
 	return mk, err == nil
 }
 
-const infoSpacing = 8
-
-func (s *DescriptorScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (int, Result) {
-	th := &descriptorTheme
-	for {
-		switch {
-		case s.addresses != nil:
-			done := s.addresses.Layout(ctx, ops.Begin(), dims)
-			dialog := ops.End()
-			if !done {
-				dialog.Add(ops)
-				return 0, ResultNone
-			}
-			s.addresses = nil
-			continue
-		case s.confirm != nil:
-			result := s.confirm.Update(ctx)
-			switch result {
-			case ConfirmYes:
-				s.confirm = nil
-				keyIdx, _ := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
-				return keyIdx, ResultComplete
-			case ConfirmNo:
-				s.confirm = nil
-				return 0, ResultCancelled
-			}
-		case s.warning != nil:
-			dismissed := s.warning.Update(ctx)
-			if dismissed {
-				s.warning = nil
-				continue
-			}
-		}
-		e, ok := ctx.Next(Button1, Button2, Button3)
-		if !ok {
-			break
-		}
-		switch e.Button {
-		case Button1:
-			if e.Click {
-				return 0, ResultCancelled
-			}
-		case Button2:
-			if !e.Click {
-				break
-			}
-			s.addresses = NewAddressesScreen(s.Descriptor)
-		case Button3:
-			if !e.Click {
-				break
-			}
-			if err := validateDescriptor(ctx.Platform.EngraverParams(), s.Descriptor); err != nil {
-				s.warning = NewErrorScreen(err)
-				continue
-			}
-			keyIdx, ok := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
-			if !ok {
-				// Passphrase protected seeds don't match the descriptor, so
-				// allow the user to ignore the mismatch. Don't allow this for
-				// multisig descriptors where we can't know which key the seed belongs
-				// to.
-				if len(s.Descriptor.Keys) == 1 {
-					s.confirm = &ConfirmWarningScreen{
-						Title: "Unknown Wallet",
-						Body:  "The wallet does not match the seed.\n\nIf it is passphrase protected, long press to confirm.",
-						Icon:  assets.IconCheckmark,
-					}
-				} else {
-					s.warning = &ErrorScreen{
-						Title: "Unknown Wallet",
-						Body:  "The wallet does not match the seed or is passphrase protected.",
-					}
-				}
-				continue
-			}
-			return keyIdx, ResultComplete
-		}
-	}
-
-	desc := s.Descriptor
-	op.ColorOp(ops, th.Background)
-
-	// Title.
-	r := layout.Rectangle{Max: dims}
-	layoutTitle(ctx, ops, dims.X, th.Text, "Confirm Wallet")
-
-	btnw := assets.NavBtnPrimary.Bounds().Dx()
-	body := r.Shrink(leadingSize, btnw, 0, btnw)
-
-	type linePos struct {
-		w op.CallOp
-		y int
-	}
-	var bodytxt richText
-
-	bodyst := ctx.Styles.body
-	subst := ctx.Styles.subtitle
-	if desc.Title != "" {
-		bodytxt.Add(ops, subst, body.Dx(), th.Text, "Title")
-		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Title)
-		bodytxt.Y += infoSpacing
-	}
-	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Type")
-	var typetxt string
-	switch desc.Type {
-	case urtypes.Singlesig:
-		typetxt = "Singlesig"
-	default:
-		typetxt = fmt.Sprintf("%d-of-%d multisig", desc.Threshold, len(desc.Keys))
-	}
-	if len(desc.Keys) > 0 && desc.Keys[0].Network != &chaincfg.MainNetParams {
-		typetxt += " (testnet)"
-	}
-	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, typetxt)
-	bodytxt.Y += infoSpacing
-	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Script")
-	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Script.String())
-
-	ops.Begin()
-	for _, l := range bodytxt.Lines {
-		l.W.Add(ops)
-	}
-	op.Position(ops, ops.End(), body.Min.Add(image.Pt(0, scrollFadeDist)))
-
-	switch {
-	default:
-		layoutNavigation(ctx, ops, th, dims,
-			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-			NavButton{Button: Button2, Style: StyleSecondary, Icon: assets.IconInfo},
-			NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
-		)
-	case s.warning != nil:
-		s.warning.Layout(ctx, ops.Begin(), th, dims)
-		ops.End().Add(ops)
-	case s.confirm != nil:
-		s.confirm.Layout(ctx, ops.Begin(), th, dims)
-		ops.End().Add(ops)
-	}
-	return 0, ResultNone
-}
-
 type ScanScreen struct {
-	Title     string
-	Lead      string
-	decoder   ur.Decoder
-	nsdecoder nonstandard.Decoder
-	feed      *image.Gray
-	err       error
+	Title string
+	Lead  string
 }
 
-func (s *ScanScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) (any, Result) {
-	const cameraFrameScale = 3
+func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
+	var (
+		feed      *image.Gray
+		cameraErr error
+		decoder   QRDecoder
+	)
 	for {
-		e, ok := ctx.Next(Button1, Button2)
-		if !ok {
-			break
+		const cameraFrameScale = 3
+		for {
+			e, ok := ctx.Next(Button1, Button2)
+			if !ok {
+				break
+			}
+			if !e.Click {
+				continue
+			}
+			switch e.Button {
+			case Button1:
+				return nil, false
+			case Button2:
+				ctx.RotateCamera = !ctx.RotateCamera
+			}
 		}
-		if !e.Click {
-			continue
-		}
-		switch e.Button {
-		case Button1:
-			return nil, ResultCancelled
-		case Button2:
-			ctx.RotateCamera = !ctx.RotateCamera
-		}
-	}
 
-	if s.feed == nil || dims != s.feed.Bounds().Size() {
-		s.feed = image.NewGray(image.Rectangle{Max: dims})
-	}
-	ctx.Platform.CameraFrame(dims.Mul(cameraFrameScale))
-	for {
-		f, ok := ctx.Frame()
-		if !ok {
-			break
+		dims := ctx.Platform.DisplaySize()
+		if feed == nil || dims != feed.Bounds().Size() {
+			feed = image.NewGray(image.Rectangle{Max: dims})
 		}
-		s.err = f.Error()
-		if s.err == nil {
-			ycbcr := f.Image().(*image.YCbCr)
-			gray := &image.Gray{Pix: ycbcr.Y, Stride: ycbcr.YStride, Rect: ycbcr.Bounds()}
+		ctx.Platform.CameraFrame(dims.Mul(cameraFrameScale))
+		for {
+			f, ok := ctx.FrameEvent()
+			if !ok {
+				break
+			}
+			cameraErr = f.Error()
+			if cameraErr == nil {
+				ycbcr := f.Image().(*image.YCbCr)
+				gray := &image.Gray{Pix: ycbcr.Y, Stride: ycbcr.YStride, Rect: ycbcr.Bounds()}
 
-			scaleRot(s.feed, gray, ctx.RotateCamera)
-			// Re-create image (but not backing store) to ensure redraw.
-			copy := *s.feed
-			s.feed = &copy
-			results, _ := ctx.Platform.ScanQR(gray)
-			for _, res := range results {
-				v, res := s.parseQR(res)
-				if res != ResultNone {
-					return v, res
+				scaleRot(feed, gray, ctx.RotateCamera)
+				// Re-create image (but not backing store) to ensure redraw.
+				copy := *feed
+				feed = &copy
+				results, _ := ctx.Platform.ScanQR(gray)
+				for _, res := range results {
+					if v, ok := decoder.parseQR(res); ok {
+						return v, true
+					}
 				}
 			}
 		}
-	}
-	th := &cameraTheme
-	r := layout.Rectangle{Max: dims}
+		th := &cameraTheme
+		r := layout.Rectangle{Max: dims}
 
-	op.ImageOp(ops, s.feed)
+		op.ImageOp(ops, feed)
 
-	corners := assets.CameraCorners.For(image.Rect(0, 0, 132, 132))
-	op.ImageOp(ops.Begin(), corners)
-	op.Position(ops, ops.End(), r.Center(corners.Bounds().Size()))
+		corners := assets.CameraCorners.For(image.Rect(0, 0, 132, 132))
+		op.ImageOp(ops.Begin(), corners)
+		op.Position(ops, ops.End(), r.Center(corners.Bounds().Size()))
 
-	underlay := assets.ButtonFocused
-	background := func(ops op.Ctx, w op.CallOp, dst image.Rectangle, pos image.Point) {
-		op.MaskOp(ops.Begin(), underlay.For(dst))
-		op.ColorOp(ops, color.NRGBA{A: theme.overlayMask})
-		op.Position(ops, ops.End(), image.Point{})
-		op.Position(ops, w, pos)
-	}
+		underlay := assets.ButtonFocused
+		background := func(ops op.Ctx, w op.CallOp, dst image.Rectangle, pos image.Point) {
+			op.MaskOp(ops.Begin(), underlay.For(dst))
+			op.ColorOp(ops, color.NRGBA{A: theme.overlayMask})
+			op.Position(ops, ops.End(), image.Point{})
+			op.Position(ops, w, pos)
+		}
 
-	title := layoutTitle(ctx, ops.Begin(), dims.X, th.Text, s.Title)
-	title.Min.Y += 4
-	title.Max.Y -= 4
-	background(ops, ops.End(), title, image.Point{})
+		title := layoutTitle(ctx, ops.Begin(), dims.X, th.Text, s.Title)
+		title.Min.Y += 4
+		title.Max.Y -= 4
+		background(ops, ops.End(), title, image.Point{})
 
-	// Camera error, if any.
-	if err := s.err; err != nil {
-		sz := widget.LabelW(ops.Begin(), ctx.Styles.body, dims.X-2*16, th.Text, err.Error())
-		op.Position(ops, ops.End(), r.Center(sz))
-	}
+		// Camera error, if any.
+		if err := cameraErr; err != nil {
+			sz := widget.LabelW(ops.Begin(), ctx.Styles.body, dims.X-2*16, th.Text, err.Error())
+			op.Position(ops, ops.End(), r.Center(sz))
+		}
 
-	width := dims.X - 2*8
-	// Lead text.
-	sz := widget.LabelW(ops.Begin(), ctx.Styles.lead, width, th.Text, s.Lead)
-	top, footer := r.CutBottom(sz.Y + 2*12)
-	pos := footer.Center(sz)
-	background(ops, ops.End(), image.Rectangle{Min: pos, Max: pos.Add(sz)}, pos)
-
-	// Progress
-	progress := int(100 * s.decoder.Progress())
-	if progress == 0 {
-		progress = int(100 * s.nsdecoder.Progress())
-	}
-	if progress > 0 {
-		sz = widget.LabelW(ops.Begin(), ctx.Styles.lead, width, th.Text, fmt.Sprintf("%d%%", progress))
-		_, percent := top.CutBottom(sz.Y)
-		pos := percent.Center(sz)
+		width := dims.X - 2*8
+		// Lead text.
+		sz := widget.LabelW(ops.Begin(), ctx.Styles.lead, width, th.Text, s.Lead)
+		top, footer := r.CutBottom(sz.Y + 2*12)
+		pos := footer.Center(sz)
 		background(ops, ops.End(), image.Rectangle{Min: pos, Max: pos.Add(sz)}, pos)
-	}
 
-	nav := func(btn Button, icn image.RGBA64Image) {
-		nav := layoutNavigation(ctx, ops.Begin(), th, dims,
-			NavButton{Button: btn, Style: StyleSecondary, Icon: icn},
-		)
-		nav = image.Rectangle(layout.Rectangle(nav).Shrink(underlay.Padding()).Shrink(-2, -4, -2, -2))
-		background(ops, ops.End(), nav, image.Point{})
+		// Progress
+		if progress := decoder.Progress(); progress > 0 {
+			sz = widget.LabelW(ops.Begin(), ctx.Styles.lead, width, th.Text, fmt.Sprintf("%d%%", progress))
+			_, percent := top.CutBottom(sz.Y)
+			pos := percent.Center(sz)
+			background(ops, ops.End(), image.Rectangle{Min: pos, Max: pos.Add(sz)}, pos)
+		}
+
+		nav := func(btn Button, icn image.RGBA64Image) {
+			nav := layoutNavigation(ctx, ops.Begin(), th, dims,
+				NavButton{Button: btn, Style: StyleSecondary, Icon: icn},
+			)
+			nav = image.Rectangle(layout.Rectangle(nav).Shrink(underlay.Padding()).Shrink(-2, -4, -2, -2))
+			background(ops, ops.End(), nav, image.Point{})
+		}
+		nav(Button1, assets.IconBack)
+		nav(Button2, assets.IconFlip)
+		ctx.Frame()
 	}
-	nav(Button1, assets.IconBack)
-	nav(Button2, assets.IconFlip)
-	return nil, ResultNone
 }
 
 // scaleRot is a specialized function for fast scaling and rotation of
@@ -652,44 +508,57 @@ func scaleRot(dst, src *image.Gray, rot180 bool) {
 	}
 }
 
-func (s *ScanScreen) parseNonStandard(qr []byte) (any, Result) {
-	if err := s.nsdecoder.Add(string(qr)); err != nil {
-		s.nsdecoder = nonstandard.Decoder{}
-		return qr, ResultComplete
-	}
-	enc := s.nsdecoder.Result()
-	if enc == nil {
-		return nil, ResultNone
-	}
-	return enc, ResultComplete
+type QRDecoder struct {
+	decoder   ur.Decoder
+	nsdecoder nonstandard.Decoder
 }
 
-func (s *ScanScreen) parseQR(qr []byte) (any, Result) {
+func (d *QRDecoder) Progress() int {
+	progress := int(100 * d.decoder.Progress())
+	if progress == 0 {
+		progress = int(100 * d.nsdecoder.Progress())
+	}
+	return progress
+}
+
+func (d *QRDecoder) parseNonStandard(qr []byte) (any, bool) {
+	if err := d.nsdecoder.Add(string(qr)); err != nil {
+		d.nsdecoder = nonstandard.Decoder{}
+		return qr, true
+	}
+	enc := d.nsdecoder.Result()
+	if enc == nil {
+		return nil, false
+	}
+	return enc, true
+}
+
+func (d *QRDecoder) parseQR(qr []byte) (any, bool) {
 	uqr := strings.ToUpper(string(qr))
 	if !strings.HasPrefix(uqr, "UR:") {
-		s.decoder = ur.Decoder{}
-		return s.parseNonStandard(qr)
+		d.decoder = ur.Decoder{}
+		return d.parseNonStandard(qr)
 	}
-	s.nsdecoder = nonstandard.Decoder{}
-	if err := s.decoder.Add(uqr); err != nil {
+	d.nsdecoder = nonstandard.Decoder{}
+	if err := d.decoder.Add(uqr); err != nil {
 		// Incompatible fragment. Reset decoder and try again.
-		s.decoder = ur.Decoder{}
-		s.decoder.Add(uqr)
+		d.decoder = ur.Decoder{}
+		d.decoder.Add(uqr)
 	}
-	typ, enc, err := s.decoder.Result()
+	typ, enc, err := d.decoder.Result()
 	if err != nil {
-		s.decoder = ur.Decoder{}
-		return nil, ResultNone
+		d.decoder = ur.Decoder{}
+		return nil, false
 	}
 	if enc == nil {
-		return nil, ResultNone
+		return nil, false
 	}
-	s.decoder = ur.Decoder{}
+	d.decoder = ur.Decoder{}
 	v, err := urtypes.Parse(typ, enc)
 	if err != nil {
-		return nil, ResultComplete
+		return nil, true
 	}
-	return v, ResultComplete
+	return v, true
 }
 
 type ErrorScreen struct {
@@ -698,11 +567,9 @@ type ErrorScreen struct {
 	w     Warning
 }
 
-func (s *ErrorScreen) Update(ctx *Context) bool {
+func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) bool {
 	for {
-		s.w.Update(ctx)
-		// Swallow all buttons.
-		e, ok := ctx.Next(Button3, Button2, Button1, Up, Down, Right, Left, Center)
+		e, ok := ctx.Next(Button3)
 		if !ok {
 			break
 		}
@@ -713,22 +580,18 @@ func (s *ErrorScreen) Update(ctx *Context) bool {
 			}
 		}
 	}
-	return false
-}
-
-func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
 	s.w.Layout(ctx, ops, th, dims, s.Title, s.Body)
 	layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
+	return false
 }
 
 type ConfirmWarningScreen struct {
 	Title string
 	Body  string
 	Icon  image.RGBA64Image
-	w     Warning
 
-	confirm  ConfirmDelay
-	progress float32
+	warning Warning
+	confirm ConfirmDelay
 }
 
 type Warning struct {
@@ -771,7 +634,7 @@ func (c *ConfirmDelay) Running() bool {
 
 const confirmDelay = 1 * time.Second
 
-func (w *Warning) Update(ctx *Context) {
+func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, title, txt string) image.Point {
 	for {
 		e, ok := ctx.Next(Up, Down)
 		if !ok {
@@ -788,18 +651,58 @@ func (w *Warning) Update(ctx *Context) {
 			}
 		}
 	}
+	const btnMargin = 4
+	const boxMargin = 6
 
+	op.ColorOp(ops, color.NRGBA{A: theme.overlayMask})
+
+	wbbg := assets.WarningBoxBg
+	wbout := assets.WarningBoxBorder
+	ptop, pend, pbottom, pstart := wbbg.Padding()
+	r := image.Rectangle{
+		Min: image.Pt(pstart+boxMargin, ptop+boxMargin),
+		Max: image.Pt(dims.X-pend-boxMargin, dims.Y-pbottom-boxMargin),
+	}
+	box := wbbg.For(r)
+	op.MaskOp(ops, box)
+	op.ColorOp(ops, th.Background)
+	op.MaskOp(ops, wbout.For(r))
+	op.ColorOp(ops, th.Text)
+
+	btnOff := assets.NavBtnPrimary.Bounds().Dx() + btnMargin
+	titlesz := widget.LabelW(ops.Begin(), ctx.Styles.warning, dims.X-btnOff*2, th.Text, strings.ToTitle(title))
+	titlew := ops.End()
+	op.Position(ops, titlew, image.Pt((dims.X-titlesz.X)/2, r.Min.Y))
+
+	bodyClip := image.Rectangle{
+		Min: image.Pt(pstart+boxMargin, ptop+titlesz.Y),
+		Max: image.Pt(dims.X-btnOff, dims.Y-pbottom-boxMargin),
+	}
+	bodysz := widget.LabelW(ops.Begin(), ctx.Styles.body, bodyClip.Dx(), th.Text, txt)
+	body := ops.End()
+	innerCtx := ops.Begin()
+	w.txtclip = bodyClip.Dy()
+	maxScroll := bodysz.Y - (bodyClip.Dy() - 2*scrollFadeDist)
+	if w.scroll > maxScroll {
+		w.scroll = maxScroll
+	}
+	if w.scroll < 0 {
+		w.scroll = 0
+	}
+	op.Position(innerCtx, body, image.Pt(bodyClip.Min.X, bodyClip.Min.Y+scrollFadeDist-w.scroll))
+	fadeClip(ops, ops.End(), image.Rectangle(bodyClip))
+
+	return box.Bounds().Size()
 }
 
-func (s *ConfirmWarningScreen) Update(ctx *Context) ConfirmResult {
+func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) ConfirmResult {
+	var progress float32
 	for {
-		s.w.Update(ctx)
-		s.progress = s.confirm.Progress(ctx)
-		if s.progress == 1 {
+		progress = s.confirm.Progress(ctx)
+		if progress == 1 {
 			return ConfirmYes
 		}
-		// Swallow all buttons.
-		e, ok := ctx.Next(Button3, Button2, Button1, Up, Down, Right, Left, Center)
+		e, ok := ctx.Next(Button3, Button1)
 		if !ok {
 			break
 		}
@@ -817,15 +720,11 @@ func (s *ConfirmWarningScreen) Update(ctx *Context) ConfirmResult {
 			}
 		}
 	}
-	return ConfirmNone
-}
-
-func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
-	s.w.Layout(ctx, ops, th, dims, s.Title, s.Body)
+	s.warning.Layout(ctx, ops, th, dims, s.Title, s.Body)
 	icn := s.Icon
 	if s.confirm.Running() {
 		icn = ProgressImage{
-			Progress: s.progress,
+			Progress: progress,
 			Src:      assets.IconProgress,
 		}
 	}
@@ -833,6 +732,7 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 		NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
 		NavButton{Button: Button3, Style: StylePrimary, Icon: icn},
 	)
+	return ConfirmNone
 }
 
 type ProgressImage struct {
@@ -861,20 +761,6 @@ func (p ProgressImage) RGBA64At(x, y int) color.RGBA64 {
 		return color.RGBA64{}
 	}
 	return p.Src.RGBA64At(x, y)
-}
-
-type EngraveScreen struct {
-	instructions []Instruction
-	plate        Plate
-
-	cancel *ConfirmWarningScreen
-	step   int
-	dryRun struct {
-		timeout time.Time
-		enabled bool
-	}
-	engrave engraveState
-	confirm ConfirmDelay
 }
 
 type errDuplicateKey struct {
@@ -909,7 +795,6 @@ func NewErrorScreen(err error) *ErrorScreen {
 			Body:  err.Error(),
 		}
 	}
-
 }
 
 func validateDescriptor(params engrave.Params, desc urtypes.OutputDescriptor) error {
@@ -1029,324 +914,6 @@ func engravePlate(sizes []backup.PlateSize, params engrave.Params, desc urtypes.
 		}, nil
 	}
 	return Plate{}, lastErr
-}
-
-func NewEngraveScreen(ctx *Context, plate Plate) *EngraveScreen {
-	var ins []Instruction
-	if !ctx.Calibrated {
-		ins = append(ins, EngraveFirstSideA...)
-	} else {
-		ins = append(ins, EngraveSideA...)
-	}
-	if len(plate.Sides) > 1 {
-		ins = append(ins, EngraveSideB...)
-	}
-	ins = append(ins, EngraveSuccess...)
-	s := &EngraveScreen{
-		plate:        plate,
-		instructions: ins,
-	}
-	for i, ins := range s.instructions {
-		repl := strings.NewReplacer(
-			"{{.Name}}", plateName(plate.Size),
-		)
-		s.instructions[i].resolvedBody = repl.Replace(ins.Body)
-		// As a special case, the Sh01 image is a placeholder for the plate-specific image.
-		if ins.Image == assets.Sh01 {
-			s.instructions[i].Image = plateImage(plate.Size)
-		}
-	}
-	return s
-}
-
-type engraveState struct {
-	dev          Engraver
-	cancel       chan struct{}
-	progress     chan float32
-	errs         chan error
-	lastProgress float32
-	warning      *ErrorScreen
-}
-
-func (s *EngraveScreen) close() {
-	if s.engrave.cancel != nil {
-		close(s.engrave.cancel)
-	}
-	s.engrave = engraveState{}
-}
-
-func (s *EngraveScreen) moveStep(ctx *Context) bool {
-	ins := s.instructions[s.step]
-	if ins.Type == ConnectInstruction {
-		if s.engrave.dev != nil {
-			return false
-		}
-		s.engrave = engraveState{}
-		dev, err := ctx.Platform.Engraver()
-		if err != nil {
-			log.Printf("gui: failed to connect to engraver: %v", err)
-			s.engrave.warning = &ErrorScreen{
-				Title: "Connection Error",
-				Body:  fmt.Sprintf("Ensure the engraver is turned on and verify that it is connected to the middle port of this device.\n\nError details: %v", err),
-			}
-			return false
-		}
-		s.engrave.dev = dev
-	}
-	s.step++
-	if s.step == len(s.instructions) {
-		s.close()
-		return true
-	}
-	ins = s.instructions[s.step]
-	if ins.Type == EngraveInstruction {
-		plan := s.plate.Sides[ins.Side]
-		if s.dryRun.enabled {
-			plan = engrave.DryRun(plan)
-		}
-		totalDist := 0
-		pen := image.Point{}
-		plan(func(cmd engrave.Command) {
-			totalDist += engrave.ManhattanDist(pen, cmd.Coord)
-			pen = cmd.Coord
-		})
-		cancel := make(chan struct{})
-		errs := make(chan error, 1)
-		progress := make(chan float32, 1)
-		s.engrave.cancel = cancel
-		s.engrave.errs = errs
-		s.engrave.progress = progress
-		dev := s.engrave.dev
-		wakeup := ctx.Platform.Wakeup
-		go func() {
-			defer wakeup()
-			defer dev.Close()
-			pplan := func(yield func(cmd engrave.Command)) {
-				dist := 0
-				completed := 0
-				pen := image.Point{}
-				plan(func(cmd engrave.Command) {
-					yield(cmd)
-					completed++
-					dist += engrave.ManhattanDist(pen, cmd.Coord)
-					pen = cmd.Coord
-					// Don't spam the progress channel.
-					if completed%10 != 0 && dist < totalDist {
-						return
-					}
-					select {
-					case <-progress:
-					default:
-					}
-					p := float32(dist) / float32(totalDist)
-					progress <- p
-					wakeup()
-				})
-			}
-			errs <- dev.Engrave(s.plate.Size, pplan, cancel)
-		}()
-	}
-	return false
-}
-
-type Result int
-
-const (
-	ResultNone Result = iota
-	ResultCancelled
-	ResultComplete
-)
-
-func (s *EngraveScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point) Result {
-loop:
-	for {
-		select {
-		case p := <-s.engrave.progress:
-			s.engrave.lastProgress = p
-		case err := <-s.engrave.errs:
-			s.engrave = engraveState{}
-			if err != nil {
-				log.Printf("gui: connection lost to engraver: %v", err)
-				s.step--
-				s.engrave.warning = &ErrorScreen{
-					Title: "Connection Error",
-					Body:  fmt.Sprintf("Turn off the engraver and disconnect this device from it. Wait 10 seconds, then turn on the engraver and reconnect.\n\nError details: %v", err),
-				}
-				break
-			}
-			ctx.Calibrated = true
-			s.step++
-			if s.step == len(s.instructions) {
-				return ResultComplete
-			}
-		default:
-			break loop
-		}
-	}
-
-	var progress float32
-	th := &engraveTheme
-	var ins Instruction
-	canPrev := false
-	for {
-		ins = s.instructions[s.step]
-		canPrev = s.step > 0 && s.instructions[s.step-1].Type == PrepareInstruction
-		progress = s.confirm.Progress(ctx)
-		if progress == 1. {
-			s.moveStep(ctx)
-			s.confirm = ConfirmDelay{}
-			continue
-		}
-		if !s.dryRun.timeout.IsZero() {
-			now := ctx.Platform.Now()
-			d := s.dryRun.timeout.Sub(now)
-			if d <= 0 {
-				ctx.Buttons[Button2] = false
-				s.dryRun.timeout = time.Time{}
-				s.dryRun.enabled = !s.dryRun.enabled
-			}
-		}
-		switch {
-		case s.cancel != nil:
-			result := s.cancel.Update(ctx)
-			switch result {
-			case ConfirmYes:
-				s.close()
-				return ResultCancelled
-			case ConfirmNo:
-				s.cancel = nil
-				continue
-			}
-		case s.engrave.warning != nil:
-			dismissed := s.engrave.warning.Update(ctx)
-			if dismissed {
-				s.engrave.warning = nil
-				continue
-			}
-		}
-		e, ok := ctx.Next(Button1, Button2, Button3)
-		if !ok {
-			break
-		}
-		switch e.Button {
-		case Button1:
-			if !e.Click {
-				break
-			}
-			if canPrev {
-				s.step--
-			} else {
-				s.cancel = &ConfirmWarningScreen{
-					Title: "Cancel?",
-					Body:  "This will cancel the engraving process.\n\nHold button to confirm.",
-					Icon:  assets.IconDiscard,
-				}
-			}
-		case Button2:
-			if e.Pressed {
-				t := ctx.Platform.Now().Add(confirmDelay)
-				s.dryRun.timeout = t
-				ctx.WakeupAt(t)
-			} else {
-				s.dryRun.timeout = time.Time{}
-			}
-		case Button3:
-			if ins.Type == ConnectInstruction {
-				if e.Pressed {
-					ctx.Buttons[Button3] = false
-					s.confirm.Start(ctx, confirmDelay)
-				} else {
-					s.confirm = ConfirmDelay{}
-				}
-				break
-			} else if !e.Click || ins.Type == EngraveInstruction {
-				break
-			}
-			if s.moveStep(ctx) {
-				return ResultComplete
-			}
-		}
-	}
-
-	op.ColorOp(ops, th.Background)
-	layoutTitle(ctx, ops, dims.X, th.Text, fmt.Sprintf("Engrave Plate"))
-
-	r := layout.Rectangle{Max: dims}
-	_, subt := r.CutTop(leadingSize)
-	subtsz := widget.Label(ops.Begin(), ctx.Styles.body, th.Text, fmt.Sprintf("%.8x", s.plate.MasterFingerprint))
-	op.Position(ops, ops.End(), subt.N(subtsz).Sub(image.Pt(0, 4)))
-
-	const margin = 8
-	_, content := r.CutTop(leadingSize)
-	if ins.Type == EngraveInstruction {
-		progress := fmt.Sprintf("%d%%", int(s.engrave.lastProgress*100))
-		_, content = subt.CutTop(subtsz.Y)
-		middle, _ := content.CutBottom(leadingSize)
-		op.Offset(ops, middle.Center(assets.ProgressCircle.Bounds().Size()))
-		op.MaskOp(ops, ProgressImage{
-			Progress: s.engrave.lastProgress,
-			Src:      assets.ProgressCircle,
-		})
-		op.ColorOp(ops, th.Text)
-		sz := widget.Label(ops.Begin(), ctx.Styles.progress, th.Text, progress)
-		op.Position(ops, ops.End(), middle.Center(sz))
-	}
-	content = content.Shrink(0, margin, 0, margin)
-	content, lead := content.CutBottom(leadingSize)
-	bodysz := widget.LabelW(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text, ins.resolvedBody)
-	if img := ins.Image; img != nil {
-		sz := img.Bounds().Size()
-		op.Offset(ops, image.Pt((bodysz.X-sz.X)/2, bodysz.Y))
-		op.ImageOp(ops, img)
-		if sz.X > bodysz.X {
-			bodysz.X = sz.X
-		}
-		bodysz.Y += sz.Y
-	}
-	op.Position(ops, ops.End(), content.Center(bodysz))
-	leadsz := widget.LabelW(ops.Begin(), ctx.Styles.lead, dims.X-2*margin, th.Text, ins.Lead)
-	op.Position(ops, ops.End(), lead.Center(leadsz))
-
-	progressw := dims.X * (s.step + 1) / len(s.instructions)
-	op.ClipOp(image.Rectangle{Max: image.Pt(progressw, 2)}).Add(ops)
-	op.ColorOp(ops, th.Text)
-
-	if s.dryRun.enabled {
-		sz := widget.Label(ops.Begin(), ctx.Styles.debug, th.Text, "dry-run")
-		op.Position(ops, ops.End(), r.SE(sz).Sub(image.Pt(4, 0)))
-	}
-
-	switch {
-	default:
-		icnBack := assets.IconBack
-		if canPrev {
-			icnBack = assets.IconLeft
-		}
-		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button1, Style: StyleSecondary, Icon: icnBack})
-		switch ins.Type {
-		case EngraveInstruction:
-		case ConnectInstruction:
-			icn := image.RGBA64Image(assets.IconHammer)
-			if s.confirm.Running() {
-				icn = ProgressImage{
-					Progress: progress,
-					Src:      assets.IconProgress,
-				}
-			}
-			layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: icn})
-		default:
-			layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconRight})
-		}
-	case s.cancel != nil:
-		s.cancel.Layout(ctx, ops.Begin(), th, dims)
-		dialog := ops.End()
-		dialog.Add(ops)
-	case s.engrave.warning != nil:
-		s.engrave.warning.Layout(ctx, ops.Begin(), th, dims)
-		dialog := ops.End()
-		dialog.Add(ops)
-	}
-	return ResultNone
 }
 
 func plateImage(p backup.PlateSize) image.RGBA64Image {
@@ -1491,31 +1058,8 @@ var (
 	}
 )
 
-func NewEmptySeedScreen(title string) *SeedScreen {
-	s := &SeedScreen{
-		method: &ChoiceScreen{
-			Title:   title,
-			Lead:    "Choose input method",
-			Choices: []string{"KEYBOARD", "CAMERA"},
-		},
-	}
-	return s
-}
-
-type SeedScreen struct {
-	Mnemonic bip39.Mnemonic
-	selected int
-	scroll   int
-	method   *ChoiceScreen
-	seedlen  *ChoiceScreen
-	input    *WordKeyboardScreen
-	scanner  *ScanScreen
-	cancel   *ConfirmWarningScreen
-	warning  *ErrorScreen
-}
-
-func (s *SeedScreen) empty() bool {
-	for _, w := range s.Mnemonic {
+func isEmptyMnemonic(m bip39.Mnemonic) bool {
+	for _, w := range m {
 		if w != -1 {
 			return false
 		}
@@ -1529,271 +1073,6 @@ func emptyMnemonic(nwords int) bip39.Mnemonic {
 		m[i] = -1
 	}
 	return m
-}
-
-func (s *SeedScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) (bip39.Mnemonic, Result) {
-	var complete bool
-	for {
-		complete = len(s.Mnemonic) > 0
-		for _, w := range s.Mnemonic {
-			if w == -1 {
-				complete = false
-				break
-			}
-		}
-		switch {
-		case s.scanner != nil:
-			res, status := s.scanner.Layout(ctx, ops.Begin(), dims)
-			dialog := ops.End()
-			switch status {
-			case ResultNone:
-				dialog.Add(ops)
-				return nil, ResultNone
-			}
-			s.scanner = nil
-			switch status {
-			case ResultCancelled:
-				continue
-			}
-			if b, ok := res.([]byte); ok {
-				if sqr, ok := seedqr.Parse(b); ok {
-					res = sqr
-				} else if sqr, err := bip39.ParseMnemonic(strings.ToLower(string(b))); err == nil {
-					res = sqr
-				} else if nonstandard.ElectrumSeed(string(b)) {
-					s.warning = &ErrorScreen{
-						Title: "Invalid Seed",
-						Body:  "Electrum seeds are not supported.",
-					}
-					continue
-				}
-			}
-			seed, ok := res.(bip39.Mnemonic)
-			if !ok {
-				s.warning = &ErrorScreen{
-					Title: "Invalid Seed",
-					Body:  "The scanned data does not represent a seed.",
-				}
-				continue
-			}
-			_, ok = deriveMasterKey(seed, &chaincfg.MainNetParams)
-			if !ok {
-				s.warning = &ErrorScreen{
-					Title: "Invalid Seed",
-					Body:  "The seed is invalid.",
-				}
-				continue
-			}
-			s.method = nil
-			s.Mnemonic = seed
-			continue
-		case s.seedlen != nil && s.input == nil:
-			choice, status := s.seedlen.Layout(ctx, ops.Begin(), th, dims, true)
-			dialog := ops.End()
-			if status == ResultNone {
-				dialog.Add(ops)
-				return nil, ResultNone
-			}
-			if status == ResultCancelled {
-				s.seedlen = nil
-				continue
-			}
-			nwords := []int{12, 24}[choice]
-			s.Mnemonic = emptyMnemonic(nwords)
-			s.input = &WordKeyboardScreen{
-				Mnemonic: s.Mnemonic,
-			}
-			continue
-		case s.method != nil && s.input == nil && s.warning == nil:
-			choice, status := s.method.Layout(ctx, ops.Begin(), th, dims, s.warning == nil)
-			dialog := ops.End()
-			switch status {
-			case ResultNone:
-				dialog.Add(ops)
-				return nil, ResultNone
-			case ResultCancelled:
-				return nil, ResultCancelled
-			}
-			switch choice {
-			case 0:
-				s.seedlen = &ChoiceScreen{
-					Title:   "Input Seed",
-					Lead:    "Choose number of words",
-					Choices: []string{"12 WORDS", "24 WORDS"},
-				}
-			case 1:
-				s.scanner = &ScanScreen{
-					Title: "Scan",
-					Lead:  "SeedQR or Mnemonic",
-				}
-			}
-			continue
-		case s.input != nil:
-			status := s.input.Layout(ctx, ops.Begin(), th, dims)
-			dialog := ops.End()
-			switch status {
-			case ResultNone:
-				dialog.Add(ops)
-				return nil, ResultNone
-			case ResultCancelled:
-				if s.empty() {
-					s.input = nil
-					continue
-				}
-			}
-			s.seedlen = nil
-			s.input = nil
-			s.method = nil
-			continue
-		case s.cancel != nil:
-			result := s.cancel.Update(ctx)
-			switch result {
-			case ConfirmYes:
-				return nil, ResultCancelled
-			case ConfirmNo:
-				s.cancel = nil
-				continue
-			}
-		case s.warning != nil:
-			dismiss := s.warning.Update(ctx)
-			if dismiss {
-				s.warning = nil
-				continue
-			}
-		}
-		e, ok := ctx.Next(Button1, Button2, Center, Button3, Up, Down)
-		if !ok {
-			break
-		}
-		switch e.Button {
-		case Button1:
-			if !e.Click {
-				break
-			}
-			if s.empty() {
-				return nil, ResultCancelled
-			}
-			s.cancel = &ConfirmWarningScreen{
-				Title: "Discard Seed?",
-				Body:  "Going back will discard the seed.\n\nHold button to confirm.",
-				Icon:  assets.IconDiscard,
-			}
-		case Button2, Center:
-			if !e.Click {
-				break
-			}
-			s.input = &WordKeyboardScreen{
-				Mnemonic: s.Mnemonic,
-				selected: s.selected,
-			}
-			continue
-		case Button3:
-			if !e.Click || !complete {
-				break
-			}
-			if !s.Mnemonic.Valid() {
-				s.warning = &ErrorScreen{
-					Title: "Invalid Seed",
-				}
-				var words []string
-				for _, w := range s.Mnemonic {
-					words = append(words, bip39.LabelFor(w))
-				}
-				if nonstandard.ElectrumSeed(strings.Join(words, " ")) {
-					s.warning.Body = "Electrum seeds are not supported."
-				} else {
-					s.warning.Body = "The seed phrase is invalid.\n\nCheck the words and try again."
-				}
-				break
-			}
-			_, ok = deriveMasterKey(s.Mnemonic, &chaincfg.MainNetParams)
-			if !ok {
-				s.warning = &ErrorScreen{
-					Title: "Invalid Seed",
-					Body:  "The seed is invalid.",
-				}
-				break
-			}
-			return s.Mnemonic, ResultComplete
-		case Down:
-			if e.Pressed && s.selected < len(s.Mnemonic)-1 {
-				s.selected++
-			}
-		case Up:
-			if e.Pressed && s.selected > 0 {
-				s.selected--
-			}
-		}
-	}
-
-	op.ColorOp(ops, th.Background)
-	layoutTitle(ctx, ops, dims.X, th.Text, "Confirm Seed")
-
-	style := ctx.Styles.word
-	_, longestPrefix := style.Layout(math.MaxInt, "24: ")
-	layoutWord := func(ops op.Ctx, col color.NRGBA, n int, word string) image.Point {
-		prefix := widget.Label(ops.Begin(), style, col, fmt.Sprintf("%d: ", n))
-		op.Position(ops, ops.End(), image.Pt(longestPrefix.X-prefix.X, 0))
-		txt := widget.Label(ops.Begin(), style, col, word)
-		op.Position(ops, ops.End(), image.Pt(longestPrefix.X, 0))
-		return image.Pt(longestPrefix.X+txt.X, txt.Y)
-	}
-
-	y := 0
-	longest := layoutWord(op.Ctx{}, color.NRGBA{}, 24, longestWord)
-	r := layout.Rectangle{Max: dims}
-	navw := assets.NavBtnPrimary.Bounds().Dx()
-	list := r.Shrink(leadingSize, 0, 0, 0)
-	content := list.Shrink(scrollFadeDist, navw, scrollFadeDist, navw)
-	lineHeight := longest.Y + 2
-	linesPerPage := content.Dy() / lineHeight
-	scroll := s.selected - linesPerPage/2
-	maxScroll := len(s.Mnemonic) - linesPerPage
-	if scroll > maxScroll {
-		scroll = maxScroll
-	}
-	if scroll < 0 {
-		scroll = 0
-	}
-	off := content.Min.Add(image.Pt(0, -scroll*lineHeight))
-	{
-		ops := ops.Begin()
-		for i, w := range s.Mnemonic {
-			ops.Begin()
-			col := th.Text
-			if i == s.selected {
-				col = th.Background
-				r := image.Rectangle{Max: longest}
-				r.Min.Y -= 3
-				op.MaskOp(ops, assets.ButtonFocused.For(r))
-				op.ColorOp(ops, th.Text)
-			}
-			word := strings.ToUpper(bip39.LabelFor(w))
-			layoutWord(ops, col, i+1, word)
-			pos := image.Pt(0, y).Add(off)
-			op.Position(ops, ops.End(), pos)
-			y += lineHeight
-		}
-	}
-	fadeClip(ops, ops.End(), image.Rectangle(list))
-
-	switch {
-	default:
-		layoutNavigation(ctx, ops, th, dims,
-			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-			NavButton{Button: Button2, Style: StyleSecondary, Icon: assets.IconEdit},
-		)
-		if complete {
-			layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
-		}
-	case s.cancel != nil:
-		s.cancel.Layout(ctx, ops.Begin(), th, dims)
-		ops.End().Add(ops)
-	case s.warning != nil:
-		s.warning.Layout(ctx, ops.Begin(), th, dims)
-		ops.End().Add(ops)
-	}
-	return nil, ResultNone
 }
 
 const scrollFadeDist = 16
@@ -1829,132 +1108,82 @@ func (_ scrollMask) ColorModel() color.Model {
 	return color.AlphaModel
 }
 
-func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, title, txt string) image.Point {
-	const btnMargin = 4
-	const boxMargin = 6
-
-	op.ColorOp(ops, color.NRGBA{A: theme.overlayMask})
-
-	wbbg := assets.WarningBoxBg
-	wbout := assets.WarningBoxBorder
-	ptop, pend, pbottom, pstart := wbbg.Padding()
-	r := image.Rectangle{
-		Min: image.Pt(pstart+boxMargin, ptop+boxMargin),
-		Max: image.Pt(dims.X-pend-boxMargin, dims.Y-pbottom-boxMargin),
-	}
-	box := wbbg.For(r)
-	op.MaskOp(ops, box)
-	op.ColorOp(ops, th.Background)
-	op.MaskOp(ops, wbout.For(r))
-	op.ColorOp(ops, th.Text)
-
-	btnOff := assets.NavBtnPrimary.Bounds().Dx() + btnMargin
-	titlesz := widget.LabelW(ops.Begin(), ctx.Styles.warning, dims.X-btnOff*2, th.Text, strings.ToTitle(title))
-	titlew := ops.End()
-	op.Position(ops, titlew, image.Pt((dims.X-titlesz.X)/2, r.Min.Y))
-
-	bodyClip := image.Rectangle{
-		Min: image.Pt(pstart+boxMargin, ptop+titlesz.Y),
-		Max: image.Pt(dims.X-btnOff, dims.Y-pbottom-boxMargin),
-	}
-	bodysz := widget.LabelW(ops.Begin(), ctx.Styles.body, bodyClip.Dx(), th.Text, txt)
-	body := ops.End()
-	innerCtx := ops.Begin()
-	w.txtclip = bodyClip.Dy()
-	maxScroll := bodysz.Y - (bodyClip.Dy() - 2*scrollFadeDist)
-	if w.scroll > maxScroll {
-		w.scroll = maxScroll
-	}
-	if w.scroll < 0 {
-		w.scroll = 0
-	}
-	op.Position(innerCtx, body, image.Pt(bodyClip.Min.X, bodyClip.Min.Y+scrollFadeDist-w.scroll))
-	fadeClip(ops, ops.End(), image.Rectangle(bodyClip))
-
-	return box.Bounds().Size()
-}
-
-type WordKeyboardScreen struct {
-	Mnemonic bip39.Mnemonic
-	selected int
-	kbd      *Keyboard
-}
-
-func (s *WordKeyboardScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) Result {
-	if s.kbd == nil {
-		s.kbd = NewKeyboard(ctx)
-	}
+func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic, selected int) {
+	kbd := NewKeyboard(ctx)
 	for {
-		s.kbd.Update(ctx)
-		e, ok := ctx.Next(Button1, Button2)
-		if !ok {
-			break
-		}
-		switch e.Button {
-		case Button1:
-			if e.Click {
-				return ResultCancelled
-			}
-		case Button2:
-			if !e.Click {
+		for {
+			kbd.Update(ctx)
+			e, ok := ctx.Next(Button1, Button2)
+			if !ok {
 				break
 			}
-			w, complete := s.kbd.Complete()
-			if !complete {
-				break
-			}
-			s.kbd.Clear()
-			s.Mnemonic[s.selected] = w
-			for {
-				s.selected++
-				if s.selected == len(s.Mnemonic) {
-					return ResultComplete
+			switch e.Button {
+			case Button1:
+				if e.Click {
+					return
 				}
-				if s.Mnemonic[s.selected] == -1 {
+			case Button2:
+				if !e.Click {
 					break
 				}
+				w, complete := kbd.Complete()
+				if !complete {
+					break
+				}
+				kbd.Clear()
+				mnemonic[selected] = w
+				for {
+					selected++
+					if selected == len(mnemonic) {
+						return
+					}
+					if mnemonic[selected] == -1 {
+						break
+					}
+				}
 			}
 		}
+		dims := ctx.Platform.DisplaySize()
+		completedWord, complete := kbd.Complete()
+		op.ColorOp(ops, th.Background)
+		layoutTitle(ctx, ops, dims.X, th.Text, "Input Words")
+
+		screen := layout.Rectangle{Max: dims}
+		_, content := screen.CutTop(leadingSize)
+		content, _ = content.CutBottom(8)
+
+		kbdsz := kbd.Layout(ctx, ops.Begin(), th)
+		op.Position(ops, ops.End(), content.S(kbdsz))
+
+		layoutWord := func(ops op.Ctx, n int, word string) image.Point {
+			style := ctx.Styles.word
+			txt := fmt.Sprintf("%2d: %s", n, word)
+			return widget.Label(ops, style, th.Background, txt)
+		}
+
+		longest := layoutWord(op.Ctx{}, 24, longestWord)
+		hint := kbd.Word
+		if complete {
+			hint = strings.ToUpper(bip39.LabelFor(completedWord))
+		}
+		layoutWord(ops.Begin(), selected+1, hint)
+		word := ops.End()
+		r := image.Rectangle{Max: longest}
+		r.Min.Y -= 3
+		op.MaskOp(ops.Begin(), assets.ButtonFocused.For(r))
+		op.ColorOp(ops, th.Text)
+		word.Add(ops)
+		top, _ := content.CutBottom(kbdsz.Y)
+		op.Position(ops, ops.End(), top.Center(longest))
+
+		layoutNavigation(ctx, ops, th, dims,
+			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
+		)
+		if complete {
+			layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button2, Style: StylePrimary, Icon: assets.IconCheckmark})
+		}
+		ctx.Frame()
 	}
-	completedWord, complete := s.kbd.Complete()
-	op.ColorOp(ops, th.Background)
-	layoutTitle(ctx, ops, dims.X, th.Text, "Input Words")
-
-	screen := layout.Rectangle{Max: dims}
-	_, content := screen.CutTop(leadingSize)
-	content, _ = content.CutBottom(8)
-
-	kbdsz := s.kbd.Layout(ctx, ops.Begin(), th)
-	op.Position(ops, ops.End(), content.S(kbdsz))
-
-	layoutWord := func(ops op.Ctx, n int, word string) image.Point {
-		style := ctx.Styles.word
-		txt := fmt.Sprintf("%2d: %s", n, word)
-		return widget.Label(ops, style, th.Background, txt)
-	}
-
-	longest := layoutWord(op.Ctx{}, 24, longestWord)
-	hint := s.kbd.Word
-	if complete {
-		hint = strings.ToUpper(bip39.LabelFor(completedWord))
-	}
-	layoutWord(ops.Begin(), s.selected+1, hint)
-	word := ops.End()
-	r := image.Rectangle{Max: longest}
-	r.Min.Y -= 3
-	op.MaskOp(ops.Begin(), assets.ButtonFocused.For(r))
-	op.ColorOp(ops, th.Text)
-	word.Add(ops)
-	top, _ := content.CutBottom(kbdsz.Y)
-	op.Position(ops, ops.End(), top.Center(longest))
-
-	layoutNavigation(ctx, ops, th, dims,
-		NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-	)
-	if complete {
-		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button2, Style: StylePrimary, Icon: assets.IconCheckmark})
-	}
-	return ResultNone
 }
 
 var kbdKeys = [...][]rune{
@@ -2279,36 +1508,49 @@ type ChoiceScreen struct {
 	choice  int
 }
 
-func (s *ChoiceScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, active bool) (int, Result) {
-	for active {
-		e, ok := ctx.Next(Button1, Button3, Center, Up, Down, CCW, CW)
-		if !ok {
-			break
-		}
-		switch e.Button {
-		case Button1:
-			if e.Click {
-				return 0, ResultCancelled
+func (s *ChoiceScreen) Choose(ctx *Context, ops op.Ctx, th *Colors) (int, bool) {
+	for {
+		for {
+			e, ok := ctx.Next(Button1, Button3, Center, Up, Down, CCW, CW)
+			if !ok {
+				break
 			}
-		case Button3, Center:
-			if e.Click {
-				return s.choice, ResultComplete
-			}
-		case Up, CCW:
-			if e.Pressed {
-				if s.choice > 0 {
-					s.choice--
+			switch e.Button {
+			case Button1:
+				if e.Click {
+					return 0, false
+				}
+			case Button3, Center:
+				if e.Click {
+					return s.choice, true
+				}
+			case Up, CCW:
+				if e.Pressed {
+					if s.choice > 0 {
+						s.choice--
+					}
+				}
+			case Down, CW:
+				if e.Pressed {
+					if s.choice < len(s.Choices)-1 {
+						s.choice++
+					}
 				}
 			}
-		case Down, CW:
-			if e.Pressed {
-				if s.choice < len(s.Choices)-1 {
-					s.choice++
-				}
-			}
 		}
-	}
 
+		dims := ctx.Platform.DisplaySize()
+		s.Draw(ctx, ops, th, dims)
+
+		layoutNavigation(ctx, ops, th, dims,
+			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
+			NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
+		)
+		ctx.Frame()
+	}
+}
+
+func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
 	r := layout.Rectangle{Max: dims}
 	op.ColorOp(ops, th.Background)
 
@@ -2360,261 +1602,99 @@ func (s *ChoiceScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.P
 		h += c.Size.Y
 	}
 	op.Position(ops, ops.End(), content.Center(image.Pt(maxW, h)))
-
-	if active {
-		layoutNavigation(ctx, ops, th, dims,
-			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-			NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
-		)
-	}
-	return 0, ResultNone
 }
 
-type MainScreen struct {
-	mnemonic   bip39.Mnemonic
-	page       program
-	scanner    *ScanScreen
-	desc       *DescriptorScreen
-	descriptor *urtypes.OutputDescriptor
-	method     *ChoiceScreen
-	seed       *SeedScreen
-	engrave    *EngraveScreen
-	warning    *ErrorScreen
-	error      Warning
-	sdcard     struct {
-		warning *ConfirmWarningScreen
-		shown   bool
-	}
-}
-
-func (s *MainScreen) Select(ctx *Context) {
-	switch s.page {
-	case backupWallet:
-		s.seed = NewEmptySeedScreen("Input Seed")
-	}
-}
-
-func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err error) {
-	var th *Colors
-	var title string
-	if s.sdcard.warning != nil && ctx.NoSDCard {
-		s.sdcard.warning = nil
-		s.Select(ctx)
-	}
+func mainFlow(ctx *Context, ops op.Ctx) {
+	var page program
 	for {
-		switch s.page {
-		case backupWallet:
-			title = "Backup Wallet"
-			th = &descriptorTheme
-		}
-		switch {
-		case s.seed != nil && s.method == nil && s.desc == nil && s.engrave == nil:
-			m, status := s.seed.Layout(ctx, ops.Begin(), th, dims)
-			dialog := ops.End()
-			if status == ResultNone {
-				dialog.Add(ops)
-				return
-			}
-			s.mnemonic = m
-			switch status {
-			case ResultCancelled:
-				s.seed = nil
-				continue
-			}
-			s.method = &ChoiceScreen{
-				Title:   "Descriptor",
-				Lead:    "Choose input method",
-				Choices: []string{"SCAN", "SKIP"},
-			}
-			if s.descriptor != nil {
-				_, match := descriptorKeyIdx(*s.descriptor, s.mnemonic, "")
-				if match {
-					s.method.Choices = append(s.method.Choices, "RE-USE")
-				}
-			}
-			continue
-		case s.scanner != nil:
-			res, status := s.scanner.Layout(ctx, ops.Begin(), dims)
-			dialog := ops.End()
-			switch status {
-			case ResultNone:
-				dialog.Add(ops)
-				return
-			}
-			s.scanner = nil
-			switch status {
-			case ResultCancelled:
-				continue
-			}
-			desc, ok := res.(urtypes.OutputDescriptor)
+		dims := ctx.Platform.DisplaySize()
+	events:
+		for {
+			e, ok := ctx.Next(Button3, Center, Left, Right)
 			if !ok {
-				if b, isbytes := res.([]byte); isbytes {
-					d, err := nonstandard.OutputDescriptor(b)
-					desc, ok = d, err == nil
-				}
+				break
 			}
-			if !ok {
-				s.warning = &ErrorScreen{
-					Title: "Error",
-					Body:  "The scanned data does not represent a wallet output descriptor or XPUB key.",
-				}
-				continue
-			}
-
-			if !address.Supported(desc) {
-				s.warning = &ErrorScreen{
-					Title: "Error",
-					Body:  "The descriptor is not supported.",
-				}
-				continue
-			}
-			if len(desc.Keys) == 1 && desc.Keys[0].MasterFingerprint == 0 {
-				mfp, _ := masterFingerprintFor(s.mnemonic, &chaincfg.MainNetParams)
-				desc.Keys[0].MasterFingerprint = mfp
-			}
-			s.method = nil
-			desc.Title = backup.TitleString(constant.Font, desc.Title)
-			s.descriptor = &desc
-			s.desc = &DescriptorScreen{
-				Descriptor: desc,
-				Mnemonic:   s.mnemonic,
-			}
-			continue
-		case s.method != nil && s.engrave == nil && s.warning == nil:
-			choice, status := s.method.Layout(ctx, ops.Begin(), th, dims, s.warning == nil)
-			dialog := ops.End()
-			switch status {
-			case ResultNone:
-				dialog.Add(ops)
-				return
-			case ResultCancelled:
-				s.method = nil
-				continue
-			}
-			switch choice {
-			case 0: // Scan.
-				s.scanner = &ScanScreen{
-					Title: "Scan",
-					Lead:  "Wallet Output Descriptor",
-				}
-			case 1: // Skip descriptor.
-				s.method = nil
-				plate, err := engraveSeed(ctx.Platform.PlateSizes(), ctx.Platform.EngraverParams(), s.mnemonic)
-				if err != nil {
-					s.warning = NewErrorScreen(err)
+			switch e.Button {
+			case Button3, Center:
+				if !e.Click {
 					break
 				}
-				s.engrave = NewEngraveScreen(ctx, plate)
-			case 2: // Re-use.
-				s.method = nil
-				s.desc = &DescriptorScreen{
-					Descriptor: *s.descriptor,
-					Mnemonic:   s.mnemonic,
-				}
-			}
-			continue
-		case s.engrave != nil:
-			res := s.engrave.Layout(ctx, ops.Begin(), dims)
-			dialog := ops.End()
-			switch res {
-			case ResultNone:
-				dialog.Add(ops)
-				return
-			case ResultCancelled:
-				s.engrave = nil
-				continue
-			}
-			s.desc = nil
-			s.engrave = nil
-			s.seed = nil
-			continue
-		case s.desc != nil:
-			keyIdx, status := s.desc.Layout(ctx, ops.Begin(), dims)
-			dialog := ops.End()
-			if status == ResultNone {
-				dialog.Add(ops)
-				return
-			}
-			if status == ResultCancelled {
-				s.desc = nil
-				continue
-			}
-			desc := *s.descriptor
-			plate, err := engravePlate(ctx.Platform.PlateSizes(), ctx.Platform.EngraverParams(), desc, keyIdx, s.mnemonic)
-			if err != nil {
-				s.warning = NewErrorScreen(err)
-				break
-			}
-			s.engrave = NewEngraveScreen(ctx, plate)
-			continue
-		case s.warning != nil:
-			dismissed := s.warning.Update(ctx)
-			if dismissed {
-				s.warning = nil
-				continue
-			}
-		case s.sdcard.warning != nil:
-			res := s.sdcard.warning.Update(ctx)
-			switch res {
-			case ConfirmYes:
-				s.sdcard.warning = nil
-				s.sdcard.shown = true
-				s.Select(ctx)
-				continue
-			case ConfirmNo:
-				s.sdcard.warning = nil
-				continue
-			}
-		}
-		s.error.Update(ctx)
-		e, ok := ctx.Next(Button3, Center, Left, Right)
-		if !ok {
-			break
-		}
-		switch e.Button {
-		case Button3, Center:
-			if !e.Click {
-				break
-			}
-			if ctx.NoSDCard || s.sdcard.shown {
-				s.Select(ctx)
-			} else {
-				s.sdcard.warning = &ConfirmWarningScreen{
+				ws := &ConfirmWarningScreen{
 					Title: "Remove SD card",
 					Body:  "Remove SD card to continue.\n\nHold button to ignore this warning.",
 					Icon:  assets.IconRight,
 				}
+				th := mainScreenTheme(page)
+			loop:
+				for !ctx.EmptySDSlot {
+					res := ws.Layout(ctx, ops.Begin(), th, dims)
+					dialog := ops.End()
+					switch res {
+					case ConfirmYes:
+						break loop
+					case ConfirmNo:
+						continue events
+					}
+					drawMainScreen(ctx, ops, dims, page)
+					dialog.Add(ops)
+					ctx.Frame()
+				}
+				ctx.EmptySDSlot = true
+				switch page {
+				case backupWallet:
+					backupWalletFlow(ctx, ops, th)
+				}
+			case Left:
+				if !e.Pressed {
+					break
+				}
+				page--
+				if page < 0 {
+					page = backupWallet
+				}
+			case Right:
+				if !e.Pressed {
+					break
+				}
+				page++
+				if page > backupWallet {
+					page = 0
+				}
 			}
 		}
+		drawMainScreen(ctx, ops, dims, page)
+		layoutNavigation(ctx, ops, mainScreenTheme(page), dims,
+			NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
+		ctx.Frame()
+	}
+}
 
-		switch e.Button {
-		case Left:
-			if !e.Pressed {
-				break
-			}
-			s.page--
-			if s.page < 0 {
-				s.page = backupWallet
-			}
-		case Right:
-			if !e.Pressed {
-				break
-			}
-			s.page++
-			if s.page > backupWallet {
-				s.page = 0
-			}
-		}
+func mainScreenTheme(page program) *Colors {
+	switch page {
+	case backupWallet:
+		return &descriptorTheme
+	default:
+		panic("invalid page")
+	}
+}
+
+func drawMainScreen(ctx *Context, ops op.Ctx, dims image.Point, page program) {
+	var th *Colors
+	var title string
+	th = mainScreenTheme(page)
+	switch page {
+	case backupWallet:
+		title = "Backup Wallet"
 	}
 	op.ColorOp(ops, th.Background)
 
 	layoutTitle(ctx, ops, dims.X, th.Text, title)
 
 	r := layout.Rectangle{Max: dims}
-	sz := s.layoutPage(ops.Begin(), th, dims.X)
+	sz := layoutMainPage(ops.Begin(), th, dims.X, page)
 	op.Position(ops, ops.End(), r.Center(sz))
 
-	sz = s.layoutPager(ops.Begin(), th)
+	sz = layoutMainPager(ops.Begin(), th, page)
 	_, footer := r.CutBottom(leadingSize)
 	op.Position(ops, ops.End(), footer.Center(sz))
 
@@ -2622,21 +1702,6 @@ func (s *MainScreen) Layout(ctx *Context, ops op.Ctx, dims image.Point, err erro
 	op.Position(ops, ops.End(), r.SE(versz.Add(image.Pt(4, 0))))
 	shsz := widget.LabelW(ops.Begin(), ctx.Styles.debug, 100, th.Text, "SeedHammer")
 	op.Position(ops, ops.End(), r.SW(shsz).Add(image.Pt(3, 0)))
-	switch {
-	default:
-		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
-	case s.warning != nil:
-		s.warning.Layout(ctx, ops.Begin(), th, dims)
-		ops.End().Add(ops)
-	case err != nil:
-		s.error.Layout(ctx, ops, th, dims,
-			"Error",
-			err.Error(),
-		)
-	case s.sdcard.warning != nil:
-		s.sdcard.warning.Layout(ctx, ops.Begin(), th, dims)
-		ops.End().Add(ops)
-	}
 }
 
 func layoutTitle(ctx *Context, ops op.Ctx, width int, col color.NRGBA, title string) image.Rectangle {
@@ -2713,7 +1778,7 @@ func layoutNavigation(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, bt
 	return r
 }
 
-func (s *MainScreen) layoutPage(ops op.Ctx, th *Colors, width int) image.Point {
+func layoutMainPage(ops op.Ctx, th *Colors, width int, page program) image.Point {
 	var h layout.Align
 
 	op.MaskOp(ops.Begin(), assets.ArrowLeft)
@@ -2726,7 +1791,7 @@ func (s *MainScreen) layoutPage(ops op.Ctx, th *Colors, width int) image.Point {
 	right := ops.End()
 	rightsz := h.Add(assets.ArrowRight.Bounds().Size())
 
-	contentsz := h.Add(s.layoutMainPlates(ops.Begin()))
+	contentsz := h.Add(layoutMainPlates(ops.Begin(), page))
 	content := ops.End()
 
 	const margin = 16
@@ -2741,8 +1806,8 @@ func (s *MainScreen) layoutPage(ops op.Ctx, th *Colors, width int) image.Point {
 	return image.Pt(width, h.Size.Y)
 }
 
-func (s *MainScreen) layoutMainPlates(ops op.Ctx) image.Point {
-	switch s.page {
+func layoutMainPlates(ops op.Ctx, page program) image.Point {
+	switch page {
 	case backupWallet:
 		img := assets.Hammer
 		op.ImageOp(ops, img)
@@ -2751,7 +1816,7 @@ func (s *MainScreen) layoutMainPlates(ops op.Ctx) image.Point {
 	panic("invalid page")
 }
 
-func (s *MainScreen) layoutPager(ops op.Ctx, th *Colors) image.Point {
+func layoutMainPager(ops op.Ctx, th *Colors, page program) image.Point {
 	const npages = int(backupWallet) + 1
 	const space = 4
 	if npages <= 1 {
@@ -2761,13 +1826,875 @@ func (s *MainScreen) layoutPager(ops op.Ctx, th *Colors) image.Point {
 	for i := 0; i < npages; i++ {
 		op.Offset(ops, image.Pt((sz.X+space)*i, 0))
 		mask := assets.Circle
-		if i == int(s.page) {
+		if i == int(page) {
 			mask = assets.CircleFilled
 		}
 		op.MaskOp(ops, mask)
 		op.ColorOp(ops, th.Text)
 	}
 	return image.Pt((sz.X+space)*npages-space, sz.Y)
+}
+
+func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors) {
+	mnemonic, ok := newMnemonicFlow(ctx, ops, th)
+	if !ok {
+		return
+	}
+	ss := new(SeedScreen)
+	for {
+		if !ss.Confirm(ctx, ops, th, mnemonic) {
+			return
+		}
+		desc, ok := inputDescriptorFlow(ctx, ops, th, mnemonic)
+		if !ok {
+			continue
+		}
+		if desc == nil {
+			plate, err := engraveSeed(ctx.Platform.PlateSizes(), ctx.Platform.EngraverParams(), mnemonic)
+			if err != nil {
+				errScr := NewErrorScreen(err)
+				for {
+					dims := ctx.Platform.DisplaySize()
+					dismissed := errScr.Layout(ctx, ops.Begin(), th, dims)
+					d := ops.End()
+					if dismissed {
+						break
+					}
+					ss.Draw(ctx, ops, th, dims, mnemonic)
+					d.Add(ops)
+					ctx.Frame()
+				}
+				continue
+			}
+			completed := NewEngraveScreen(ctx, plate).Engrave(ctx, ops, &engraveTheme)
+			if completed {
+				return
+			}
+			continue
+		}
+
+		ds := &DescriptorScreen{
+			Descriptor: *desc,
+			Mnemonic:   mnemonic,
+		}
+		for {
+			keyIdx, ok := ds.Confirm(ctx, ops, th)
+			if !ok {
+				break
+			}
+			plate, err := engravePlate(ctx.Platform.PlateSizes(), ctx.Platform.EngraverParams(), *desc, keyIdx, mnemonic)
+			if err != nil {
+				errScr := NewErrorScreen(err)
+				for {
+					dims := ctx.Platform.DisplaySize()
+					dismissed := errScr.Layout(ctx, ops.Begin(), th, dims)
+					d := ops.End()
+					if dismissed {
+						break
+					}
+					ss.Draw(ctx, ops, th, dims, mnemonic)
+					d.Add(ops)
+					ctx.Frame()
+				}
+				continue
+			}
+			completed := NewEngraveScreen(ctx, plate).Engrave(ctx, ops, &engraveTheme)
+			if completed {
+				return
+			}
+		}
+	}
+}
+
+func newMnemonicFlow(ctx *Context, ops op.Ctx, th *Colors) (bip39.Mnemonic, bool) {
+	cs := &ChoiceScreen{
+		Title:   "Input Seed",
+		Lead:    "Choose input method",
+		Choices: []string{"KEYBOARD", "CAMERA"},
+	}
+	showErr := func(errScreen *ErrorScreen) {
+		for {
+			dims := ctx.Platform.DisplaySize()
+			dismissed := errScreen.Layout(ctx, ops.Begin(), th, dims)
+			d := ops.End()
+			if dismissed {
+				break
+			}
+			cs.Draw(ctx, ops, th, dims)
+			d.Add(ops)
+			ctx.Frame()
+		}
+	}
+outer:
+	for {
+		choice, ok := cs.Choose(ctx, ops, th)
+		if !ok {
+			return nil, false
+		}
+		switch choice {
+		case 0: // Keyboard.
+			cs := &ChoiceScreen{
+				Title:   "Input Seed",
+				Lead:    "Choose number of words",
+				Choices: []string{"12 WORDS", "24 WORDS"},
+			}
+			for {
+				choice, ok := cs.Choose(ctx, ops, th)
+				if !ok {
+					continue outer
+				}
+				mnemonic := emptyMnemonic([]int{12, 24}[choice])
+				inputWordsFlow(ctx, ops, th, mnemonic, 0)
+				if !isEmptyMnemonic(mnemonic) {
+					return mnemonic, true
+				}
+			}
+		case 1: // Camera.
+			res, ok := (&ScanScreen{
+				Title: "Scan",
+				Lead:  "SeedQR or Mnemonic",
+			}).Scan(ctx, ops)
+			if !ok {
+				continue
+			}
+			if b, ok := res.([]byte); ok {
+				if sqr, ok := seedqr.Parse(b); ok {
+					res = sqr
+				} else if sqr, err := bip39.ParseMnemonic(strings.ToLower(string(b))); err == nil || errors.Is(err, bip39.ErrInvalidChecksum) {
+					res = sqr
+				}
+			}
+			seed, ok := res.(bip39.Mnemonic)
+			if !ok {
+				showErr(&ErrorScreen{
+					Title: "Invalid Seed",
+					Body:  "The scanned data does not represent a seed.",
+				})
+				continue
+			}
+			return seed, true
+		}
+	}
+}
+
+type SeedScreen struct {
+	selected int
+}
+
+func (s *SeedScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) bool {
+	for {
+	events:
+		for {
+			e, ok := ctx.Next(Button1, Button2, Center, Button3, Up, Down)
+			if !ok {
+				break
+			}
+			switch e.Button {
+			case Button1:
+				if !e.Click {
+					break
+				}
+				if isEmptyMnemonic(mnemonic) {
+					return false
+				}
+				confirm := &ConfirmWarningScreen{
+					Title: "Discard Seed?",
+					Body:  "Going back will discard the seed.\n\nHold button to confirm.",
+					Icon:  assets.IconDiscard,
+				}
+				for {
+					dims := ctx.Platform.DisplaySize()
+					res := confirm.Layout(ctx, ops.Begin(), th, dims)
+					d := ops.End()
+					switch res {
+					case ConfirmNo:
+						continue events
+					case ConfirmYes:
+						return false
+					}
+					s.Draw(ctx, ops, th, dims, mnemonic)
+					d.Add(ops)
+					ctx.Frame()
+				}
+			case Button2, Center:
+				if !e.Click {
+					break
+				}
+				inputWordsFlow(ctx, ops, th, mnemonic, s.selected)
+				continue
+			case Button3:
+				if !e.Click || !isMnemonicComplete(mnemonic) {
+					break
+				}
+				showErr := func(scr *ErrorScreen) {
+					for {
+						dims := ctx.Platform.DisplaySize()
+						dismissed := scr.Layout(ctx, ops.Begin(), th, dims)
+						d := ops.End()
+						if dismissed {
+							break
+						}
+						s.Draw(ctx, ops, th, dims, mnemonic)
+						d.Add(ops)
+						ctx.Frame()
+					}
+				}
+				if !mnemonic.Valid() {
+					scr := &ErrorScreen{
+						Title: "Invalid Seed",
+					}
+					var words []string
+					for _, w := range mnemonic {
+						words = append(words, bip39.LabelFor(w))
+					}
+					if nonstandard.ElectrumSeed(strings.Join(words, " ")) {
+						scr.Body = "Electrum seeds are not supported."
+					} else {
+						scr.Body = "The seed phrase is invalid.\n\nCheck the words and try again."
+					}
+					showErr(scr)
+					break
+				}
+				_, ok = deriveMasterKey(mnemonic, &chaincfg.MainNetParams)
+				if !ok {
+					showErr(&ErrorScreen{
+						Title: "Invalid Seed",
+						Body:  "The seed is invalid.",
+					})
+					break
+				}
+				return true
+			case Down:
+				if e.Pressed && s.selected < len(mnemonic)-1 {
+					s.selected++
+				}
+			case Up:
+				if e.Pressed && s.selected > 0 {
+					s.selected--
+				}
+			}
+		}
+
+		dims := ctx.Platform.DisplaySize()
+		s.Draw(ctx, ops, th, dims, mnemonic)
+
+		layoutNavigation(ctx, ops, th, dims,
+			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
+			NavButton{Button: Button2, Style: StyleSecondary, Icon: assets.IconEdit},
+		)
+		if isMnemonicComplete(mnemonic) {
+			layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
+		}
+		ctx.Frame()
+	}
+}
+
+func isMnemonicComplete(m bip39.Mnemonic) bool {
+	for _, w := range m {
+		if w == -1 {
+			return false
+		}
+	}
+	return len(m) > 0
+}
+
+func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, mnemonic bip39.Mnemonic) {
+	op.ColorOp(ops, th.Background)
+	layoutTitle(ctx, ops, dims.X, th.Text, "Confirm Seed")
+
+	style := ctx.Styles.word
+	_, longestPrefix := style.Layout(math.MaxInt, "24: ")
+	layoutWord := func(ops op.Ctx, col color.NRGBA, n int, word string) image.Point {
+		prefix := widget.Label(ops.Begin(), style, col, fmt.Sprintf("%d: ", n))
+		op.Position(ops, ops.End(), image.Pt(longestPrefix.X-prefix.X, 0))
+		txt := widget.Label(ops.Begin(), style, col, word)
+		op.Position(ops, ops.End(), image.Pt(longestPrefix.X, 0))
+		return image.Pt(longestPrefix.X+txt.X, txt.Y)
+	}
+
+	y := 0
+	longest := layoutWord(op.Ctx{}, color.NRGBA{}, 24, longestWord)
+	r := layout.Rectangle{Max: dims}
+	navw := assets.NavBtnPrimary.Bounds().Dx()
+	list := r.Shrink(leadingSize, 0, 0, 0)
+	content := list.Shrink(scrollFadeDist, navw, scrollFadeDist, navw)
+	lineHeight := longest.Y + 2
+	linesPerPage := content.Dy() / lineHeight
+	scroll := s.selected - linesPerPage/2
+	maxScroll := len(mnemonic) - linesPerPage
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	off := content.Min.Add(image.Pt(0, -scroll*lineHeight))
+	{
+		ops := ops.Begin()
+		for i, w := range mnemonic {
+			ops.Begin()
+			col := th.Text
+			if i == s.selected {
+				col = th.Background
+				r := image.Rectangle{Max: longest}
+				r.Min.Y -= 3
+				op.MaskOp(ops, assets.ButtonFocused.For(r))
+				op.ColorOp(ops, th.Text)
+			}
+			word := strings.ToUpper(bip39.LabelFor(w))
+			layoutWord(ops, col, i+1, word)
+			pos := image.Pt(0, y).Add(off)
+			op.Position(ops, ops.End(), pos)
+			y += lineHeight
+		}
+	}
+	fadeClip(ops, ops.End(), image.Rectangle(list))
+}
+
+func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) (*urtypes.OutputDescriptor, bool) {
+	cs := &ChoiceScreen{
+		Title:   "Descriptor",
+		Lead:    "Choose input method",
+		Choices: []string{"SCAN", "SKIP"},
+	}
+	if ctx.LastDescriptor != nil {
+		if _, match := descriptorKeyIdx(*ctx.LastDescriptor, mnemonic, ""); match {
+			cs.Choices = append(cs.Choices, "RE-USE")
+		}
+	}
+	showErr := func(errScreen *ErrorScreen) {
+		for {
+			dims := ctx.Platform.DisplaySize()
+			dismissed := errScreen.Layout(ctx, ops.Begin(), th, dims)
+			d := ops.End()
+			if dismissed {
+				break
+			}
+			cs.Draw(ctx, ops, th, dims)
+			d.Add(ops)
+			ctx.Frame()
+		}
+	}
+	for {
+		choice, ok := cs.Choose(ctx, ops, th)
+		if !ok {
+			return nil, false
+		}
+		switch choice {
+		case 0: // Scan.
+			res, ok := (&ScanScreen{
+				Title: "Scan",
+				Lead:  "Wallet Output Descriptor",
+			}).Scan(ctx, ops)
+			if !ok {
+				continue
+			}
+			desc, ok := res.(urtypes.OutputDescriptor)
+			if !ok {
+				if b, isbytes := res.([]byte); isbytes {
+					d, err := nonstandard.OutputDescriptor(b)
+					desc, ok = d, err == nil
+				}
+			}
+			if !ok {
+				showErr(&ErrorScreen{
+					Title: "Invalid Descriptor",
+					Body:  "The scanned data does not represent a wallet output descriptor or XPUB key.",
+				})
+				continue
+			}
+			if !address.Supported(desc) {
+				showErr(&ErrorScreen{
+					Title: "Invalid Descriptor",
+					Body:  "The scanned descriptor is not supported.",
+				})
+				continue
+			}
+			if len(desc.Keys) == 1 && desc.Keys[0].MasterFingerprint == 0 {
+				mfp, _ := masterFingerprintFor(mnemonic, &chaincfg.MainNetParams)
+				desc.Keys[0].MasterFingerprint = mfp
+			}
+			desc.Title = backup.TitleString(constant.Font, desc.Title)
+			ctx.LastDescriptor = &desc
+			return &desc, true
+		case 1: // Skip descriptor.
+			return nil, true
+		case 2: // Re-use.
+			return ctx.LastDescriptor, true
+		}
+	}
+}
+
+type DescriptorScreen struct {
+	Descriptor urtypes.OutputDescriptor
+	Mnemonic   bip39.Mnemonic
+}
+
+func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (int, bool) {
+	showErr := func(errScreen *ErrorScreen) {
+		for {
+			dims := ctx.Platform.DisplaySize()
+			dismissed := errScreen.Layout(ctx, ops.Begin(), th, dims)
+			d := ops.End()
+			if dismissed {
+				break
+			}
+			s.Draw(ctx, ops, th, dims)
+			d.Add(ops)
+			ctx.Frame()
+		}
+	}
+	for {
+		for {
+			e, ok := ctx.Next(Button1, Button2, Button3)
+			if !ok {
+				break
+			}
+			switch e.Button {
+			case Button1:
+				if e.Click {
+					return 0, false
+				}
+			case Button2:
+				if !e.Click {
+					break
+				}
+				NewAddressesScreen(s.Descriptor).Show(ctx, ops, th)
+			case Button3:
+				if !e.Click {
+					break
+				}
+				if err := validateDescriptor(ctx.Platform.EngraverParams(), s.Descriptor); err != nil {
+					showErr(NewErrorScreen(err))
+					continue
+				}
+				keyIdx, ok := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
+				if !ok {
+					// Passphrase protected seeds don't match the descriptor, so
+					// allow the user to ignore the mismatch. Don't allow this for
+					// multisig descriptors where we can't know which key the seed
+					// belongs to.
+					if len(s.Descriptor.Keys) == 1 {
+						confirm := &ConfirmWarningScreen{
+							Title: "Unknown Wallet",
+							Body:  "The wallet does not match the seed.\n\nIf it is passphrase protected, long press to confirm.",
+							Icon:  assets.IconCheckmark,
+						}
+					loop:
+						for {
+							dims := ctx.Platform.DisplaySize()
+							res := confirm.Layout(ctx, ops.Begin(), th, dims)
+							d := ops.End()
+							switch res {
+							case ConfirmYes:
+								return 0, true
+							case ConfirmNo:
+								break loop
+							}
+							s.Draw(ctx, ops, th, dims)
+							d.Add(ops)
+							ctx.Frame()
+						}
+					} else {
+						showErr(&ErrorScreen{
+							Title: "Unknown Wallet",
+							Body:  "The wallet does not match the seed or is passphrase protected.",
+						})
+					}
+					continue
+				}
+				return keyIdx, true
+			}
+		}
+
+		dims := ctx.Platform.DisplaySize()
+		s.Draw(ctx, ops, th, dims)
+		layoutNavigation(ctx, ops, th, dims,
+			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
+			NavButton{Button: Button2, Style: StyleSecondary, Icon: assets.IconInfo},
+			NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
+		)
+		ctx.Frame()
+	}
+}
+
+func (s *DescriptorScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
+	const infoSpacing = 8
+
+	desc := s.Descriptor
+	op.ColorOp(ops, th.Background)
+
+	// Title.
+	r := layout.Rectangle{Max: dims}
+	layoutTitle(ctx, ops, dims.X, th.Text, "Confirm Wallet")
+
+	btnw := assets.NavBtnPrimary.Bounds().Dx()
+	body := r.Shrink(leadingSize, btnw, 0, btnw)
+
+	type linePos struct {
+		w op.CallOp
+		y int
+	}
+	var bodytxt richText
+
+	bodyst := ctx.Styles.body
+	subst := ctx.Styles.subtitle
+	if desc.Title != "" {
+		bodytxt.Add(ops, subst, body.Dx(), th.Text, "Title")
+		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Title)
+		bodytxt.Y += infoSpacing
+	}
+	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Type")
+	var typetxt string
+	switch desc.Type {
+	case urtypes.Singlesig:
+		typetxt = "Singlesig"
+	default:
+		typetxt = fmt.Sprintf("%d-of-%d multisig", desc.Threshold, len(desc.Keys))
+	}
+	if len(desc.Keys) > 0 && desc.Keys[0].Network != &chaincfg.MainNetParams {
+		typetxt += " (testnet)"
+	}
+	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, typetxt)
+	bodytxt.Y += infoSpacing
+	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Script")
+	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Script.String())
+
+	ops.Begin()
+	for _, l := range bodytxt.Lines {
+		l.W.Add(ops)
+	}
+	op.Position(ops, ops.End(), body.Min.Add(image.Pt(0, scrollFadeDist)))
+}
+
+func NewEngraveScreen(ctx *Context, plate Plate) *EngraveScreen {
+	var ins []Instruction
+	if !ctx.Calibrated {
+		ins = append(ins, EngraveFirstSideA...)
+	} else {
+		ins = append(ins, EngraveSideA...)
+	}
+	if len(plate.Sides) > 1 {
+		ins = append(ins, EngraveSideB...)
+	}
+	ins = append(ins, EngraveSuccess...)
+	s := &EngraveScreen{
+		plate:        plate,
+		instructions: ins,
+	}
+	for i, ins := range s.instructions {
+		repl := strings.NewReplacer(
+			"{{.Name}}", plateName(plate.Size),
+		)
+		s.instructions[i].resolvedBody = repl.Replace(ins.Body)
+		// As a special case, the Sh01 image is a placeholder for the plate-specific image.
+		if ins.Image == assets.Sh01 {
+			s.instructions[i].Image = plateImage(plate.Size)
+		}
+	}
+	return s
+}
+
+type EngraveScreen struct {
+	instructions []Instruction
+	plate        Plate
+
+	step   int
+	dryRun struct {
+		timeout time.Time
+		enabled bool
+	}
+	engrave engraveState
+	confirm ConfirmDelay
+}
+
+type engraveState struct {
+	dev          Engraver
+	cancel       chan struct{}
+	progress     chan float32
+	errs         chan error
+	lastProgress float32
+}
+
+func (s *EngraveScreen) close() {
+	if s.engrave.cancel != nil {
+		close(s.engrave.cancel)
+	}
+	s.engrave = engraveState{}
+}
+
+func (s *EngraveScreen) showError(ctx *Context, ops op.Ctx, th *Colors, errScr *ErrorScreen) {
+	for {
+		dims := ctx.Platform.DisplaySize()
+		dismissed := errScr.Layout(ctx, ops.Begin(), th, dims)
+		d := ops.End()
+		if dismissed {
+			break
+		}
+		s.Draw(ctx, ops, th, dims)
+		d.Add(ops)
+		ctx.Frame()
+	}
+}
+
+func (s *EngraveScreen) moveStep(ctx *Context, ops op.Ctx, th *Colors) bool {
+	ins := s.instructions[s.step]
+	if ins.Type == ConnectInstruction {
+		if s.engrave.dev != nil {
+			return false
+		}
+		s.engrave = engraveState{}
+		dev, err := ctx.Platform.Engraver()
+		if err != nil {
+			log.Printf("gui: failed to connect to engraver: %v", err)
+			s.showError(ctx, ops, th, &ErrorScreen{
+				Title: "Connection Error",
+				Body:  fmt.Sprintf("Ensure the engraver is turned on and verify that it is connected to the middle port of this device.\n\nError details: %v", err),
+			})
+			return false
+		}
+		s.engrave.dev = dev
+	}
+	s.step++
+	if s.step == len(s.instructions) {
+		s.close()
+		return true
+	}
+	ins = s.instructions[s.step]
+	if ins.Type == EngraveInstruction {
+		plan := s.plate.Sides[ins.Side]
+		if s.dryRun.enabled {
+			plan = engrave.DryRun(plan)
+		}
+		totalDist := 0
+		pen := image.Point{}
+		plan(func(cmd engrave.Command) {
+			totalDist += engrave.ManhattanDist(pen, cmd.Coord)
+			pen = cmd.Coord
+		})
+		cancel := make(chan struct{})
+		errs := make(chan error, 1)
+		progress := make(chan float32, 1)
+		s.engrave.cancel = cancel
+		s.engrave.errs = errs
+		s.engrave.progress = progress
+		dev := s.engrave.dev
+		wakeup := ctx.Platform.Wakeup
+		go func() {
+			defer wakeup()
+			defer dev.Close()
+			pplan := func(yield func(cmd engrave.Command)) {
+				dist := 0
+				completed := 0
+				pen := image.Point{}
+				plan(func(cmd engrave.Command) {
+					yield(cmd)
+					completed++
+					dist += engrave.ManhattanDist(pen, cmd.Coord)
+					pen = cmd.Coord
+					// Don't spam the progress channel.
+					if completed%10 != 0 && dist < totalDist {
+						return
+					}
+					select {
+					case <-progress:
+					default:
+					}
+					p := float32(dist) / float32(totalDist)
+					progress <- p
+					wakeup()
+				})
+			}
+			errs <- dev.Engrave(s.plate.Size, pplan, cancel)
+		}()
+	}
+	return false
+}
+
+func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
+	for {
+	loop:
+		for {
+			select {
+			case p := <-s.engrave.progress:
+				s.engrave.lastProgress = p
+			case err := <-s.engrave.errs:
+				s.engrave = engraveState{}
+				if err != nil {
+					log.Printf("gui: connection lost to engraver: %v", err)
+					s.step--
+					s.showError(ctx, ops, th, &ErrorScreen{
+						Title: "Connection Error",
+						Body:  fmt.Sprintf("Turn off the engraver and disconnect this device from it. Wait 10 seconds, then turn on the engraver and reconnect.\n\nError details: %v", err),
+					})
+					break
+				}
+				ctx.Calibrated = true
+				s.step++
+				if s.step == len(s.instructions) {
+					return true
+				}
+			default:
+				break loop
+			}
+		}
+
+		var progress float32
+		var ins Instruction
+		canPrev := false
+		for {
+			ins = s.instructions[s.step]
+			canPrev = s.step > 0 && s.instructions[s.step-1].Type == PrepareInstruction
+			progress = s.confirm.Progress(ctx)
+			if progress == 1. {
+				s.moveStep(ctx, ops, th)
+				s.confirm = ConfirmDelay{}
+				continue
+			}
+			if !s.dryRun.timeout.IsZero() {
+				now := ctx.Platform.Now()
+				d := s.dryRun.timeout.Sub(now)
+				if d <= 0 {
+					ctx.Buttons[Button2] = false
+					s.dryRun.timeout = time.Time{}
+					s.dryRun.enabled = !s.dryRun.enabled
+				}
+			}
+			e, ok := ctx.Next(Button1, Button2, Button3)
+			if !ok {
+				break
+			}
+			switch e.Button {
+			case Button1:
+				if !e.Click {
+					break
+				}
+				if canPrev {
+					s.step--
+				} else {
+					confirm := &ConfirmWarningScreen{
+						Title: "Cancel?",
+						Body:  "This will cancel the engraving process.\n\nHold button to confirm.",
+						Icon:  assets.IconDiscard,
+					}
+				loop2:
+					for {
+						dims := ctx.Platform.DisplaySize()
+						res := confirm.Layout(ctx, ops.Begin(), th, dims)
+						d := ops.End()
+						switch res {
+						case ConfirmNo:
+							break loop2
+						case ConfirmYes:
+							s.close()
+							return false
+						}
+						s.Draw(ctx, ops, th, dims)
+						d.Add(ops)
+						ctx.Frame()
+					}
+				}
+			case Button2:
+				if e.Pressed {
+					t := ctx.Platform.Now().Add(confirmDelay)
+					s.dryRun.timeout = t
+					ctx.WakeupAt(t)
+				} else {
+					s.dryRun.timeout = time.Time{}
+				}
+			case Button3:
+				if ins.Type == ConnectInstruction {
+					if e.Pressed {
+						ctx.Buttons[Button3] = false
+						s.confirm.Start(ctx, confirmDelay)
+					} else {
+						s.confirm = ConfirmDelay{}
+					}
+					break
+				} else if !e.Click || ins.Type == EngraveInstruction {
+					break
+				}
+				if s.moveStep(ctx, ops, th) {
+					return true
+				}
+			}
+		}
+
+		dims := ctx.Platform.DisplaySize()
+		s.Draw(ctx, ops, th, dims)
+
+		icnBack := assets.IconBack
+		if canPrev {
+			icnBack = assets.IconLeft
+		}
+		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button1, Style: StyleSecondary, Icon: icnBack})
+		switch ins.Type {
+		case EngraveInstruction:
+		case ConnectInstruction:
+			icn := image.RGBA64Image(assets.IconHammer)
+			if s.confirm.Running() {
+				icn = ProgressImage{
+					Progress: progress,
+					Src:      assets.IconProgress,
+				}
+			}
+			layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: icn})
+		default:
+			layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconRight})
+		}
+		ctx.Frame()
+	}
+}
+
+func (s *EngraveScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
+	op.ColorOp(ops, th.Background)
+	layoutTitle(ctx, ops, dims.X, th.Text, fmt.Sprintf("Engrave Plate"))
+
+	r := layout.Rectangle{Max: dims}
+	_, subt := r.CutTop(leadingSize)
+	subtsz := widget.Label(ops.Begin(), ctx.Styles.body, th.Text, fmt.Sprintf("%.8x", s.plate.MasterFingerprint))
+	op.Position(ops, ops.End(), subt.N(subtsz).Sub(image.Pt(0, 4)))
+
+	const margin = 8
+	_, content := r.CutTop(leadingSize)
+	ins := s.instructions[s.step]
+	if ins.Type == EngraveInstruction {
+		progress := fmt.Sprintf("%d%%", int(s.engrave.lastProgress*100))
+		_, content = subt.CutTop(subtsz.Y)
+		middle, _ := content.CutBottom(leadingSize)
+		op.Offset(ops, middle.Center(assets.ProgressCircle.Bounds().Size()))
+		op.MaskOp(ops, ProgressImage{
+			Progress: s.engrave.lastProgress,
+			Src:      assets.ProgressCircle,
+		})
+		op.ColorOp(ops, th.Text)
+		sz := widget.Label(ops.Begin(), ctx.Styles.progress, th.Text, progress)
+		op.Position(ops, ops.End(), middle.Center(sz))
+	}
+	content = content.Shrink(0, margin, 0, margin)
+	content, lead := content.CutBottom(leadingSize)
+	bodysz := widget.LabelW(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text, ins.resolvedBody)
+	if img := ins.Image; img != nil {
+		sz := img.Bounds().Size()
+		op.Offset(ops, image.Pt((bodysz.X-sz.X)/2, bodysz.Y))
+		op.ImageOp(ops, img)
+		if sz.X > bodysz.X {
+			bodysz.X = sz.X
+		}
+		bodysz.Y += sz.Y
+	}
+	op.Position(ops, ops.End(), content.Center(bodysz))
+	leadsz := widget.LabelW(ops.Begin(), ctx.Styles.lead, dims.X-2*margin, th.Text, ins.Lead)
+	op.Position(ops, ops.End(), lead.Center(leadsz))
+
+	progressw := dims.X * (s.step + 1) / len(s.instructions)
+	op.ClipOp(image.Rectangle{Max: image.Pt(progressw, 2)}).Add(ops)
+	op.ColorOp(ops, th.Text)
+
+	if s.dryRun.enabled {
+		sz := widget.Label(ops.Begin(), ctx.Styles.debug, th.Text, "dry-run")
+		op.Position(ops, ops.End(), r.SE(sz).Sub(image.Pt(4, 0)))
+	}
 }
 
 type Platform interface {
@@ -2832,11 +2759,38 @@ const (
 	Rune // Enter rune.
 )
 
+func (b Button) String() string {
+	switch b {
+	case Up:
+		return "up"
+	case Down:
+		return "down"
+	case Left:
+		return "left"
+	case Right:
+		return "right"
+	case Center:
+		return "center"
+	case Button1:
+		return "b1"
+	case Button2:
+		return "b2"
+	case Button3:
+		return "b3"
+	case CCW:
+		return "ccw"
+	case CW:
+		return "cw"
+	case Rune:
+		return "rune"
+	default:
+		panic("invalid button")
+	}
+}
+
 type App struct {
 	root op.Ops
 	ctx  *Context
-	err  error
-	scr  MainScreen
 	idle struct {
 		start  time.Time
 		active bool
@@ -2851,6 +2805,15 @@ func NewApp(pl Platform, version string) (*App, error) {
 		ctx: ctx,
 	}
 	a.idle.start = pl.Now()
+	frameCh := make(chan struct{})
+	ctx.Frame = func() {
+		frameCh <- struct{}{}
+		<-frameCh
+	}
+	go func() {
+		<-frameCh
+		mainFlow(ctx, a.root.Context())
+	}()
 	return a, nil
 }
 
@@ -2863,7 +2826,7 @@ func (a *App) Frame() {
 		a.idle.start = now
 		switch e := e.(type) {
 		case SDCardEvent:
-			a.ctx.NoSDCard = !e.Inserted
+			a.ctx.EmptySDSlot = !e.Inserted
 		case Event:
 			a.ctx.Events(e)
 		}
@@ -2888,8 +2851,8 @@ func (a *App) Frame() {
 	}
 	dims := a.ctx.Platform.DisplaySize()
 	start := time.Now()
-	ops := a.root.Reset()
-	a.scr.Layout(a.ctx, ops, dims, a.err)
+	a.root.Reset()
+	a.ctx.Frame()
 	dirty := a.root.Clip(image.Rectangle{Max: dims})
 	layoutTime := time.Now()
 	renderTime := time.Now()

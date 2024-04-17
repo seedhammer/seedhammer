@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"unsafe"
 
@@ -95,6 +96,9 @@ func (p *Platform) Events() []gui.Event {
 	}
 	var evts []gui.Event
 	for {
+		// Give the input go routines a chance to process
+		// incoming events.
+		runtime.Gosched()
 		select {
 		case e := <-p.events:
 			evts = append(evts, e)

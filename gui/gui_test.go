@@ -23,40 +23,57 @@ import (
 	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/op"
 	"seedhammer.com/nonstandard"
+	"seedhammer.com/seedqr"
 )
 
 func TestDescriptorScreenError(t *testing.T) {
-	ctx := NewContext(newPlatform())
 	dupDesc := urtypes.OutputDescriptor{
 		Script:    urtypes.P2WSH,
+		Type:      urtypes.SortedMulti,
 		Threshold: 2,
 		Keys:      make([]urtypes.KeyDescriptor, 2),
 	}
-	fillDescriptor(t, dupDesc, dupDesc.Script.DerivationPath(), 12, 0)
+	dupMnemonic := fillDescriptor(t, dupDesc, dupDesc.Script.DerivationPath(), 12, 0)
 	dupDesc.Keys[1] = dupDesc.Keys[0]
 	smallDesc := urtypes.OutputDescriptor{
 		Script:    urtypes.P2WSH,
+		Type:      urtypes.SortedMulti,
 		Threshold: 2,
 		Keys:      make([]urtypes.KeyDescriptor, 5),
 	}
-	fillDescriptor(t, smallDesc, smallDesc.Script.DerivationPath(), 12, 0)
+	smallMnemonic := fillDescriptor(t, smallDesc, smallDesc.Script.DerivationPath(), 12, 0)
+	okDesc := urtypes.OutputDescriptor{
+		Script:    urtypes.P2WSH,
+		Type:      urtypes.SortedMulti,
+		Threshold: 3,
+		Keys:      make([]urtypes.KeyDescriptor, 5),
+	}
+	okMnemonic := fillDescriptor(t, okDesc, okDesc.Script.DerivationPath(), 12, 0)
 	tests := []struct {
-		name string
-		desc urtypes.OutputDescriptor
+		name     string
+		desc     urtypes.OutputDescriptor
+		mnemonic bip39.Mnemonic
+		ok       bool
 	}{
-		{"duplicate key", dupDesc},
-		{"small threshold", smallDesc},
+		{"duplicate key", dupDesc, dupMnemonic, false},
+		{"small threshold", smallDesc, smallMnemonic, false},
+		{"ok descriptor", okDesc, okMnemonic, true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			scr := &DescriptorScreen{
 				Descriptor: test.desc,
+				Mnemonic:   test.mnemonic,
 			}
-			ctxButton(ctx, Button3)
-			scr.Layout(ctx, op.Ctx{}, image.Point{})
-			if scr.warning == nil {
-				t.Fatal("DescriptorScreen accepted invalid descriptor")
-			}
+			ctx := NewContext(newPlatform())
+			// Ok descriptor, ok error message, back.
+			ctxButton(ctx, Button3, Button3, Button1)
+			quit := runUI(ctx, func() {
+				if _, ok := scr.Confirm(ctx, op.Ctx{}, &descriptorTheme); ok != test.ok {
+					t.Fatalf("DescriptorScreen.Confirm returned %v, expected %v", ok, test.ok)
+				}
+			})
+			defer quit()
 		})
 	}
 }
@@ -102,23 +119,71 @@ func TestValidateDescriptor(t *testing.T) {
 	}
 }
 
+func runUI(ctx *Context, f func()) func() {
+	token := new(int)
+	frameCh := make(chan struct{})
+	closed := make(chan struct{})
+	ctx.Frame = func() {
+		frameCh <- struct{}{}
+		select {
+		case <-frameCh:
+		case <-closed:
+		}
+	}
+	go func() {
+		defer func() {
+			if v := recover(); v != nil && v != token {
+				panic(v)
+			}
+		}()
+		defer close(closed)
+		<-frameCh
+		f()
+	}()
+	quit := func() {
+		ctx.Frame = func() {
+			panic(token)
+		}
+		close(frameCh)
+		<-closed
+		ctx.Frame = nil
+	}
+	return quit
+}
+
+func resetOps(ops *op.Ops, f func()) func() {
+	return func() {
+		ops.Reset()
+		f()
+	}
+}
+
+func opsContains(ops *op.Ops, str string) bool {
+	clip := image.Rectangle{Max: image.Pt(testDisplayDim, testDisplayDim)}
+	str = strings.ToLower(str)
+	txt := strings.Join(ops.ExtractText(clip), " ")
+	return strings.Index(strings.ToLower(txt), str) != -1
+}
+
 func TestMainScreen(t *testing.T) {
-	scr := new(MainScreen)
 	p := newPlatform()
 	ctx := NewContext(p)
 
-	frame := func() {
-		scr.Layout(ctx, op.Ctx{}, image.Point{}, nil)
-	}
+	ops := new(op.Ops)
+	quit := runUI(ctx, func() {
+		mainFlow(ctx, ops.Context())
+	})
+	defer quit()
+	frame := resetOps(ops, ctx.Frame)
 	// Test sd card warning.
 	ctxButton(ctx, Button3)
 	frame()
-	if scr.sdcard.warning == nil {
+	if !opsContains(ops, "Remove SD") {
 		t.Fatal("MainScreen ignored SD card present")
 	}
-	ctx.NoSDCard = true
+	ctx.EmptySDSlot = true
 	frame()
-	if scr.sdcard.warning != nil {
+	if opsContains(ops, "Remove SD") {
 		t.Fatal("MainScreen ignored SD card ejected")
 	}
 	// Input method camera
@@ -126,7 +191,7 @@ func TestMainScreen(t *testing.T) {
 	// Scan xpub as descriptor.
 	ctxQR(t, ctx, p, "xpub6F148LnjUhGrHfEN6Pa8VkwF8L6FJqYALxAkuHfacfVhMLVY4MRuUVMxr9pguAv67DHx1YFxqoKN8s4QfZtD9sR2xRCffTqi9E8FiFLAYk8")
 	frame()
-	if scr.seed.warning == nil {
+	if !opsContains(ops, "Invalid Seed") {
 		t.Fatal("MainScreen accepted invalid data for a Seed")
 	}
 }
@@ -147,8 +212,15 @@ func TestNonParticipatingSeed(t *testing.T) {
 	// Accept descriptor.
 	ctxButton(ctx, Button3)
 
-	scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if scr.warning == nil || scr.warning.Title != "Unknown Wallet" {
+	ops := new(op.Ops)
+	quit := runUI(ctx, func() {
+		if _, ok := scr.Confirm(ctx, ops.Context(), &descriptorTheme); ok {
+			t.Fatal("a non-participating seed was accepted")
+		}
+	})
+	defer quit()
+	ctx.Frame()
+	if !opsContains(ops, "Unknown Wallet") {
 		t.Fatal("a non-participating seed was accepted")
 	}
 }
@@ -175,13 +247,18 @@ func TestEngraveScreenCancel(t *testing.T) {
 	ctxButton(ctx, Button1)
 	// Hold confirm.
 	ctxPress(ctx, Button3)
-	res := scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if res != ResultNone {
+	var cancelled bool
+	quit := runUI(ctx, func() {
+		cancelled = !scr.Engrave(ctx, op.Ctx{}, &engraveTheme)
+	})
+	defer quit()
+	ctx.Frame()
+	if cancelled {
 		t.Error("exited screen without confirmation")
 	}
 	p.timeOffset += confirmDelay
-	res = scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if res != ResultCancelled {
+	ctx.Frame()
+	if !cancelled {
 		t.Error("failed to exit screen")
 	}
 }
@@ -228,19 +305,23 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	p.engrave.connErr = errors.New("failed to connect")
 	ctx := NewContext(p)
 	scr := newTestEngraveScreen(t, ctx)
+	ops := new(op.Ops)
+	quit := runUI(ctx, func() {
+		scr.Engrave(ctx, ops.Context(), &engraveTheme)
+	})
+	defer quit()
+	frame := resetOps(ops, ctx.Frame)
 	// Press next until connect is reached.
 	for scr.instructions[scr.step].Type != ConnectInstruction {
 		ctxButton(ctx, Button3)
-		scr.Layout(ctx, op.Ctx{}, image.Point{})
+		ctx.Frame()
 	}
 	// Hold connect.
 	ctxPress(ctx, Button3)
-	if res := scr.Layout(ctx, op.Ctx{}, image.Point{}); res != ResultNone {
-		t.Error("exited screen without confirmation")
-	}
+	frame()
 	p.timeOffset += confirmDelay
-	scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if scr.engrave.warning == nil {
+	frame()
+	if !opsContains(ops, p.engrave.connErr.Error()) {
 		t.Fatal("engraver error did not propagate to screen")
 	}
 	// Dismiss error.
@@ -250,43 +331,62 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	p.engrave.ioErr = errors.New("error during engraving")
 	// Hold connect.
 	ctxPress(ctx, Button3)
-	if res := scr.Layout(ctx, op.Ctx{}, image.Point{}); res != ResultNone {
-		t.Error("exited screen without confirmation")
-	}
+	frame()
 	p.timeOffset += confirmDelay
-	scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if err := scr.engrave.warning; err != nil {
-		t.Fatalf("screen reported error for connection success: %v", err)
+	frame()
+	if opsContains(ops, "error") {
+		t.Fatal("screen reported error for connection success")
 	}
-	for scr.engrave.warning == nil {
-		scr.Layout(ctx, op.Ctx{}, image.Point{})
+	for {
+		frame()
+		if opsContains(ops, p.engrave.ioErr.Error()) {
+			break
+		}
 	}
 	// Dismiss error and verify screen exits.
 	ctxButton(ctx, Button3)
-	scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if scr.engrave.warning != nil {
+	frame()
+	if opsContains(ops, "error") {
 		t.Fatal("screen didn't exit after fatal engraver error")
 	}
 	// Verify device was closed.
 	<-p.engrave.closed
 }
 
-func TestScanScreenError(t *testing.T) {
+func TestScanScreenConnectError(t *testing.T) {
 	p := newPlatform()
 	// Fail on connect.
 	ctx := NewContext(p)
 	scr := &ScanScreen{}
-	ctx.events = append(ctx.events, testFrame{Err: errors.New("failed to open camera")})
-	scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if scr.err == nil {
+	camErr := errors.New("failed to open camera")
+	ctx.events = append(ctx.events, testFrame{Err: camErr})
+	ops := new(op.Ops)
+	quit := runUI(ctx, func() {
+		scr.Scan(ctx, ops.Context())
+	})
+	defer quit()
+	frame := resetOps(ops, ctx.Frame)
+	frame()
+	if !opsContains(ops, camErr.Error()) {
 		t.Fatal("initial camera error not reported")
 	}
+}
+
+func TestScanScreenStreamError(t *testing.T) {
+	p := newPlatform()
+	ctx := NewContext(p)
 	// Fail during streaming.
-	scr = &ScanScreen{}
+	scr := &ScanScreen{}
 	// Connect.
-	ctx.events = append(ctx.events, testFrame{Err: errors.New("error during streaming")})
-	scr.Layout(ctx, op.Ctx{}, image.Point{})
-	if scr.err == nil {
+	camErr := errors.New("error during streaming")
+	ctx.events = append(ctx.events, testFrame{Err: camErr})
+	ops := new(op.Ops)
+	quit := runUI(ctx, func() {
+		scr.Scan(ctx, ops.Context())
+	})
+	defer quit()
+	ctx.Frame()
+	if !opsContains(ops, camErr.Error()) {
 		t.Fatal("streaming camera error not reported")
 	}
 }
@@ -294,19 +394,21 @@ func TestScanScreenError(t *testing.T) {
 func TestWordKeyboardScreen(t *testing.T) {
 	ctx := NewContext(newPlatform())
 	for i := bip39.Word(0); i < bip39.NumWords; i++ {
-		scr := &WordKeyboardScreen{
-			Mnemonic: make(bip39.Mnemonic, 1),
-		}
 		w := bip39.LabelFor(i)
 		ctxString(ctx, strings.ToUpper(w))
 		ctxButton(ctx, Button2)
-		res := scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
-		if res == ResultNone {
-			t.Errorf("keyboard did not accept %q", w)
-		}
-		if got := bip39.LabelFor(scr.Mnemonic[0]); got != w {
+		m := make(bip39.Mnemonic, 1)
+		inputWordsFlow(ctx, op.Ctx{}, &descriptorTheme, m, 0)
+		if got := bip39.LabelFor(m[0]); got != w {
 			t.Errorf("keyboard mapped %q to %q", w, got)
 		}
+	}
+}
+
+func ctxMnemonic(ctx *Context, m bip39.Mnemonic) {
+	for _, word := range m {
+		ctxString(ctx, strings.ToUpper(bip39.LabelFor(word)))
+		ctxButton(ctx, Button2)
 	}
 }
 
@@ -320,16 +422,17 @@ func ctxQR(t *testing.T, ctx *Context, p *testPlatform, qrs ...string) {
 func TestSeedScreenScan(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
-	scr := NewEmptySeedScreen("")
 	// Select camera.
 	ctxButton(ctx, Down, Button3)
-	ctxQR(t, ctx, p, "011513251154012711900771041507421289190620080870026613431420201617920614089619290300152408010643")
-	scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
 	want, err := bip39.ParseMnemonic("attack pizza motion avocado network gather crop fresh patrol unusual wild holiday candy pony ranch winter theme error hybrid van cereal salon goddess expire")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := scr.Mnemonic
+	ctxQR(t, ctx, p, string(seedqr.QR(want)))
+	got, ok := newMnemonicFlow(ctx, op.Ctx{}, &descriptorTheme)
+	if !ok {
+		t.Errorf("no mnemonic from scanned seed")
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("scanned %v, want %v", got, want)
 	}
@@ -338,33 +441,40 @@ func TestSeedScreenScan(t *testing.T) {
 func TestSeedScreenScanInvalid(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
-	scr := NewEmptySeedScreen("")
 	// Select camera.
 	ctxButton(ctx, Down, Button3)
 	ctxQR(t, ctx, p, "UR:CRYPTO-SEED/OYADGDIYWLAMAEJSZSWDWYTLTIFEENFTLNMNWKBDHNSSRO")
-	scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
-	if scr.warning == nil {
-		t.Error("SeedScreen accepted invalid seed")
-	}
-}
-
-func NewSeedScreen(m bip39.Mnemonic) *SeedScreen {
-	return &SeedScreen{
-		Mnemonic: m,
+	ops := new(op.Ops)
+	quit := runUI(ctx, func() {
+		newMnemonicFlow(ctx, ops.Context(), &descriptorTheme)
+	})
+	defer quit()
+	ctx.Frame()
+	if !opsContains(ops, "invalid seed") {
+		t.Error("invalid seed accepted")
 	}
 }
 
 func TestSeedScreenInvalidSeed(t *testing.T) {
 	p := newPlatform()
 	ctx := NewContext(p)
-	scr := &SeedScreen{}
-	scr.Mnemonic = append(scr.Mnemonic, twoOfThree.Mnemonic...)
+	m := append(bip39.Mnemonic{}, twoOfThree.Mnemonic...)
 	// Invalidate seed.
-	scr.Mnemonic[0] = 0
+	m[0] = 0
 	// Accept seed.
 	ctxButton(ctx, Button3)
-	_, res := scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
-	if res != ResultNone || scr.warning == nil {
+	scr := new(SeedScreen)
+	var confirmed bool
+	ops := new(op.Ops)
+	var exited bool
+	quit := runUI(ctx, func() {
+		scr.Confirm(ctx, ops.Context(), &singleTheme, m)
+		exited = true
+	})
+	defer quit()
+	frame := resetOps(ops, ctx.Frame)
+	frame()
+	if confirmed || !opsContains(ops, "invalid seed") {
 		t.Fatal("invalid seed accepted")
 	}
 	// Dismiss error.
@@ -374,45 +484,38 @@ func TestSeedScreenInvalidSeed(t *testing.T) {
 	ctxButton(ctx, Button1)
 	// Hold confirm.
 	ctxPress(ctx, Button3)
-	_, res = scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
-	if res != ResultNone {
+	frame()
+	if exited {
 		t.Error("exited screen without confirmation")
 	}
 	p.timeOffset += confirmDelay
-	_, res = scr.Layout(ctx, op.Ctx{}, &singleTheme, image.Point{})
-	if res == ResultNone {
+	frame()
+	if !exited {
 		t.Error("failed to exit screen")
 	}
 }
 
 func TestXpubMasterFingerprintSinglesig(t *testing.T) {
 	const mnemonic = "upset toe sheriff cotton vibrant shock torch waste congress innocent company review"
-	const desciptor = "zpub6qiC7jMrWkhNEu7YamFTWx8YHQaDFynLYQCUmxjCWpBiLQ4Qp6c6PEwpZpkN27XmUtBjX7hVLyyBKa7zhgaB5B2qvdckaP21ADwx7oYgYD6"
-
-	r := newRunner(t)
-	//Seed input method, keyboad input, select 12 words.
-	r.Button(t, Button3, Button3, Button3)
-	r.Frame(t)
-	if r.app.scr.seed == nil {
-		t.Fatal("not on seed screen")
-	}
+	const descriptor = "zpub6qiC7jMrWkhNEu7YamFTWx8YHQaDFynLYQCUmxjCWpBiLQ4Qp6c6PEwpZpkN27XmUtBjX7hVLyyBKa7zhgaB5B2qvdckaP21ADwx7oYgYD6"
 
 	m, err := bip39.ParseMnemonic(mnemonic)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Mnemonic(t, m)
 
-	// Accept seed, go to descriptor scan.
-	r.Button(t, Button3, Button3)
+	p := newPlatform()
+	ctx := NewContext(p)
+	ops := new(op.Ops)
+	ctxQR(t, ctx, p, descriptor)
+	ctxButton(ctx, Button3)
+	got, parsed := inputDescriptorFlow(ctx, ops.Context(), &descriptorTheme, m)
 
-	r.QR(t, func() { r.Frame(t) }, desciptor)
+	if !parsed {
+		t.Error("failed to parse descriptor")
+	}
 
-	// Accept descriptor, go to engrave.
-	r.Button(t, Button3)
-
-	r.Frame(t)
-	desc, err := nonstandard.OutputDescriptor([]byte(desciptor))
+	want, err := nonstandard.OutputDescriptor([]byte(descriptor))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,34 +523,21 @@ func TestXpubMasterFingerprintSinglesig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	desc.Keys[0].MasterFingerprint = mfp
-	if !reflect.DeepEqual(desc, *r.app.scr.descriptor) {
-		t.Fatal(err)
+	want.Keys[0].MasterFingerprint = mfp
+	if !reflect.DeepEqual(want, *got) {
+		t.Error("descriptors don't match")
 	}
 }
 
 func TestSeed(t *testing.T) {
+	p := newPlatform()
+	ctx := NewContext(p)
+
 	const mnemonic = "doll clerk nice coast caught valid shallow taxi buyer economy lunch roof"
-
-	r := newRunner(t)
-
-	//Seed input method, keyboad input, select 12 words.
-	r.Button(t, Button3, Button3, Button3)
-	r.Frame(t)
-	if r.app.scr.seed == nil {
-		t.Fatal("not on seed screen")
-	}
-
 	m, err := bip39.ParseMnemonic(mnemonic)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Mnemonic(t, m)
-
-	// Accept seed, skip descriptor.
-	r.Button(t, Button3, Down, Button3)
-
-	r.Frame(t)
 	mk, ok := deriveMasterKey(m, &chaincfg.MainNetParams)
 	if !ok {
 		t.Fatal("failed to derive master key")
@@ -464,11 +554,28 @@ func TestSeed(t *testing.T) {
 		Font:              constant.Font,
 		Size:              backup.SmallPlate,
 	}
-	side, err := backup.EngraveSeed(r.p.EngraverParams(), seedDesc)
+	side, err := backup.EngraveSeed(p.EngraverParams(), seedDesc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	testEngraving(t, r, r.app.scr.engrave, side)
+	plate := Plate{
+		Sides:             []engrave.Plan{side},
+		Size:              backup.SmallPlate,
+		MasterFingerprint: mfp,
+	}
+
+	var completed bool
+	scr := NewEngraveScreen(ctx, plate)
+	quit := runUI(ctx, func() {
+		completed = scr.Engrave(ctx, op.Ctx{}, &engraveTheme)
+	})
+	defer quit()
+
+	testEngraving(t, p, ctx, scr, side)
+	for !completed {
+		ctxButton(ctx, Button3)
+		ctx.Frame()
+	}
 }
 
 func TestMulti(t *testing.T) {
@@ -479,29 +586,14 @@ func TestMulti(t *testing.T) {
 	}
 
 	for i, mnemonic := range mnemonics {
-		r := newRunner(t)
-
-		//Seed input method, keyboad input, select 12 words.
-		r.Button(t, Button3, Button3, Button3)
-		r.Frame(t)
-		if r.app.scr.seed == nil {
-			t.Fatal("not on seed screen")
-		}
+		p := newPlatform()
+		ctx := NewContext(p)
 
 		m, err := bip39.ParseMnemonic(mnemonic)
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.Mnemonic(t, m)
 
-		// Accept seed, go to descriptor scan.
-		r.Button(t, Button3, Button3)
-
-		r.QR(t, func() { r.Frame(t) }, oneOfTwoDesc)
-
-		// Accept descriptor, go to engrave.
-		r.Button(t, Button3)
-		r.Frame(t)
 		oneOfTwo, err := nonstandard.OutputDescriptor([]byte(oneOfTwoDesc))
 		if err != nil {
 			t.Fatal(err)
@@ -513,7 +605,7 @@ func TestMulti(t *testing.T) {
 			Font:       constant.Font,
 			Size:       size,
 		}
-		descSide, err := backup.EngraveDescriptor(r.p.EngraverParams(), descPlate)
+		descSide, err := backup.EngraveDescriptor(p.EngraverParams(), descPlate)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -526,7 +618,7 @@ func TestMulti(t *testing.T) {
 			Font:              constant.Font,
 			Size:              size,
 		}
-		seedSide, err := backup.EngraveSeed(r.p.EngraverParams(), seedDesc)
+		seedSide, err := backup.EngraveSeed(p.EngraverParams(), seedDesc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -534,8 +626,18 @@ func TestMulti(t *testing.T) {
 			Size:  size,
 			Sides: []engrave.Plan{descSide, seedSide},
 		}
+		var completed bool
+		scr := NewEngraveScreen(ctx, plate)
+		quit := runUI(ctx, func() {
+			completed = scr.Engrave(ctx, op.Ctx{}, &engraveTheme)
+		})
+		defer quit()
 		for _, side := range plate.Sides {
-			testEngraving(t, r, r.app.scr.engrave, side)
+			testEngraving(t, p, ctx, scr, side)
+		}
+		for !completed {
+			ctxButton(ctx, Button3)
+			ctx.Frame()
 		}
 	}
 }
@@ -597,8 +699,10 @@ func (t *testPlatform) ScanQR(img *image.Gray) ([][]byte, error) {
 	return nil, errors.New("no QR code")
 }
 
+const testDisplayDim = 240
+
 func (*testPlatform) DisplaySize() image.Point {
-	return image.Pt(1, 1)
+	return image.Pt(testDisplayDim, testDisplayDim)
 }
 
 func (*testPlatform) Dirty(r image.Rectangle) error {
@@ -743,36 +847,8 @@ func (t testFrame) Error() error {
 
 func (testFrame) ImplementsEvent() {}
 
-type runner struct {
-	p      *testPlatform
-	app    *App
-	frames int
-}
-
 func newPlatform() *testPlatform {
 	return &testPlatform{}
-}
-
-func newRunner(t *testing.T) *runner {
-	r := &runner{
-		p: newPlatform(),
-	}
-	a, err := NewApp(r.p, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.app = a
-	r.app.ctx.NoSDCard = true
-	return r
-}
-
-func (r *runner) Frame(t *testing.T) {
-	t.Helper()
-	r.frames++
-	if r.frames > 10000 {
-		t.Fatal("test still incomplete after 10000 frames")
-	}
-	r.app.Frame()
 }
 
 func qrFrame(t *testing.T, p *testPlatform, content string) FrameEvent {
@@ -799,65 +875,8 @@ func qrFrame(t *testing.T, p *testPlatform, content string) FrameEvent {
 	}
 }
 
-func (r *runner) QR(t *testing.T, frame func(), qrs ...string) {
-	t.Helper()
-	for _, qr := range qrs {
-		r.p.events = append(r.p.events, qrFrame(t, r.p, qr))
-	}
-}
-
-func (r *runner) Button(t *testing.T, bs ...Button) {
-	t.Helper()
-	for _, b := range bs {
-		r.p.events = append(r.p.events, ButtonEvent{
-			Button:  b,
-			Pressed: true,
-		}, ButtonEvent{
-			Button:  b,
-			Pressed: false,
-		})
-	}
-}
-
-func (r *runner) Press(t *testing.T, bs ...Button) {
-	t.Helper()
-	for _, b := range bs {
-		r.p.events = append(r.p.events, ButtonEvent{
-			Button:  b,
-			Pressed: true,
-		})
-	}
-}
-
-func (r *runner) Mnemonic(t *testing.T, m bip39.Mnemonic) {
-	for _, word := range m {
-		for _, c := range strings.ToUpper(bip39.LabelFor(word)) {
-			r.p.events = append(r.p.events, ButtonEvent{
-				Button:  Rune,
-				Rune:    c,
-				Pressed: true,
-			})
-			r.Frame(t)
-			if r.app.scr.seed.input.kbd.nvalid == 1 {
-				r.Button(t, Button2)
-				r.Frame(t)
-				break
-			}
-		}
-	}
-	r.Frame(t)
-
-	if sc := r.app.scr.seed; sc == nil || !sc.Mnemonic.Valid() {
-		t.Fatalf("got invalid seed %v, wanted %v", sc.Mnemonic, m)
-
-	}
-	if got := r.app.scr.seed.Mnemonic; !reflect.DeepEqual(got, m) {
-		t.Fatalf("got seed %v, wanted %v", got, m)
-	}
-}
-
-func testEngraving(t *testing.T, r *runner, scr *EngraveScreen, side engrave.Plan) {
-	r.p.engrave.closed = make(chan []mjolnir.Cmd)
+func testEngraving(t *testing.T, p *testPlatform, ctx *Context, scr *EngraveScreen, side engrave.Plan) {
+	p.engrave.closed = make(chan []mjolnir.Cmd)
 done:
 	for {
 		switch scr.instructions[scr.step].Type {
@@ -865,21 +884,22 @@ done:
 			break done
 		case ConnectInstruction:
 			// Hold connect.
-			r.Press(t, Button3)
-			r.p.timeOffset += confirmDelay
-			r.Frame(t)
+			ctxPress(ctx, Button3)
+			ctx.Frame()
+			p.timeOffset += confirmDelay
+			ctx.Frame()
 		default:
-			r.Button(t, Button3)
-			r.Frame(t)
+			ctxButton(ctx, Button3)
+			ctx.Frame()
 		}
 	}
 received:
 	for {
 		select {
-		case got := <-r.p.engrave.closed:
+		case got := <-p.engrave.closed:
 			// Verify the step is advanced after engrave completion.
 			for scr.instructions[scr.step].Type == EngraveInstruction {
-				r.Frame(t)
+				ctx.Frame()
 			}
 			want := simEngrave(t, side)
 			if !reflect.DeepEqual(want, got) {
@@ -887,7 +907,7 @@ received:
 			}
 			break received
 		default:
-			r.Frame(t)
+			ctx.Frame()
 		}
 	}
 }
