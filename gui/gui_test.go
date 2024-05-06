@@ -762,7 +762,7 @@ func ctxButton(ctx *Context, bs ...Button) {
 func (p *testPlatform) Wakeup() {
 }
 
-func (p *testPlatform) Events() []Event {
+func (p *testPlatform) Events(deadline time.Time) []Event {
 	evts := p.events
 	p.events = nil
 	return evts

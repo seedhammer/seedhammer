@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -36,6 +37,7 @@ type Platform struct {
 	display *drm.LCD
 	events  chan gui.Event
 	wakeups chan struct{}
+	timer   *time.Timer
 	camera  struct {
 		frames chan gui.FrameEvent
 		out    chan gui.FrameEvent
@@ -81,7 +83,7 @@ func (p *Platform) Wakeup() {
 	}
 }
 
-func (p *Platform) Events() []gui.Event {
+func (p *Platform) Events(deadline time.Time) []gui.Event {
 	c := &p.camera
 	if c.close != nil {
 		if c.frame != nil {
@@ -108,11 +110,29 @@ func (p *Platform) Events() []gui.Event {
 			if len(evts) > 0 {
 				return evts
 			}
+			d := time.Until(deadline)
+			if p.timer == nil {
+				p.timer = time.NewTimer(d)
+			} else {
+				if !p.timer.Stop() {
+					select {
+					case <-p.timer.C:
+					default:
+					}
+				}
+			}
+			if d <= 0 {
+				p.Wakeup()
+			} else {
+				p.timer.Reset(d)
+			}
 			select {
 			case e := <-p.events:
 				evts = append(evts, e)
 			case c.frame = <-c.frames:
 				evts = append(evts, c.frame)
+			case <-p.timer.C:
+				return evts
 			case <-p.wakeups:
 				return evts
 			}

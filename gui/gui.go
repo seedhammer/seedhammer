@@ -40,6 +40,7 @@ type Context struct {
 	Repeats  [nbuttons]time.Time
 	Platform Platform
 	Styles   Styles
+	Wakeup   time.Time
 	Frame    func()
 
 	// Global UI state.
@@ -50,10 +51,6 @@ type Context struct {
 	LastDescriptor *urtypes.OutputDescriptor
 
 	events []Event
-	wakeup struct {
-		timeouts chan time.Time
-		quit     chan struct{}
-	}
 }
 
 func NewContext(pl Platform) *Context {
@@ -61,39 +58,12 @@ func NewContext(pl Platform) *Context {
 		Platform: pl,
 		Styles:   NewStyles(),
 	}
-	c.wakeup.timeouts = make(chan time.Time)
-	c.wakeup.quit = make(chan struct{}, 1)
-	// Wakeup goroutine is not running.
-	c.wakeup.quit <- struct{}{}
-	// Wake up initially.
-	pl.Wakeup()
 	return c
 }
 
 func (c *Context) WakeupAt(t time.Time) {
-	select {
-	case <-c.wakeup.quit:
-		go func() {
-			d := t.Sub(c.Platform.Now())
-			timer := time.NewTimer(d)
-			for {
-				select {
-				case <-timer.C:
-					c.Platform.Wakeup()
-					c.wakeup.quit <- struct{}{}
-					return
-				case newt := <-c.wakeup.timeouts:
-					if newt.After(t) {
-						break
-					}
-					t = newt
-					timer.Stop()
-					d := t.Sub(c.Platform.Now())
-					timer = time.NewTimer(d)
-				}
-			}
-		}()
-	case c.wakeup.timeouts <- t:
+	if c.Wakeup.IsZero() || t.Before(c.Wakeup) {
+		c.Wakeup = t
 	}
 }
 
@@ -127,6 +97,7 @@ func (c *Context) Repeat() {
 
 func (c *Context) Reset() {
 	c.events = c.events[:0]
+	c.Wakeup = time.Time{}
 }
 
 func (c *Context) Events(evts ...Event) {
@@ -2698,7 +2669,7 @@ func (s *EngraveScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 }
 
 type Platform interface {
-	Events() []Event
+	Events(deadline time.Time) []Event
 	Wakeup()
 	PlateSizes() []backup.PlateSize
 	Engraver() (Engraver, error)
@@ -2820,9 +2791,10 @@ func NewApp(pl Platform, version string) (*App, error) {
 const idleTimeout = 3 * time.Minute
 
 func (a *App) Frame() {
+	wakeup := a.ctx.Wakeup
 	a.ctx.Reset()
 	now := a.ctx.Platform.Now()
-	for _, e := range a.ctx.Platform.Events() {
+	for _, e := range a.ctx.Platform.Events(wakeup) {
 		a.idle.start = now
 		switch e := e.(type) {
 		case SDCardEvent:
@@ -2830,6 +2802,7 @@ func (a *App) Frame() {
 		case Event:
 			a.ctx.Events(e)
 		}
+		wakeup = time.Time{}
 	}
 	a.ctx.Repeat()
 	a.ctx.WakeupAt(a.idle.start.Add(idleTimeout))

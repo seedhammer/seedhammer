@@ -6,6 +6,7 @@ import (
 	"errors"
 	"image"
 	"image/draw"
+	"time"
 
 	"seedhammer.com/backup"
 	"seedhammer.com/engrave"
@@ -45,7 +46,7 @@ func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
 func (p *Platform) Wakeup() {
 }
 
-func (p *Platform) Events() []gui.Event {
+func (p *Platform) Events(deadline time.Time) []gui.Event {
 	return nil
 }
 
