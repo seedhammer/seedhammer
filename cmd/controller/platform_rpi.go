@@ -41,7 +41,7 @@ type Platform struct {
 	camera  struct {
 		frames chan gui.FrameEvent
 		out    chan gui.FrameEvent
-		frame  gui.FrameEvent
+		frame  *gui.FrameEvent
 		close  func()
 		active bool
 	}
@@ -87,7 +87,7 @@ func (p *Platform) Events(deadline time.Time) []gui.Event {
 	c := &p.camera
 	if c.close != nil {
 		if c.frame != nil {
-			c.out <- c.frame
+			c.out <- *c.frame
 			c.frame = nil
 		}
 		if !c.active {
@@ -104,8 +104,9 @@ func (p *Platform) Events(deadline time.Time) []gui.Event {
 		select {
 		case e := <-p.events:
 			evts = append(evts, e)
-		case c.frame = <-c.frames:
-			evts = append(evts, c.frame)
+		case f := <-c.frames:
+			c.frame = &f
+			evts = append(evts, f.Event())
 		default:
 			if len(evts) > 0 {
 				return evts
@@ -129,8 +130,9 @@ func (p *Platform) Events(deadline time.Time) []gui.Event {
 			select {
 			case e := <-p.events:
 				evts = append(evts, e)
-			case c.frame = <-c.frames:
-				evts = append(evts, c.frame)
+			case f := <-c.frames:
+				c.frame = &f
+				evts = append(evts, f.Event())
 			case <-p.timer.C:
 				return evts
 			case <-p.wakeups:
@@ -227,7 +229,7 @@ func (p *Platform) initSDCardNotifier() error {
 		defer f.Close()
 		p.events <- gui.SDCardEvent{
 			Inserted: inserted,
-		}
+		}.Event()
 		// Make room for 100 events plus paths and their NUL terminator.
 		var buf [(unix.SizeofInotifyEvent + unix.PathMax + 1) * 100]byte
 		for {
@@ -251,9 +253,9 @@ func (p *Platform) initSDCardNotifier() error {
 				if name == sdcName {
 					switch {
 					case evt.Mask&unix.IN_CREATE != 0:
-						p.events <- gui.SDCardEvent{Inserted: true}
+						p.events <- gui.SDCardEvent{Inserted: true}.Event()
 					case evt.Mask&unix.IN_DELETE != 0:
-						p.events <- gui.SDCardEvent{Inserted: false}
+						p.events <- gui.SDCardEvent{Inserted: false}.Event()
 					}
 				}
 			}

@@ -359,7 +359,7 @@ func TestScanScreenConnectError(t *testing.T) {
 	ctx := NewContext(p)
 	scr := &ScanScreen{}
 	camErr := errors.New("failed to open camera")
-	ctx.events = append(ctx.events, testFrame{Err: camErr})
+	ctx.events = append(ctx.events, FrameEvent{Error: camErr}.Event())
 	ops := new(op.Ops)
 	quit := runUI(ctx, func() {
 		scr.Scan(ctx, ops.Context())
@@ -379,7 +379,7 @@ func TestScanScreenStreamError(t *testing.T) {
 	scr := &ScanScreen{}
 	// Connect.
 	camErr := errors.New("error during streaming")
-	ctx.events = append(ctx.events, testFrame{Err: camErr})
+	ctx.events = append(ctx.events, FrameEvent{Error: camErr}.Event())
 	ops := new(op.Ops)
 	quit := runUI(ctx, func() {
 		scr.Scan(ctx, ops.Context())
@@ -415,7 +415,7 @@ func ctxMnemonic(ctx *Context, m bip39.Mnemonic) {
 func ctxQR(t *testing.T, ctx *Context, p *testPlatform, qrs ...string) {
 	t.Helper()
 	for _, qr := range qrs {
-		ctx.events = append(ctx.events, qrFrame(t, p, qr))
+		ctx.events = append(ctx.events, qrFrame(t, p, qr).Event())
 	}
 }
 
@@ -728,7 +728,7 @@ func ctxString(ctx *Context, str string) {
 				Button:  Rune,
 				Rune:    r,
 				Pressed: true,
-			},
+			}.Event(),
 		)
 	}
 }
@@ -739,7 +739,7 @@ func ctxPress(ctx *Context, bs ...Button) {
 			ButtonEvent{
 				Button:  b,
 				Pressed: true,
-			},
+			}.Event(),
 		)
 	}
 }
@@ -750,11 +750,11 @@ func ctxButton(ctx *Context, bs ...Button) {
 			ButtonEvent{
 				Button:  b,
 				Pressed: true,
-			},
+			}.Event(),
 			ButtonEvent{
 				Button:  b,
 				Pressed: false,
-			},
+			}.Event(),
 		)
 	}
 }
@@ -832,21 +832,6 @@ func (e *engraver) Close() {
 func (p *testPlatform) CameraFrame(dims image.Point) {
 }
 
-type testFrame struct {
-	Err error
-	Img image.Image
-}
-
-func (t testFrame) Image() image.Image {
-	return t.Img
-}
-
-func (t testFrame) Error() error {
-	return t.Err
-}
-
-func (testFrame) ImplementsEvent() {}
-
 func newPlatform() *testPlatform {
 	return &testPlatform{}
 }
@@ -870,8 +855,8 @@ func qrFrame(t *testing.T, p *testPlatform, content string) FrameEvent {
 		p.qrImages = make(map[*byte][]byte)
 	}
 	p.qrImages[&frameImg.Y[0]] = []byte(content)
-	return testFrame{
-		Img: frameImg,
+	return FrameEvent{
+		Image: frameImg,
 	}
 }
 

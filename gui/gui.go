@@ -88,7 +88,7 @@ func (c *Context) Repeat() {
 		if now.Before(c.Repeats[btn]) {
 			continue
 		}
-		c.events = append(c.events, ButtonEvent{Button: b, Pressed: true})
+		c.events = append(c.events, ButtonEvent{Button: b, Pressed: true}.Event())
 		t := c.Platform.Now().Add(repeatDelay)
 		c.Repeats[b] = t
 		c.WakeupAt(t)
@@ -102,7 +102,7 @@ func (c *Context) Reset() {
 
 func (c *Context) Events(evts ...Event) {
 	for _, e := range evts {
-		if e2, ok := e.(ButtonEvent); ok {
+		if e2, ok := e.AsButton(); ok {
 			if int(e2.Button) < len(c.Buttons) {
 				e2.Click = !e2.Pressed && c.Buttons[e2.Button]
 				c.Buttons[e2.Button] = e2.Pressed
@@ -112,7 +112,7 @@ func (c *Context) Events(evts ...Event) {
 					c.WakeupAt(t)
 				}
 			}
-			e = e2
+			e = e2.Event()
 		}
 		c.events = append(c.events, e)
 	}
@@ -120,17 +120,17 @@ func (c *Context) Events(evts ...Event) {
 
 func (c *Context) FrameEvent() (FrameEvent, bool) {
 	for i, e := range c.events {
-		if e, ok := e.(FrameEvent); ok {
+		if e, ok := e.AsFrame(); ok {
 			c.events = append(c.events[:i], c.events[i+1:]...)
 			return e, true
 		}
 	}
-	return nil, false
+	return FrameEvent{}, false
 }
 
 func (c *Context) Next(btns ...Button) (ButtonEvent, bool) {
 	for i, e := range c.events {
-		e, ok := e.(ButtonEvent)
+		e, ok := e.AsButton()
 		if !ok {
 			continue
 		}
@@ -379,9 +379,9 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 			if !ok {
 				break
 			}
-			cameraErr = f.Error()
+			cameraErr = f.Error
 			if cameraErr == nil {
-				ycbcr := f.Image().(*image.YCbCr)
+				ycbcr := f.Image.(*image.YCbCr)
 				gray := &image.Gray{Pix: ycbcr.Y, Stride: ycbcr.YStride, Rect: ycbcr.Bounds()}
 
 				scaleRot(feed, gray, ctx.RotateCamera)
@@ -2691,15 +2691,22 @@ type Engraver interface {
 	Close()
 }
 
-type FrameEvent interface {
-	Error() error
-	Image() image.Image
-	Event
+type FrameEvent struct {
+	Error error
+	Image image.Image
 }
 
-type Event interface {
-	ImplementsEvent()
+type Event struct {
+	typ  int
+	data [4]uint32
+	refs [2]any
 }
+
+const (
+	buttonEvent = 1 + iota
+	sdcardEvent
+	frameEvent
+)
 
 type ButtonEvent struct {
 	Button  Button
@@ -2796,10 +2803,9 @@ func (a *App) Frame() {
 	now := a.ctx.Platform.Now()
 	for _, e := range a.ctx.Platform.Events(wakeup) {
 		a.idle.start = now
-		switch e := e.(type) {
-		case SDCardEvent:
-			a.ctx.EmptySDSlot = !e.Inserted
-		case Event:
+		if se, ok := e.AsSDCard(); ok {
+			a.ctx.EmptySDSlot = !se.Inserted
+		} else {
 			a.ctx.Events(e)
 		}
 		wakeup = time.Time{}
@@ -2854,5 +2860,69 @@ func argb(c uint32) color.NRGBA {
 	return color.NRGBA{A: uint8(c >> 24), R: uint8(c >> 16), G: uint8(c >> 8), B: uint8(c)}
 }
 
-func (ButtonEvent) ImplementsEvent() {}
-func (SDCardEvent) ImplementsEvent() {}
+func (f FrameEvent) Event() Event {
+	e := Event{typ: frameEvent}
+	e.refs[0] = f.Error
+	e.refs[1] = f.Image
+	return e
+}
+
+func (b ButtonEvent) Event() Event {
+	pressed := uint32(0)
+	if b.Pressed {
+		pressed = 1
+	}
+	click := uint32(0)
+	if b.Click {
+		click = 1
+	}
+	e := Event{typ: buttonEvent}
+	e.data[0] = uint32(b.Button)
+	e.data[1] = pressed
+	e.data[2] = uint32(b.Rune)
+	e.data[3] = click
+	return e
+}
+
+func (s SDCardEvent) Event() Event {
+	e := Event{typ: sdcardEvent}
+	if s.Inserted {
+		e.data[0] = 1
+	}
+	return e
+}
+
+func (e Event) AsFrame() (FrameEvent, bool) {
+	if e.typ != frameEvent {
+		return FrameEvent{}, false
+	}
+	f := FrameEvent{}
+	if r := e.refs[0]; r != nil {
+		f.Error = r.(error)
+	}
+	if r := e.refs[1]; r != nil {
+		f.Image = r.(image.Image)
+	}
+	return f, true
+}
+
+func (e Event) AsButton() (ButtonEvent, bool) {
+	if e.typ != buttonEvent {
+		return ButtonEvent{}, false
+	}
+	return ButtonEvent{
+		Button:  Button(e.data[0]),
+		Pressed: e.data[1] != 0,
+		Rune:    rune(e.data[2]),
+		Click:   e.data[3] != 0,
+	}, true
+}
+
+func (e Event) AsSDCard() (SDCardEvent, bool) {
+	if e.typ != sdcardEvent {
+		return SDCardEvent{}, false
+	}
+	return SDCardEvent{
+		Inserted: e.data[0] != 0,
+	}, true
+}

@@ -90,7 +90,7 @@ func runSerial(p *Platform, s io.Reader) error {
 			dumpImage(name, p.display.Framebuffer())
 		default:
 			for _, e := range debugCommand(line) {
-				p.events <- e
+				p.events <- e.Event()
 			}
 		}
 	}

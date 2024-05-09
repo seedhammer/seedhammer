@@ -31,20 +31,6 @@ type Camera struct {
 	closed    chan struct{}
 }
 
-type Frame struct {
-	err    error
-	image  image.Image
-	bufIdx C.size_t
-}
-
-func (f Frame) Image() image.Image {
-	return f.image
-}
-
-func (f Frame) Error() error {
-	return f.err
-}
-
 func (c *Camera) Close() {
 	close(c.closed)
 	for {
@@ -82,14 +68,14 @@ func Open(dims image.Point, frames chan gui.FrameEvent, out <-chan gui.FrameEven
 	case singleton <- struct{}{}:
 	default:
 		go func() {
-			frames <- Frame{err: errors.New("camera: only a single camera can be open simultaneously")}
+			frames <- gui.FrameEvent{Error: errors.New("camera: only a single camera can be open simultaneously")}
 		}()
 		return func() {}
 	}
 	if err := c.setup(dims); err != nil {
 		<-singleton
 		go func() {
-			frames <- Frame{err: fmt.Errorf("camera: %w", err)}
+			frames <- gui.FrameEvent{Error: fmt.Errorf("camera: %w", err)}
 		}()
 		return func() {}
 	}
@@ -108,7 +94,8 @@ func (c *Camera) setup(dims image.Point) error {
 		defer C.close_camera()
 
 		errClosed := errors.New("closed")
-		deliverFrame := func(f Frame) error {
+		imgs := make([]*image.YCbCr, C.num_buffers())
+		deliverFrame := func(f gui.FrameEvent) error {
 			select {
 			case <-c.closed:
 				return errClosed
@@ -118,24 +105,28 @@ func (c *Camera) setup(dims image.Point) error {
 			case <-c.closed:
 				return errClosed
 			case f := <-c.out:
-				if res := C.queue_request(f.(Frame).bufIdx); res != 0 {
-					return fmt.Errorf("queue_request: %d", res)
+				for bufIdx, img := range imgs {
+					if img == f.Image {
+						if res := C.queue_request(C.uint32_t(bufIdx)); res != 0 {
+							return fmt.Errorf("queue_request: %d", res)
+						}
+						return nil
+					}
 				}
-				return nil
+				panic("unknown camera image")
 			}
 		}
 		if res := C.start_camera(C.uint(dims.X), C.uint(dims.Y)); res != 0 {
 			err := fmt.Errorf("camera: start_camera: %d", res)
-			deliverFrame(Frame{err: err})
+			deliverFrame(gui.FrameEvent{Error: err})
 			return
 		}
 		format := C.frame_format()
-		imgs := make([]*image.YCbCr, C.num_buffers())
 		for i := range imgs {
 			desc := C.buffer_at(C.size_t(i))
 			buf, err := syscall.Mmap(int(desc.fd), int64(desc.offset), int(desc.length), syscall.PROT_READ, syscall.MAP_SHARED)
 			if err != nil {
-				deliverFrame(Frame{err: err})
+				deliverFrame(gui.FrameEvent{Error: err})
 				return
 			}
 			defer syscall.Munmap(buf)
@@ -157,13 +148,12 @@ func (c *Camera) setup(dims image.Point) error {
 			case <-c.closed:
 				return
 			case bufIdx := <-c.bufs:
-				f := Frame{
-					image:  imgs[bufIdx],
-					bufIdx: bufIdx,
+				f := gui.FrameEvent{
+					Image: imgs[bufIdx],
 				}
 				if err := deliverFrame(f); err != nil {
 					if !errors.Is(err, errClosed) {
-						deliverFrame(Frame{err: fmt.Errorf("camera: %w", err)})
+						deliverFrame(gui.FrameEvent{Error: fmt.Errorf("camera: %w", err)})
 					}
 					return
 				}
@@ -172,5 +162,3 @@ func (c *Camera) setup(dims image.Point) error {
 	}()
 	return nil
 }
-
-func (Frame) ImplementsEvent() {}

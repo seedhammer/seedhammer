@@ -51,7 +51,7 @@ func Open(ch chan<- gui.Event) error {
 					// Debounce timeout; ok to send event.
 					if newPressed != pressed {
 						pressed = newPressed
-						ch <- gui.ButtonEvent{Button: btn.Button, Pressed: pressed}
+						ch <- gui.ButtonEvent{Button: btn.Button, Pressed: pressed}.Event()
 					}
 				}
 			}
