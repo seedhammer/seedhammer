@@ -17,12 +17,12 @@ func LabelW(ops op.Ctx, l text.Style, width int, col color.NRGBA, txt string) im
 	lines, sz := l.Layout(width, txt)
 	for _, line := range lines {
 		(&op.TextOp{
-			Src:           image.NewUniform(col),
 			Face:          l.Face,
 			Dot:           image.Pt(line.Dot.X, line.Dot.Y),
 			Txt:           line.Text,
 			LetterSpacing: l.LetterSpacing,
 		}).Add(ops)
+		op.ColorOp(ops, col)
 	}
 	return sz
 }

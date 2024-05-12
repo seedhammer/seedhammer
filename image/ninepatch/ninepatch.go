@@ -5,23 +5,33 @@ package ninepatch
 import (
 	"image"
 	"image/color"
+
+	"seedhammer.com/gui/op"
 )
 
 type Template struct {
 	inner   image.Rectangle
 	padding image.Rectangle
 	src     image.RGBA64Image
+	srcb    image.Rectangle
+	img     op.Image
 }
 
 func New(src image.RGBA64Image) *Template {
 	inner := nineBounds(src, 0, 0)
 	b := src.Bounds()
 	padding := nineBounds(src, b.Max.Y-1, b.Max.X-1)
+	srcb := src.Bounds()
 	np := &Template{
 		inner:   inner,
 		padding: padding,
 		src:     src,
+		srcb: image.Rectangle{
+			Min: srcb.Min.Add(image.Pt(1, 1)),
+			Max: srcb.Max.Sub(image.Pt(1, 1)),
+		},
 	}
+	np.img = op.RegisterParameterizedImage(np.at)
 	return np
 }
 
@@ -71,29 +81,30 @@ func (n *Template) Padding() (int, int, int, int) {
 		b.Max.Y - n.padding.Max.Y, n.padding.Min.X
 }
 
-func (n *Template) For(r image.Rectangle) *Image {
+func (n *Template) Bounds(r image.Rectangle) image.Rectangle {
 	top, end, bottom, start := n.Padding()
-	srcb := n.src.Bounds()
 	r.Min.X -= start
 	r.Max.X += end
 	r.Min.Y -= top
 	r.Max.Y += bottom
-	return &Image{
-		inner: n.inner,
-		r:     r,
-		srcb: image.Rectangle{
-			Min: srcb.Min.Add(image.Pt(1, 1)),
-			Max: srcb.Max.Sub(image.Pt(1, 1)),
-		},
-		src: n.src,
-	}
+	return r
 }
 
-type Image struct {
-	inner image.Rectangle
-	r     image.Rectangle
-	srcb  image.Rectangle
-	src   image.RGBA64Image
+func (n *Template) Add(ops op.Ctx, r image.Rectangle, mask bool) image.Rectangle {
+	r = n.Bounds(r)
+	op.ParamImageOp(ops, n.img, mask, r, nil, nil)
+	return r
+}
+
+func (n *Template) at(args op.ImageArguments, x, y int) color.RGBA64 {
+	x -= args.Bounds.Min.X
+	y -= args.Bounds.Min.Y
+	x += n.srcb.Min.X
+	y += n.srcb.Min.Y
+	x = adjust(x, args.Bounds.Dx(), n.inner.Min.X, n.inner.Max.X, n.srcb.Min.X, n.srcb.Max.X)
+	y = adjust(y, args.Bounds.Dy(), n.inner.Min.Y, n.inner.Max.Y, n.srcb.Min.Y, n.srcb.Max.Y)
+
+	return n.src.RGBA64At(x, y)
 }
 
 func adjust(v, sz, innerMin, innerMax, srcMin, srcMax int) int {
@@ -127,27 +138,4 @@ func adjust(v, sz, innerMin, innerMax, srcMin, srcMax int) int {
 		}
 	}
 	return v
-}
-
-func (n *Image) At(x, y int) color.Color {
-	return n.RGBA64At(x, y)
-}
-
-func (n *Image) RGBA64At(x, y int) color.RGBA64 {
-	x -= n.r.Min.X
-	y -= n.r.Min.Y
-	x += n.srcb.Min.X
-	y += n.srcb.Min.Y
-	x = adjust(x, n.r.Dx(), n.inner.Min.X, n.inner.Max.X, n.srcb.Min.X, n.srcb.Max.X)
-	y = adjust(y, n.r.Dy(), n.inner.Min.Y, n.inner.Max.Y, n.srcb.Min.Y, n.srcb.Max.Y)
-
-	return n.src.RGBA64At(x, y)
-}
-
-func (n *Image) Bounds() image.Rectangle {
-	return n.r
-}
-
-func (n *Image) ColorModel() color.Model {
-	return n.src.ColorModel()
 }

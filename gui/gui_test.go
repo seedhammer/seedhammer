@@ -1,11 +1,14 @@
 package gui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"image"
 	"image/draw"
+	"image/png"
 	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -227,6 +230,21 @@ func TestNonParticipatingSeed(t *testing.T) {
 	ctx.Frame()
 	if !opsContains(ops, "Unknown Wallet") {
 		t.Fatal("a non-participating seed was accepted")
+	}
+}
+
+func dumpUI(t *testing.T, ops *op.Ops) {
+	clip := image.Rectangle{Max: image.Pt(testDisplayDim, testDisplayDim)}
+	ops.Clip(clip)
+	fb := image.NewNRGBA(clip)
+	maskfb := image.NewAlpha(clip)
+	ops.Draw(fb, maskfb)
+	buf := new(bytes.Buffer)
+	if err := png.Encode(buf, fb); err != nil {
+		t.Error(err)
+	}
+	if err := os.WriteFile("ui.png", buf.Bytes(), 0o600); err != nil {
+		t.Error(err)
 	}
 }
 

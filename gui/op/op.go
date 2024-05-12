@@ -3,51 +3,105 @@ package op
 import (
 	"image"
 	"image/color"
+	"strings"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/image/math/fixed"
 	"seedhammer.com/font/bitmap"
-	"seedhammer.com/image/alpha4"
-	"seedhammer.com/image/ninepatch"
 	"seedhammer.com/image/rgb565"
 )
 
 type Ops struct {
-	ops      []any
-	uniforms map[color.Color]*image.Uniform
-	ninep    map[ninepatch.Image]*ninepatch.Image
-	colors   map[color.NRGBA]*image.Uniform
+	maskStack []frameOp
+	frame     frame
+	prevFrame frame
 
-	prevOps  map[frameOp]bool
-	frameOps map[frameOp]bool
-	frame    []frameOp
-
-	scratch scratch
+	scratchMask genImage
+	scratchImg  genImage
 }
 
 type Ctx struct {
-	beginIdx int
+	beginIdx opCursor
 	ops      *Ops
 }
 
-type frameOp struct {
-	state drawState
-	op    drawOp
+type ImageGenerator func(args ImageArguments, x, y int) color.RGBA64
+
+type ImageArguments struct {
+	Refs   []any
+	Args   []uint32
+	Bounds image.Rectangle
 }
 
-func (o *Ctx) add(op any) {
+type Image struct {
+	id  int
+	gen ImageGenerator
+}
+
+var globalID = 0
+
+func RegisterParameterizedImage(gen ImageGenerator) Image {
+	globalID++
+	return Image{
+		id:  globalID,
+		gen: gen,
+	}
+}
+
+type genImage struct {
+	imageOp
+}
+
+type frame struct {
+	ops     []frameOp
+	drawOps []drawOp
+	args    []uint32
+	refs    []any
+}
+
+type opCursor struct {
+	op  int
+	ref int
+}
+
+type opType int
+
+const (
+	opBegin opType = iota
+	opEnd
+	opOffset
+	opImage
+	opClip
+	opCall
+)
+
+type frameOp struct {
+	pos  image.Point
+	op   imageOp
+	clip image.Rectangle
+}
+
+type drawOp struct {
+	start, end int
+}
+
+func (o *Ctx) add(cmd opType, op ...uint32) {
 	if o.ops == nil {
 		return
 	}
-	o.ops.ops = append(o.ops.ops, op)
+	o.ops.frame.args = append(o.ops.frame.args, (uint32(len(op))<<16)|uint32(cmd))
+	o.ops.frame.args = append(o.ops.frame.args, op...)
 }
 
 func (o *Ctx) Begin() Ctx {
 	if o.ops == nil {
 		return Ctx{}
 	}
-	o.add(beginOp{})
-	o.beginIdx = len(o.ops.ops)
+	o.add(opBegin)
+	o.beginIdx = opCursor{
+		op:  len(o.ops.frame.args),
+		ref: len(o.ops.frame.refs),
+	}
 	return Ctx{ops: o.ops}
 }
 
@@ -55,12 +109,12 @@ func (o *Ctx) End() CallOp {
 	if o.ops == nil {
 		return CallOp{}
 	}
-	if o.beginIdx == 0 {
+	if o.beginIdx == (opCursor{}) {
 		panic("End without a Begin")
 	}
-	o.add(endOp{})
-	call := CallOp{startIdx: o.beginIdx}
-	o.beginIdx = 0
+	o.add(opEnd)
+	call := CallOp{start: o.beginIdx}
+	o.beginIdx = opCursor{}
 	return call
 }
 
@@ -69,169 +123,326 @@ func (o *Ops) Context() Ctx {
 }
 
 func (o *Ops) Reset() {
-	o.ops = o.ops[:0]
-	if o.frameOps == nil {
-		o.frameOps = make(map[frameOp]bool)
-	}
-	if o.prevOps == nil {
-		o.prevOps = make(map[frameOp]bool)
-	}
-	o.frameOps, o.prevOps = o.prevOps, o.frameOps
-	// Clear for GC.
-	for i := range o.frameOps {
-		delete(o.frameOps, i)
-	}
-	for i := range o.frame {
-		o.frame[i] = frameOp{}
-	}
-	o.frame = o.frame[:0]
-}
-
-func (o *Ops) nrgba(c color.NRGBA) *image.Uniform {
-	if o == nil {
-		return image.NewUniform(c)
-	}
-	if o.colors == nil {
-		o.colors = make(map[color.NRGBA]*image.Uniform)
-	}
-	if u, ok := o.colors[c]; ok {
-		return u
-	}
-	u := image.NewUniform(c)
-	o.colors[c] = u
-	return u
-}
-
-func (o *Ops) intern(img image.Image) image.Image {
-	if o == nil {
-		return img
-	}
-	switch img := img.(type) {
-	case *image.Uniform:
-		if o.uniforms == nil {
-			o.uniforms = make(map[color.Color]*image.Uniform)
-		}
-		if img, ok := o.uniforms[img.C]; ok {
-			return img
-		}
-		o.uniforms[img.C] = img
-	case *ninepatch.Image:
-		if o.ninep == nil {
-			o.ninep = make(map[ninepatch.Image]*ninepatch.Image)
-		}
-		if img, ok := o.ninep[*img]; ok {
-			return img
-		}
-		o.ninep[*img] = img
-	}
-	return img
+	o.frame, o.prevFrame = o.prevFrame, o.frame
+	o.frame.Reset()
 }
 
 type drawState struct {
 	pos   image.Point
 	clip  image.Rectangle
-	mask  image.Image
-	maskp image.Point
+	union image.Rectangle
 }
 
-type scratch struct {
-	glyph alpha4.Image
+func (f *frame) Reset() {
+	f.args = f.args[:0]
+	clear(f.refs)
+	f.refs = f.refs[:0]
+	clear(f.ops)
+	f.ops = f.ops[:0]
+	f.drawOps = f.drawOps[:0]
 }
 
 func (o *Ops) ExtractText(dst image.Rectangle) []string {
-	o.serialize(drawState{clip: dst}, 0)
+	o.serialize(drawState{clip: dst}, opCursor{})
 	var text []string
-	for _, op := range o.frame {
-		if op, ok := op.op.(TextOp); ok {
-			text = append(text, op.Txt)
+	var b strings.Builder
+	for _, fop := range o.frame.drawOps {
+		for _, op := range o.frame.ops[fop.start:fop.end] {
+			if op.op.gen.id != glyphImage.id {
+				continue
+			}
+			_, r := decodeGlyphImage(op.op.ImageArguments)
+			b.WriteRune(r)
+		}
+		if b.Len() > 0 {
+			text = append(text, b.String())
+			b.Reset()
 		}
 	}
 	return text
 }
 
 func (o *Ops) Clip(dst image.Rectangle) image.Rectangle {
-	o.serialize(drawState{clip: dst}, 0)
-	var clip image.Rectangle
-	for _, op := range o.frame {
-		o.frameOps[op] = true
-		if !o.prevOps[op] {
-			clip = clip.Union(op.state.clip)
-		} else {
-			delete(o.prevOps, op)
+	o.serialize(drawState{clip: dst}, opCursor{})
+	clip := image.Rectangle{}
+	prevDrawOps := o.prevFrame.drawOps
+loop:
+	for _, op := range o.frame.drawOps {
+		// Scan previous frame for matching operation.
+		// Limit scan distance to dodge O(n²).
+		const scanMax = 5
+		firstOp := o.frame.ops[op.start]
+		scanned := 0
+		nops := op.end - op.start
+		// prevClip collects unmatched clip rectangles.
+		prevClip := image.Rectangle{}
+		for i, prevOp := range prevDrawOps {
+			prevFirstOp := o.prevFrame.ops[prevOp.start]
+			prevNOps := prevOp.end - prevOp.start
+			if nops == prevNOps && opEqual(firstOp, prevFirstOp) {
+				// Match the remaining ops.
+				ops := o.frame.ops[op.start+1 : op.end]
+				prevOps := o.prevFrame.ops[prevOp.start+1 : prevOp.end]
+				if opsEqual(ops, prevOps) {
+					// Match found; add interim unmatched clip areas and
+					// advance the previous frame.
+					clip = clip.Union(prevClip)
+					prevDrawOps = prevDrawOps[i+1:]
+					continue loop
+				}
+				// Count the ops matched by opsEqual.
+				scanned += len(ops)
+			}
+			prevClip = prevClip.Union(o.prevFrame.ops[prevOp.end-1].clip)
+			scanned++
+			if scanned >= scanMax {
+				break
+			}
+		}
+		// No match found.
+		lastOp := o.frame.ops[op.end-1]
+		oclip := lastOp.clip
+		clip = clip.Union(oclip)
+		if clip == dst {
+			return clip
 		}
 	}
-	for op := range o.prevOps {
-		clip = clip.Union(op.state.clip)
+	// Add remaining ops from the previous frame.
+	for _, prevOp := range prevDrawOps {
+		oclip := o.prevFrame.ops[prevOp.end-1].clip
+		clip = clip.Union(oclip)
 	}
 	return clip
 }
 
-func (o *Ops) Draw(dst draw.Image) {
+func opsEqual(ops1, ops2 []frameOp) bool {
+	if len(ops1) != len(ops2) {
+		return false
+	}
+	for i, op1 := range ops1 {
+		if !opEqual(op1, ops2[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func opEqual(op1, op2 frameOp) bool {
+	if op1.pos != op2.pos {
+		return false
+	}
+	if op1.clip != op2.clip {
+		return false
+	}
+	iop1, iop2 := op1.op, op2.op
+	if len(iop1.Args) != len(iop2.Args) {
+		return false
+	}
+	if len(iop1.Refs) != len(iop2.Refs) {
+		return false
+	}
+	for i, a := range iop1.Args {
+		if a != iop2.Args[i] {
+			return false
+		}
+	}
+	for i, r := range iop1.Refs {
+		if r != iop2.Refs[i] {
+			return false
+		}
+	}
+	if iop1.src != iop2.src {
+		return false
+	}
+	if iop1.gen.id != iop2.gen.id {
+		return false
+	}
+	return true
+}
+
+func (o *Ops) Draw(dst draw.Image, maskfb draw.Image) {
 	b := dst.Bounds()
-	for _, op := range o.frame {
-		clip := b.Intersect(op.state.clip)
+	for _, dop := range o.frame.drawOps {
+		masks := o.frame.ops[dop.start : dop.end-1]
+		op := o.frame.ops[dop.end-1]
+		clip := b.Intersect(op.clip)
 		if clip.Empty() {
 			continue
 		}
-		pos := clip.Min.Sub(op.state.pos)
-		maskp := clip.Min.Sub(op.state.maskp)
-		op.op.draw(&o.scratch, dst, clip, op.state.mask, maskp, pos)
+		o.maskStack = o.maskStack[:0]
+		o.drawMasks(dst, clip, op.op, op.pos, maskfb, masks)
 	}
 }
 
-func (o *Ops) serialize(state drawState, from int) {
+func (o *Ops) drawMasks(dst draw.Image, clip image.Rectangle, src imageOp, pos image.Point, maskfb draw.Image, masks []frameOp) {
+	if len(masks) == 0 {
+		var maskSrc image.Image = maskfb
+		mfbPos := maskfb.Bounds().Min
+		switch len(o.maskStack) {
+		case 0:
+			maskSrc = nil
+		case 1:
+			m := o.maskStack[0]
+			maskSrc = o.materialize(m.op)
+			mfbPos = clip.Min.Sub(m.pos)
+		default:
+			mclip := image.Rectangle{Max: clip.Size()}
+			for i, m := range o.maskStack {
+				maskp := clip.Min.Sub(m.pos)
+				mfb := maskfb
+				if i == 0 {
+					mfb = nil
+				}
+				src := m.op.src
+				if src == nil {
+					o.scratchMask.imageOp = m.op
+					src = &o.scratchMask
+				}
+				drawMask(maskfb, mclip, src, maskp, mfb, mfbPos, draw.Src)
+			}
+		}
+		drawMask(dst, clip, o.materialize(src), clip.Min.Sub(pos), maskSrc, mfbPos, draw.Over)
+		return
+	}
+	end := 1
+	if mask := masks[0]; mask.op.mask == unionMask {
+		for _, mask := range masks[1:] {
+			if mask.op.mask != unionMask {
+				break
+			}
+			end++
+		}
+	}
+	for _, mask := range masks[:end] {
+		o.maskStack = append(o.maskStack, mask)
+		o.drawMasks(dst, clip.Intersect(mask.clip), src, pos, maskfb, masks[end:])
+		o.maskStack = o.maskStack[:len(o.maskStack)-1]
+	}
+}
+
+func (o *Ops) materialize(op imageOp) image.Image {
+	if op.src != nil {
+		return op.src
+	}
+	switch op.mask {
+	case imageMask:
+		o.scratchImg.imageOp = op
+		return &o.scratchImg
+	default:
+		o.scratchMask.imageOp = op
+		return &o.scratchMask
+	}
+}
+
+func (o *Ops) serialize(state drawState, from opCursor) {
 	macros := 0
+	depth := len(o.maskStack)
+	defer func() {
+		o.maskStack = o.maskStack[:depth]
+	}()
 	origState := state
-	for _, op := range o.ops[from:] {
-		switch op.(type) {
-		case beginOp:
+	ops := o.frame.args[from.op:]
+	refs := o.frame.refs[from.ref:]
+	for len(ops) > 0 {
+		opnargs := ops[0]
+		op := opType(opnargs & 0xf)
+		nrefs := (opnargs >> 8) & 0xf
+		nargs := opnargs >> 16
+		args := ops[1 : 1+nargs]
+		ops = ops[1+nargs:]
+		switch op {
+		case opBegin:
 			macros++
 			continue
-		case endOp:
+		case opEnd:
 			if macros == 0 {
 				return
 			}
 			macros--
 			continue
 		}
+		rargs := refs[:nrefs]
+		refs = refs[nrefs:]
 		if macros > 0 {
 			continue
 		}
-		switch op := op.(type) {
-		case offsetOp:
-			state.pos = state.pos.Add(image.Point(op))
+		switch op {
+		case opOffset:
+			off := image.Point{X: int(int32(args[0])), Y: int(int32(args[1]))}
+			state.pos = state.pos.Add(image.Point(off))
 			continue
-		case ClipOp:
-			r := image.Rectangle(op).Add(state.pos)
-			state.clip = state.clip.Intersect(r)
+		case opClip:
+			r := decodeRect(args)
+			state.clip = state.clip.Intersect(r.Add(state.pos))
 			continue
-		case maskOp:
-			r := op.src.Bounds().Add(state.pos)
-			state.clip = state.clip.Intersect(r)
-			state.mask = op.src
-			state.maskp = state.pos
-			continue
-		case CallOp:
-			o.serialize(state, op.startIdx)
-		case drawOp:
-			r := op.bounds(&o.scratch).Add(state.pos)
-			state.clip = state.clip.Intersect(r)
-			if !state.clip.Empty() {
-				o.frame = append(o.frame, frameOp{state, op})
+		case opCall:
+			start := opCursor{
+				op:  int(int32(args[0])),
+				ref: int(int32(args[1])),
 			}
+			o.serialize(state, start)
+		case opImage:
+			op := imageOp{
+				mask: maskType(args[0]),
+				gen: Image{
+					id: int(int32(args[1])),
+				},
+				ImageArguments: ImageArguments{
+					Bounds: decodeRect(args[2:6]),
+					Args:   args[6:],
+					Refs:   rargs[2:],
+				},
+			}
+			if src := rargs[0]; src != nil {
+				op.src = src.(image.Image)
+			}
+			if gen := rargs[1]; gen != nil {
+				op.gen.gen = gen.(ImageGenerator)
+			}
+			r := op.Bounds.Add(state.pos)
+			clip := state.clip.Intersect(r)
+			switch op.mask {
+			case unionMask:
+				state.union = state.union.Union(r)
+			default:
+				if u := state.union; !u.Empty() {
+					clip = clip.Intersect(u)
+					state.union = image.Rectangle{}
+				}
+				state.clip = clip
+			}
+			fop := frameOp{pos: state.pos, op: op, clip: clip}
+			if op.mask != imageMask {
+				o.maskStack = append(o.maskStack, fop)
+				continue
+			}
+			if state.clip.Empty() {
+				break
+			}
+			start := len(o.frame.ops)
+			o.frame.ops = append(o.frame.ops, o.maskStack...)
+			o.frame.ops = append(o.frame.ops, fop)
+			o.frame.drawOps = append(o.frame.drawOps, drawOp{
+				start: start,
+				end:   len(o.frame.ops),
+			})
 		}
+		o.maskStack = o.maskStack[:depth]
 		state = origState
 	}
 }
 
-type offsetOp image.Point
-
-func (o offsetOp) Add(ops Ctx) {
-	ops.add(o)
+func decodeRect(args []uint32) image.Rectangle {
+	return image.Rectangle{
+		Min: image.Point{X: int(int32(args[0])), Y: int(int32(args[1]))},
+		Max: image.Point{X: int(int32(args[2])), Y: int(int32(args[3]))},
+	}
 }
 
 func Offset(ops Ctx, off image.Point) {
-	offsetOp(off).Add(ops)
+	ops.add(opOffset,
+		uint32(int32(off.X)), uint32(int32(off.Y)),
+	)
 }
 
 func Position(ops Ctx, c CallOp, off image.Point) {
@@ -242,42 +453,125 @@ func Position(ops Ctx, c CallOp, off image.Point) {
 type ClipOp image.Rectangle
 
 func (c ClipOp) Add(ops Ctx) {
-	ops.add(c)
+	ops.add(opClip,
+		uint32(int32(c.Min.X)), uint32(int32(c.Min.Y)),
+		uint32(int32(c.Max.X)), uint32(int32(c.Max.Y)),
+	)
+}
+
+var uniformImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) color.RGBA64 {
+	nrgba := args.Args[0]
+	r := nrgba >> 24
+	r |= r << 8
+	g := (nrgba >> 16) & 0xff
+	g |= g << 8
+	b := (nrgba >> 8) & 0xff
+	b |= b << 8
+	a := nrgba & 0xff
+	a |= a << 8
+	return color.RGBA64{R: uint16(r), G: uint16(g), B: uint16(b), A: uint16(a)}
+})
+
+var glyphImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) color.RGBA64 {
+	face, r := decodeGlyphImage(args)
+	glyph, _, _ := face.Glyph(r)
+	return glyph.RGBA64At(x, y)
+})
+
+func decodeGlyphImage(args ImageArguments) (*bitmap.Face, rune) {
+	return args.Refs[0].(*bitmap.Face), rune(args.Args[0])
 }
 
 func ColorOp(ops Ctx, col color.NRGBA) {
-	ops.add(imageOp{ops.ops.nrgba(col)})
+	a := uint32(col.A)
+	r := uint32(col.R)
+	r *= a
+	r /= 0xff
+	g := uint32(col.G)
+	g *= a
+	g /= 0xff
+	b := uint32(col.B)
+	b *= a
+	b /= 0xff
+	a |= a << 8
+	nrgba := (r&0xff)<<24 | (g&0xff)<<16 | (b&0xff)<<8 | (a & 0xff)
+	addImageOp(ops, nil, uniformImage, imageMask, image.Rect(-1e9, -1e9, 1e9, 1e9), nil, []uint32{nrgba})
 }
 
-func MaskOp(ops Ctx, img image.Image) {
-	ops.add(maskOp{ops.ops.intern(img)})
+func ImageOp(ops Ctx, img image.Image, mask bool) {
+	m := imageMask
+	if mask {
+		m = intersectMask
+	}
+	addImageOp(ops, img, Image{}, m, img.Bounds(), nil, nil)
 }
 
-type maskOp struct {
-	src image.Image
+func ParamImageOp(ops Ctx, img Image, mask bool, bounds image.Rectangle, refs []any, args []uint32) {
+	m := imageMask
+	if mask {
+		m = intersectMask
+	}
+	addImageOp(ops, nil, img, m, bounds, refs, args)
 }
 
-func ImageOp(ops Ctx, img image.Image) {
-	ops.add(imageOp{ops.ops.intern(img)})
+func (img *genImage) ColorModel() color.Model {
+	return color.RGBA64Model
 }
+
+func (img *genImage) Bounds() image.Rectangle {
+	return img.ImageArguments.Bounds
+}
+
+func (img *genImage) At(x, y int) color.Color {
+	return img.RGBA64At(x, y)
+}
+
+func (img *genImage) RGBA64At(x, y int) color.RGBA64 {
+	return img.gen.gen(img.ImageArguments, x, y)
+}
+
+type maskType int
+
+const (
+	imageMask maskType = iota
+	intersectMask
+	unionMask
+)
 
 type imageOp struct {
+	mask maskType
+
 	src image.Image
+
+	gen Image
+	ImageArguments
 }
 
-func (im imageOp) bounds(scr *scratch) image.Rectangle {
-	return im.src.Bounds()
+func addImageOp(ops Ctx, src image.Image, img Image, mask maskType, bounds image.Rectangle, refs []any, args []uint32) {
+	if ops.ops == nil {
+		return
+	}
+	nargs := len(args) + 1 + 1 + 4
+	nrefs := len(refs) + 1 + 1
+	cmdArgs := (uint32(nargs) << 16) | (uint32(nrefs))<<8 | uint32(opImage)
+	b := bounds
+	ops.ops.frame.args = append(ops.ops.frame.args,
+		cmdArgs,
+		uint32(mask),
+		uint32(img.id),
+		uint32(int32(b.Min.X)), uint32(int32(b.Min.Y)),
+		uint32(int32(b.Max.X)), uint32(int32(b.Max.Y)),
+	)
+	ops.ops.frame.args = append(ops.ops.frame.args, args...)
+	ops.ops.frame.refs = append(ops.ops.frame.refs, src, img.gen)
+	ops.ops.frame.refs = append(ops.ops.frame.refs, refs...)
 }
 
-func (im imageOp) draw(_ *scratch, dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point) {
-	drawMask(dst, dr, im.src, pos, mask, maskp)
-}
-
-func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Point, mask image.Image, maskOff image.Point) {
+func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Point, mask image.Image, maskOff image.Point, op draw.Op) {
 	// Optimize special cases.
 	if rgb, ok := dst.(*rgb565.Image); ok {
 		if mask == nil {
-			rgb.Draw(dr, src, pos, draw.Over)
+			rgb.Draw(dr, src, pos, op)
 			return
 		}
 	}
@@ -287,17 +581,17 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 		dst, dr,
 		src, pos,
 		mask, maskOff,
-		draw.Over,
+		op,
 	)
 }
 
 type CallOp struct {
-	startIdx int
+	start opCursor
 }
 
 func (c CallOp) Add(ops Ctx) {
-	if c.startIdx > 0 {
-		ops.add(c)
+	if c.start != (opCursor{}) {
+		ops.add(opCall, uint32(int32(c.start.op)), uint32(int32(c.start.ref)))
 	}
 }
 
@@ -305,68 +599,42 @@ type beginOp struct{}
 
 type endOp struct{}
 
-type drawOp interface {
-	bounds(scratch *scratch) image.Rectangle
-	draw(scratch *scratch, dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point)
-}
-
 type TextOp struct {
-	Src           image.Image
 	Face          *bitmap.Face
 	Dot           image.Point
 	Txt           string
 	LetterSpacing int
 }
 
-func (t TextOp) bounds(scr *scratch) image.Rectangle {
-	b := t.drawBounds(scr, nil, image.Rectangle{}, nil, image.Point{}, image.Point{})
-	return b.Intersect(t.Src.Bounds())
-}
-
-func (t TextOp) draw(scr *scratch, dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point) {
-	t.drawBounds(scr, dst, dr, mask, maskp, pos)
-}
-
-func (t TextOp) drawBounds(scr *scratch, dst draw.Image, dr image.Rectangle, mask image.Image, maskp, pos image.Point) image.Rectangle {
-	var orig draw.Image
-	src := t.Src
-	tpos := pos
-	if dst != nil && mask != nil {
-		orig = dst
-		src = mask
-		dst = image.NewAlpha(dr)
-		tpos = maskp
-	}
+func (t TextOp) Add(ops Ctx) {
 	prevC := rune(-1)
 	dot := fixed.I(t.Dot.X)
-	var bounds image.Rectangle
+	empty := true
 	for _, c := range t.Txt {
 		if prevC >= 0 {
 			dot += t.Face.Kern(prevC, c)
 		}
-		mask, advance, ok := t.Face.Glyph(c)
+		m, advance, ok := t.Face.Glyph(c)
 		if !ok {
 			continue
 		}
+		empty = false
 		off := image.Pt(dot.Round(), t.Dot.Y)
-		gdr := mask.Bounds().Add(off)
+		Offset(ops, off)
+		addImageOp(
+			ops, nil,
+			glyphImage,
+			unionMask,
+			m.Bounds(),
+			[]any{t.Face},
+			[]uint32{uint32(c)},
+		)
+		Offset(ops, off.Mul(-1))
 		advance += fixed.I(t.LetterSpacing)
-		bounds = bounds.Union(gdr)
-		if dst != nil {
-			scr.glyph = mask
-			drawMask(dst, dr, src, tpos, &scr.glyph, pos.Sub(off))
-		}
 		dot += advance
 		prevC = c
 	}
-	if orig != nil {
-		drawMask(orig, dr, t.Src, pos, dst, dr.Min)
+	if empty {
+		ClipOp{}.Add(ops)
 	}
-	return bounds
-}
-
-func (t TextOp) Add(ops Ctx) {
-	t2 := t
-	t2.Src = ops.ops.intern(t2.Src)
-	ops.add(t2)
 }

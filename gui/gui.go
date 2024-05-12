@@ -185,12 +185,13 @@ func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA,
 	}.Layout(width, txt)
 	for _, line := range lines {
 		doty := line.Dot.Y + r.Y
+		inner := ops.Begin()
 		(&op.TextOp{
-			Src:  image.NewUniform(col),
 			Face: style.Face,
 			Dot:  image.Pt(line.Dot.X, doty),
 			Txt:  line.Text,
-		}).Add(ops.Begin())
+		}).Add(inner)
+		op.ColorOp(inner, col)
 		r.Lines = append(r.Lines, linePos{ops.End(), doty})
 	}
 	r.Y += lines[len(lines)-1].Dot.Y
@@ -269,11 +270,11 @@ func (s *AddressesScreen) Show(ctx *Context, ops op.Ctx, th *Colors) {
 		}
 		layoutTitle(ctx, ops, dims.X, th.Text, title)
 
-		op.MaskOp(ops.Begin(), assets.ArrowLeft)
+		op.ImageOp(ops.Begin(), assets.ArrowLeft, true)
 		op.ColorOp(ops, th.Text)
 		left := ops.End()
 
-		op.MaskOp(ops.Begin(), assets.ArrowRight)
+		op.ImageOp(ops.Begin(), assets.ArrowRight, true)
 		op.ColorOp(ops, th.Text)
 		right := ops.End()
 
@@ -414,15 +415,14 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 		th := &cameraTheme
 		r := layout.Rectangle{Max: dims}
 
-		op.ImageOp(ops, feed)
+		op.ImageOp(ops, feed, false)
 
-		corners := assets.CameraCorners.For(image.Rect(0, 0, 132, 132))
-		op.ImageOp(ops.Begin(), corners)
-		op.Position(ops, ops.End(), r.Center(corners.Bounds().Size()))
+		corners := assets.CameraCorners.Add(ops.Begin(), image.Rect(0, 0, 132, 132), false)
+		op.Position(ops, ops.End(), r.Center(corners.Size()))
 
 		underlay := assets.ButtonFocused
 		background := func(ops op.Ctx, w op.CallOp, dst image.Rectangle, pos image.Point) {
-			op.MaskOp(ops.Begin(), underlay.For(dst))
+			underlay.Add(ops.Begin(), dst, true)
 			op.ColorOp(ops, color.NRGBA{A: theme.overlayMask})
 			op.Position(ops, ops.End(), image.Point{})
 			op.Position(ops, w, pos)
@@ -646,10 +646,9 @@ func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point,
 		Min: image.Pt(pstart+boxMargin, ptop+boxMargin),
 		Max: image.Pt(dims.X-pend-boxMargin, dims.Y-pbottom-boxMargin),
 	}
-	box := wbbg.For(r)
-	op.MaskOp(ops, box)
+	box := wbbg.Add(ops, r, true)
 	op.ColorOp(ops, th.Background)
-	op.MaskOp(ops, wbout.For(r))
+	wbout.Add(ops, r, true)
 	op.ColorOp(ops, th.Text)
 
 	btnOff := assets.NavBtnPrimary.Bounds().Dx() + btnMargin
@@ -715,28 +714,23 @@ type ProgressImage struct {
 	Src      image.RGBA64Image
 }
 
-func (p ProgressImage) ColorModel() color.Model {
-	return color.AlphaModel
+func (p *ProgressImage) Add(ctx op.Ctx) {
+	op.ParamImageOp(ctx, ProgressImageGen, true, p.Src.Bounds(), []any{p.Src}, []uint32{math.Float32bits(p.Progress)})
 }
 
-func (p ProgressImage) Bounds() image.Rectangle {
-	return p.Src.Bounds()
-}
-
-func (p ProgressImage) At(x, y int) color.Color {
-	return p.RGBA64At(x, y)
-}
-
-func (p ProgressImage) RGBA64At(x, y int) color.RGBA64 {
-	c := p.Bounds().Max.Add(p.Bounds().Min).Div(2)
+var ProgressImageGen = op.RegisterParameterizedImage(func(args op.ImageArguments, x, y int) color.RGBA64 {
+	src := args.Refs[0].(image.RGBA64Image)
+	progress := math.Float32frombits(args.Args[0])
+	b := src.Bounds()
+	c := b.Max.Add(b.Min).Div(2)
 	d := image.Pt(x, y).Sub(c)
 	angle := float32(math.Atan2(float64(d.X), float64(d.Y)))
 	angle = math.Pi - angle
-	if angle > 2*math.Pi*p.Progress {
+	if angle > 2*math.Pi*progress {
 		return color.RGBA64{}
 	}
-	return p.Src.RGBA64At(x, y)
-}
+	return src.RGBA64At(x, y)
+})
 
 type errDuplicateKey struct {
 	Fingerprint uint32
@@ -1049,35 +1043,20 @@ func emptyMnemonic(nwords int) bip39.Mnemonic {
 const scrollFadeDist = 16
 
 func fadeClip(ops op.Ctx, w op.CallOp, r image.Rectangle) {
-	op.MaskOp(ops, scrollMask(r))
+	op.ParamImageOp(ops, scrollMask, true, r, nil, nil)
 	op.Position(ops, w, image.Pt(0, 0))
 }
 
-type scrollMask image.Rectangle
-
-func (n scrollMask) At(x, y int) color.Color {
-	return n.RGBA64At(x, y)
-}
-
-func (n scrollMask) RGBA64At(x, y int) color.RGBA64 {
+var scrollMask = op.RegisterParameterizedImage(func(args op.ImageArguments, x, y int) color.RGBA64 {
 	alpha := 0xffff
-	b := n.Bounds()
-	if d := y - b.Min.Y; d < scrollFadeDist {
+	if d := y - args.Bounds.Min.Y; d < scrollFadeDist {
 		alpha = 0xffff * d / scrollFadeDist
-	} else if d := b.Max.Y - y; d < scrollFadeDist {
+	} else if d := args.Bounds.Max.Y - y; d < scrollFadeDist {
 		alpha = 0xffff * d / scrollFadeDist
 	}
 	a16 := uint16(alpha)
 	return color.RGBA64{A: a16}
-}
-
-func (n scrollMask) Bounds() image.Rectangle {
-	return image.Rectangle(n)
-}
-
-func (_ scrollMask) ColorModel() color.Model {
-	return color.AlphaModel
-}
+})
 
 func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic, selected int) {
 	kbd := NewKeyboard(ctx)
@@ -1142,7 +1121,7 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 		word := ops.End()
 		r := image.Rectangle{Max: longest}
 		r.Min.Y -= 3
-		op.MaskOp(ops.Begin(), assets.ButtonFocused.For(r))
+		assets.ButtonFocused.Add(ops.Begin(), r, true)
 		op.ColorOp(ops, th.Text)
 		word.Add(ops)
 		top, _ := content.CutBottom(kbdsz.Y)
@@ -1167,10 +1146,6 @@ type Keyboard struct {
 
 	nvalid    int
 	positions [len(kbdKeys)][]image.Point
-	bginact   image.Image
-	bgact     image.Image
-	bsinact   image.Image
-	bsact     image.Image
 	widest    image.Point
 	backspace image.Point
 	size      image.Point
@@ -1186,11 +1161,7 @@ func NewKeyboard(ctx *Context) *Keyboard {
 	bsb := assets.KeyBackspace.Bounds()
 	bsWidth := bsb.Min.X*2 + bsb.Dx()
 	k.backspace = image.Pt(bsWidth, k.widest.Y)
-	k.bginact = assets.Key.For(image.Rectangle{Max: k.widest})
-	k.bgact = assets.KeyActive.For(image.Rectangle{Max: k.widest})
-	k.bsinact = assets.Key.For(image.Rectangle{Max: k.backspace})
-	k.bsact = assets.KeyActive.For(image.Rectangle{Max: k.backspace})
-	bgbnds := k.bginact.Bounds()
+	bgbnds := assets.Key.Bounds(image.Rectangle{Max: k.widest})
 	const margin = 2
 	bgsz := bgbnds.Size().Add(image.Pt(margin, margin))
 	longest := 0
@@ -1433,10 +1404,10 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 	for i, row := range kbdKeys {
 		for j, key := range row {
 			valid := k.Valid(key)
-			bg := k.bginact
+			bg := assets.Key
 			bgsz := k.widest
 			if key == '⌫' {
-				bg = k.bsinact
+				bgsz = k.backspace
 			}
 			bgcol := th.Text
 			style := ctx.Styles.keyboard
@@ -1446,24 +1417,20 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 				bgcol.A = theme.inactiveMask
 				col = bgcol
 			case i == k.row && j == k.col:
-				bg = k.bgact
-				if key == '⌫' {
-					bg = k.bsact
-				}
+				bg = assets.KeyActive
 				col = th.Background
 			}
 			var sz image.Point
 			if key == '⌫' {
-				bgsz = k.backspace
 				icn := assets.KeyBackspace
 				sz = image.Pt(k.backspace.X, icn.Bounds().Dy())
-				op.MaskOp(ops.Begin(), icn)
+				op.ImageOp(ops.Begin(), icn, true)
 				op.ColorOp(ops, col)
 			} else {
 				sz = widget.Label(ops.Begin(), style, col, string(key))
 			}
 			key := ops.End()
-			op.MaskOp(ops.Begin(), bg)
+			bg.Add(ops.Begin(), image.Rectangle{Max: bgsz}, true)
 			op.ColorOp(ops, bgcol)
 			op.Position(ops, key, bgsz.Sub(sz).Div(2))
 			op.Position(ops, ops.End(), k.positions[i][j])
@@ -1565,7 +1532,7 @@ func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 			bg := image.Rectangle{Max: c.Size}
 			bg.Min.X -= xoff
 			bg.Max.X += xoff
-			op.MaskOp(inner.Begin(), assets.ButtonFocused.For(bg))
+			assets.ButtonFocused.Add(inner.Begin(), bg, true)
 			op.ColorOp(inner, th.Text)
 			txt.Add(inner)
 			txt = inner.End()
@@ -1712,22 +1679,22 @@ func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Poin
 		}
 		switch b.Style {
 		case StyleSecondary:
-			op.MaskOp(ops, assets.NavBtnPrimary)
+			op.ImageOp(ops, assets.NavBtnPrimary, true)
 			op.ColorOp(ops, th.Background)
-			op.MaskOp(ops, assets.NavBtnSecondary)
+			op.ImageOp(ops, assets.NavBtnSecondary, true)
 			op.ColorOp(ops, th.Text)
 		case StylePrimary:
-			op.MaskOp(ops, assets.NavBtnPrimary)
+			op.ImageOp(ops, assets.NavBtnPrimary, true)
 			op.ColorOp(ops, th.Primary)
 		}
-		icn := b.Icon
 		if b.Progress > 0 {
-			icn = ProgressImage{
+			(&ProgressImage{
 				Progress: b.Progress,
 				Src:      assets.IconProgress,
-			}
+			}).Add(ops)
+		} else {
+			op.ImageOp(ops, b.Icon, true)
 		}
-		op.MaskOp(ops, icn)
 		switch b.Style {
 		case StyleSecondary:
 			op.ColorOp(ops, th.Text)
@@ -1735,7 +1702,7 @@ func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Poin
 			op.ColorOp(ops, th.Text)
 		}
 		if b.Progress == 0 && inp.Pressed[b.Button] {
-			op.MaskOp(ops, assets.NavBtnPrimary)
+			op.ImageOp(ops, assets.NavBtnPrimary, true)
 			op.ColorOp(ops, color.NRGBA{A: theme.activeMask})
 		}
 	}
@@ -1763,12 +1730,12 @@ func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Poin
 func layoutMainPage(ops op.Ctx, th *Colors, width int, page program) image.Point {
 	var h layout.Align
 
-	op.MaskOp(ops.Begin(), assets.ArrowLeft)
+	op.ImageOp(ops.Begin(), assets.ArrowLeft, true)
 	op.ColorOp(ops, th.Text)
 	left := ops.End()
 	leftsz := h.Add(assets.ArrowLeft.Bounds().Size())
 
-	op.MaskOp(ops.Begin(), assets.ArrowRight)
+	op.ImageOp(ops.Begin(), assets.ArrowRight, true)
 	op.ColorOp(ops, th.Text)
 	right := ops.End()
 	rightsz := h.Add(assets.ArrowRight.Bounds().Size())
@@ -1792,7 +1759,7 @@ func layoutMainPlates(ops op.Ctx, page program) image.Point {
 	switch page {
 	case backupWallet:
 		img := assets.Hammer
-		op.ImageOp(ops, img)
+		op.ImageOp(ops, img, false)
 		return img.Bounds().Size()
 	}
 	panic("invalid page")
@@ -1811,7 +1778,7 @@ func layoutMainPager(ops op.Ctx, th *Colors, page program) image.Point {
 		if i == int(page) {
 			mask = assets.CircleFilled
 		}
-		op.MaskOp(ops, mask)
+		op.ImageOp(ops, mask, true)
 		op.ColorOp(ops, th.Text)
 	}
 	return image.Pt((sz.X+space)*npages-space, sz.Y)
@@ -2123,7 +2090,7 @@ func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point
 				col = th.Background
 				r := image.Rectangle{Max: longest}
 				r.Min.Y -= 3
-				op.MaskOp(ops, assets.ButtonFocused.For(r))
+				assets.ButtonFocused.Add(ops, r, true)
 				op.ColorOp(ops, th.Text)
 			}
 			word := strings.ToUpper(bip39.LabelFor(w))
@@ -2645,10 +2612,10 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 		_, content = subt.CutTop(subtsz.Y)
 		middle, _ := content.CutBottom(leadingSize)
 		op.Offset(ops, middle.Center(assets.ProgressCircle.Bounds().Size()))
-		op.MaskOp(ops, ProgressImage{
+		(&ProgressImage{
 			Progress: s.engrave.lastProgress,
 			Src:      assets.ProgressCircle,
-		})
+		}).Add(ops)
 		op.ColorOp(ops, th.Text)
 		sz := widget.Label(ops.Begin(), ctx.Styles.progress, th.Text, progress)
 		op.Position(ops, ops.End(), middle.Center(sz))
@@ -2659,7 +2626,7 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 	if img := ins.Image; img != nil {
 		sz := img.Bounds().Size()
 		op.Offset(ops, image.Pt((bodysz.X-sz.X)/2, bodysz.Y))
-		op.ImageOp(ops, img)
+		op.ImageOp(ops, img, false)
 		if sz.X > bodysz.X {
 			bodysz.X = sz.X
 		}
@@ -2799,6 +2766,7 @@ func (b Button) String() string {
 
 type App struct {
 	root op.Ops
+	mask *image.Alpha
 	ctx  *Context
 	idle struct {
 		start  time.Time
@@ -2872,7 +2840,11 @@ func (a *App) Frame() {
 		if !ok {
 			break
 		}
-		a.root.Draw(fb)
+		fbdims := fb.Bounds().Size()
+		if a.mask == nil || fbdims != a.mask.Bounds().Size() {
+			a.mask = image.NewAlpha(image.Rectangle{Max: fbdims})
+		}
+		a.root.Draw(fb, a.mask)
 	}
 	drawTime := time.Now()
 	if a.ctx.Platform.Debug() {
