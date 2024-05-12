@@ -2376,7 +2376,6 @@ type EngraveScreen struct {
 		enabled bool
 	}
 	engrave engraveState
-	confirm ConfirmDelay
 }
 
 type engraveState struct {
@@ -2474,6 +2473,10 @@ func (s *EngraveScreen) moveStep(ctx *Context, ops op.Ctx, th *Colors) bool {
 	return false
 }
 
+func (s *EngraveScreen) canPrev() bool {
+	return s.step > 0 && s.instructions[s.step-1].Type == PrepareInstruction
+}
+
 func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 	defer func() {
 		if s.engrave.cancel != nil {
@@ -2508,20 +2511,9 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 			}
 		}
 
-		var progress float32
-		var ins Instruction
-		canPrev := false
+	outer:
 		for {
-			ins = s.instructions[s.step]
-			canPrev = s.step > 0 && s.instructions[s.step-1].Type == PrepareInstruction
-			progress = s.confirm.Progress(ctx)
-			if progress == 1. {
-				if s.moveStep(ctx, ops, th) {
-					return true
-				}
-				s.confirm = ConfirmDelay{}
-				continue
-			}
+			ins := s.instructions[s.step]
 			if !s.dryRun.timeout.IsZero() {
 				now := ctx.Platform.Now()
 				d := s.dryRun.timeout.Sub(now)
@@ -2540,7 +2532,7 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 				if !e.Click {
 					break
 				}
-				if canPrev {
+				if s.canPrev() {
 					s.step--
 				} else {
 					confirm := &ConfirmWarningScreen{
@@ -2573,16 +2565,39 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 					s.dryRun.timeout = time.Time{}
 				}
 			case Button3:
-				if ins.Type == ConnectInstruction {
-					if e.Pressed {
-						ctx.Buttons[Button3] = false
-						s.confirm.Start(ctx, confirmDelay)
-					} else {
-						s.confirm = ConfirmDelay{}
+				switch ins.Type {
+				case ConnectInstruction:
+					if !e.Pressed {
+						continue
 					}
-					break
-				} else if !e.Click || ins.Type == EngraveInstruction {
-					break
+					ctx.Buttons[Button3] = false
+					confirm := new(ConfirmDelay)
+					confirm.Start(ctx, confirmDelay)
+					for {
+						p := confirm.Progress(ctx)
+						if p == 1. {
+							break
+						}
+						for {
+							e, ok := ctx.Next(Button3)
+							if !ok {
+								break
+							}
+							if e.Button == Button3 && !e.Pressed {
+								continue outer
+							}
+						}
+						dims := ctx.Platform.DisplaySize()
+						s.draw(ctx, ops, th, dims)
+						s.drawNav(ctx, ops, th, dims, p)
+						ctx.Frame()
+					}
+				case EngraveInstruction:
+					continue
+				default:
+					if !e.Click {
+						continue
+					}
 				}
 				if s.moveStep(ctx, ops, th) {
 					return true
@@ -2592,26 +2607,8 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 
 		dims := ctx.Platform.DisplaySize()
 		s.draw(ctx, ops, th, dims)
+		s.drawNav(ctx, ops, th, dims, 0)
 
-		icnBack := assets.IconBack
-		if canPrev {
-			icnBack = assets.IconLeft
-		}
-		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button1, Style: StyleSecondary, Icon: icnBack})
-		switch ins.Type {
-		case EngraveInstruction:
-		case ConnectInstruction:
-			icn := image.RGBA64Image(assets.IconHammer)
-			if s.confirm.Running() {
-				icn = ProgressImage{
-					Progress: progress,
-					Src:      assets.IconProgress,
-				}
-			}
-			layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: icn})
-		default:
-			layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconRight})
-		}
 		ctx.Frame()
 	}
 }
@@ -2664,6 +2661,29 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 	if s.dryRun.enabled {
 		sz := widget.Label(ops.Begin(), ctx.Styles.debug, th.Text, "dry-run")
 		op.Position(ops, ops.End(), r.SE(sz).Sub(image.Pt(4, 0)))
+	}
+}
+
+func (s *EngraveScreen) drawNav(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, progress float32) {
+	icnBack := assets.IconBack
+	if s.canPrev() {
+		icnBack = assets.IconLeft
+	}
+	layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button1, Style: StyleSecondary, Icon: icnBack})
+	ins := s.instructions[s.step]
+	switch ins.Type {
+	case EngraveInstruction:
+	case ConnectInstruction:
+		icn := image.RGBA64Image(assets.IconHammer)
+		if progress > 0 {
+			icn = ProgressImage{
+				Progress: progress,
+				Src:      assets.IconProgress,
+			}
+		}
+		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: icn})
+	default:
+		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconRight})
 	}
 }
 
