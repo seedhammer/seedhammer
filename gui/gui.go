@@ -2387,13 +2387,6 @@ type engraveState struct {
 	lastProgress float32
 }
 
-func (s *EngraveScreen) close() {
-	if s.engrave.cancel != nil {
-		close(s.engrave.cancel)
-	}
-	s.engrave = engraveState{}
-}
-
 func (s *EngraveScreen) showError(ctx *Context, ops op.Ctx, th *Colors, errScr *ErrorScreen) {
 	for {
 		dims := ctx.Platform.DisplaySize()
@@ -2402,7 +2395,7 @@ func (s *EngraveScreen) showError(ctx *Context, ops op.Ctx, th *Colors, errScr *
 		if dismissed {
 			break
 		}
-		s.Draw(ctx, ops, th, dims)
+		s.draw(ctx, ops, th, dims)
 		d.Add(ops)
 		ctx.Frame()
 	}
@@ -2428,7 +2421,6 @@ func (s *EngraveScreen) moveStep(ctx *Context, ops op.Ctx, th *Colors) bool {
 	}
 	s.step++
 	if s.step == len(s.instructions) {
-		s.close()
 		return true
 	}
 	ins = s.instructions[s.step]
@@ -2483,6 +2475,12 @@ func (s *EngraveScreen) moveStep(ctx *Context, ops op.Ctx, th *Colors) bool {
 }
 
 func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
+	defer func() {
+		if s.engrave.cancel != nil {
+			close(s.engrave.cancel)
+		}
+		s.engrave = engraveState{}
+	}()
 	for {
 	loop:
 		for {
@@ -2518,7 +2516,9 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 			canPrev = s.step > 0 && s.instructions[s.step-1].Type == PrepareInstruction
 			progress = s.confirm.Progress(ctx)
 			if progress == 1. {
-				s.moveStep(ctx, ops, th)
+				if s.moveStep(ctx, ops, th) {
+					return true
+				}
 				s.confirm = ConfirmDelay{}
 				continue
 			}
@@ -2557,10 +2557,9 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 						case ConfirmNo:
 							break loop2
 						case ConfirmYes:
-							s.close()
 							return false
 						}
-						s.Draw(ctx, ops, th, dims)
+						s.draw(ctx, ops, th, dims)
 						d.Add(ops)
 						ctx.Frame()
 					}
@@ -2592,7 +2591,7 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 		}
 
 		dims := ctx.Platform.DisplaySize()
-		s.Draw(ctx, ops, th, dims)
+		s.draw(ctx, ops, th, dims)
 
 		icnBack := assets.IconBack
 		if canPrev {
@@ -2617,7 +2616,7 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 	}
 }
 
-func (s *EngraveScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
+func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
 	op.ColorOp(ops, th.Background)
 	layoutTitle(ctx, ops, dims.X, th.Text, fmt.Sprintf("Engrave Plate"))
 
