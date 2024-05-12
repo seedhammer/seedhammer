@@ -123,7 +123,12 @@ func runUI(ctx *Context, f func()) func() {
 	token := new(int)
 	frameCh := make(chan struct{})
 	closed := make(chan struct{})
+	frames := 0
 	ctx.Frame = func() {
+		frames++
+		if frames > 10000 {
+			panic("UI is not making progress")
+		}
 		frameCh <- struct{}{}
 		select {
 		case <-frameCh:

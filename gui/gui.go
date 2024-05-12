@@ -36,8 +36,6 @@ import (
 const nbuttons = 8
 
 type Context struct {
-	Buttons  [nbuttons]bool
-	Repeats  [nbuttons]time.Time
 	Platform Platform
 	Styles   Styles
 	Wakeup   time.Time
@@ -78,44 +76,13 @@ func isRepeatButton(b Button) bool {
 	return false
 }
 
-func (c *Context) Repeat() {
-	now := c.Platform.Now()
-	for btn, pressed := range c.Buttons {
-		b := Button(btn)
-		if !pressed || !isRepeatButton(b) {
-			continue
-		}
-		if now.Before(c.Repeats[btn]) {
-			continue
-		}
-		c.events = append(c.events, ButtonEvent{Button: b, Pressed: true}.Event())
-		t := c.Platform.Now().Add(repeatDelay)
-		c.Repeats[b] = t
-		c.WakeupAt(t)
-	}
-}
-
 func (c *Context) Reset() {
 	c.events = c.events[:0]
 	c.Wakeup = time.Time{}
 }
 
 func (c *Context) Events(evts ...Event) {
-	for _, e := range evts {
-		if e2, ok := e.AsButton(); ok {
-			if int(e2.Button) < len(c.Buttons) {
-				e2.Click = !e2.Pressed && c.Buttons[e2.Button]
-				c.Buttons[e2.Button] = e2.Pressed
-				if e2.Pressed && isRepeatButton(e2.Button) {
-					t := c.Platform.Now().Add(repeatStartDelay)
-					c.Repeats[e2.Button] = t
-					c.WakeupAt(t)
-				}
-			}
-			e = e2.Event()
-		}
-		c.events = append(c.events, e)
-	}
+	c.events = append(c.events, evts...)
 }
 
 func (c *Context) FrameEvent() (FrameEvent, bool) {
@@ -142,6 +109,54 @@ func (c *Context) Next(btns ...Button) (ButtonEvent, bool) {
 		}
 	}
 	return ButtonEvent{}, false
+}
+
+type InputTracker struct {
+	Pressed [nbuttons]bool
+	clicked [nbuttons]bool
+	repeats [nbuttons]time.Time
+}
+
+func (t *InputTracker) Next(c *Context, btns ...Button) (ButtonEvent, bool) {
+	now := c.Platform.Now()
+	for _, b := range btns {
+		if !isRepeatButton(b) {
+			continue
+		}
+		if !t.Pressed[b] {
+			t.repeats[b] = time.Time{}
+			continue
+		}
+		wakeup := t.repeats[b]
+		if wakeup.IsZero() {
+			wakeup = now.Add(repeatStartDelay)
+		}
+		repeat := !now.Before(wakeup)
+		if repeat {
+			wakeup = now.Add(repeatDelay)
+		}
+		t.repeats[b] = wakeup
+		c.WakeupAt(wakeup)
+		if repeat {
+			return ButtonEvent{Button: b, Pressed: true}, true
+		}
+	}
+
+	e, ok := c.Next(btns...)
+	if !ok {
+		return ButtonEvent{}, false
+	}
+	if int(e.Button) < len(t.clicked) {
+		t.clicked[e.Button] = !e.Pressed && t.Pressed[e.Button]
+		t.Pressed[e.Button] = e.Pressed
+	}
+	return e, true
+}
+
+func (t *InputTracker) Clicked(b Button) bool {
+	c := t.clicked[b]
+	t.clicked[b] = false
+	return c
 }
 
 const longestWord = "TOMORROW"
@@ -211,15 +226,16 @@ func (s *AddressesScreen) Show(ctx *Context, ops op.Ctx, th *Colors) {
 	const linesPerScroll = linesPerPage - 3
 
 	const maxPage = len(s.addresses)
+	inp := new(InputTracker)
 	for {
 		for {
-			e, ok := ctx.Next(Button1, Left, Right, Up, Down)
+			e, ok := inp.Next(ctx, Button1, Left, Right, Up, Down)
 			if !ok {
 				break
 			}
 			switch e.Button {
 			case Button1:
-				if e.Click {
+				if inp.Clicked(e.Button) {
 					return
 				}
 			case Left:
@@ -291,9 +307,7 @@ func (s *AddressesScreen) Show(ctx *Context, ops op.Ctx, th *Colors) {
 		}
 		fadeClip(ops, ops.End(), image.Rectangle(body))
 
-		layoutNavigation(ctx, ops, th, dims,
-			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-		)
+		layoutNavigation(inp, ops, th, dims, []NavButton{{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack}}...)
 		ctx.Frame()
 	}
 }
@@ -351,14 +365,15 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 		cameraErr error
 		decoder   QRDecoder
 	)
+	inp := new(InputTracker)
 	for {
 		const cameraFrameScale = 3
 		for {
-			e, ok := ctx.Next(Button1, Button2)
+			e, ok := inp.Next(ctx, Button1, Button2)
 			if !ok {
 				break
 			}
-			if !e.Click {
+			if !inp.Clicked(e.Button) {
 				continue
 			}
 			switch e.Button {
@@ -440,9 +455,7 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 		}
 
 		nav := func(btn Button, icn image.RGBA64Image) {
-			nav := layoutNavigation(ctx, ops.Begin(), th, dims,
-				NavButton{Button: btn, Style: StyleSecondary, Icon: icn},
-			)
+			nav := layoutNavigation(inp, ops.Begin(), th, dims, []NavButton{{Button: btn, Style: StyleSecondary, Icon: icn}}...)
 			nav = image.Rectangle(layout.Rectangle(nav).Shrink(underlay.Padding()).Shrink(-2, -4, -2, -2))
 			background(ops, ops.End(), nav, image.Point{})
 		}
@@ -536,23 +549,24 @@ type ErrorScreen struct {
 	Title string
 	Body  string
 	w     Warning
+	inp   InputTracker
 }
 
 func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) bool {
 	for {
-		e, ok := ctx.Next(Button3)
+		e, ok := s.inp.Next(ctx, Button3)
 		if !ok {
 			break
 		}
 		switch e.Button {
 		case Button3:
-			if e.Click {
+			if s.inp.Clicked(e.Button) {
 				return true
 			}
 		}
 	}
 	s.w.Layout(ctx, ops, th, dims, s.Title, s.Body)
-	layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
+	layoutNavigation(&s.inp, ops, th, dims, []NavButton{{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
 	return false
 }
 
@@ -563,11 +577,13 @@ type ConfirmWarningScreen struct {
 
 	warning Warning
 	confirm ConfirmDelay
+	inp     InputTracker
 }
 
 type Warning struct {
 	scroll  int
 	txtclip int
+	inp     InputTracker
 }
 
 type ConfirmResult int
@@ -603,7 +619,7 @@ const confirmDelay = 1 * time.Second
 
 func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, title, txt string) image.Point {
 	for {
-		e, ok := ctx.Next(Up, Down)
+		e, ok := w.inp.Next(ctx, Up, Down)
 		if !ok {
 			break
 		}
@@ -669,13 +685,13 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 		if progress == 1 {
 			return ConfirmYes
 		}
-		e, ok := ctx.Next(Button3, Button1)
+		e, ok := s.inp.Next(ctx, Button3, Button1)
 		if !ok {
 			break
 		}
 		switch e.Button {
 		case Button1:
-			if e.Click {
+			if s.inp.Clicked(e.Button) {
 				return ConfirmNo
 			}
 		case Button3:
@@ -687,10 +703,10 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 		}
 	}
 	s.warning.Layout(ctx, ops, th, dims, s.Title, s.Body)
-	layoutNavigation(ctx, ops, th, dims,
-		NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-		NavButton{Button: Button3, Style: StylePrimary, Icon: s.Icon, Progress: progress},
-	)
+	layoutNavigation(&s.inp, ops, th, dims, []NavButton{
+		{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
+		{Button: Button3, Style: StylePrimary, Icon: s.Icon, Progress: progress},
+	}...)
 	return ConfirmNone
 }
 
@@ -1069,20 +1085,21 @@ func (_ scrollMask) ColorModel() color.Model {
 
 func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic, selected int) {
 	kbd := NewKeyboard(ctx)
+	inp := new(InputTracker)
 	for {
 		for {
 			kbd.Update(ctx)
-			e, ok := ctx.Next(Button1, Button2)
+			e, ok := inp.Next(ctx, Button1, Button2)
 			if !ok {
 				break
 			}
 			switch e.Button {
 			case Button1:
-				if e.Click {
+				if inp.Clicked(e.Button) {
 					return
 				}
 			case Button2:
-				if !e.Click {
+				if !inp.Clicked(e.Button) {
 					break
 				}
 				w, complete := kbd.Complete()
@@ -1135,11 +1152,9 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 		top, _ := content.CutBottom(kbdsz.Y)
 		op.Position(ops, ops.End(), top.Center(longest))
 
-		layoutNavigation(ctx, ops, th, dims,
-			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-		)
+		layoutNavigation(inp, ops, th, dims, []NavButton{{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack}}...)
 		if complete {
-			layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button2, Style: StylePrimary, Icon: assets.IconCheckmark})
+			layoutNavigation(inp, ops, th, dims, []NavButton{{Button: Button2, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
 		}
 		ctx.Frame()
 	}
@@ -1166,6 +1181,7 @@ type Keyboard struct {
 
 	mask     uint32
 	row, col int
+	inp      InputTracker
 }
 
 func NewKeyboard(ctx *Context) *Keyboard {
@@ -1276,7 +1292,7 @@ func (k *Keyboard) Valid(r rune) bool {
 
 func (k *Keyboard) Update(ctx *Context) {
 	for {
-		e, ok := ctx.Next(Left, Right, Up, Down, CCW, CW, Center, Rune, Button3)
+		e, ok := k.inp.Next(ctx, Left, Right, Up, Down, CCW, CW, Center, Rune, Button3)
 		if !ok {
 			break
 		}
@@ -1468,19 +1484,20 @@ type ChoiceScreen struct {
 }
 
 func (s *ChoiceScreen) Choose(ctx *Context, ops op.Ctx, th *Colors) (int, bool) {
+	inp := new(InputTracker)
 	for {
 		for {
-			e, ok := ctx.Next(Button1, Button3, Center, Up, Down, CCW, CW)
+			e, ok := inp.Next(ctx, Button1, Button3, Center, Up, Down, CCW, CW)
 			if !ok {
 				break
 			}
 			switch e.Button {
 			case Button1:
-				if e.Click {
+				if inp.Clicked(e.Button) {
 					return 0, false
 				}
 			case Button3, Center:
-				if e.Click {
+				if inp.Clicked(e.Button) {
 					return s.choice, true
 				}
 			case Up, CCW:
@@ -1501,10 +1518,10 @@ func (s *ChoiceScreen) Choose(ctx *Context, ops op.Ctx, th *Colors) (int, bool) 
 		dims := ctx.Platform.DisplaySize()
 		s.Draw(ctx, ops, th, dims)
 
-		layoutNavigation(ctx, ops, th, dims,
-			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-			NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
-		)
+		layoutNavigation(inp, ops, th, dims, []NavButton{
+			{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
+			{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
+		}...)
 		ctx.Frame()
 	}
 }
@@ -1565,17 +1582,18 @@ func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 
 func mainFlow(ctx *Context, ops op.Ctx) {
 	var page program
+	inp := new(InputTracker)
 	for {
 		dims := ctx.Platform.DisplaySize()
 	events:
 		for {
-			e, ok := ctx.Next(Button3, Center, Left, Right)
+			e, ok := inp.Next(ctx, Button3, Center, Left, Right)
 			if !ok {
 				break
 			}
 			switch e.Button {
 			case Button3, Center:
-				if !e.Click {
+				if !inp.Clicked(e.Button) {
 					break
 				}
 				ws := &ConfirmWarningScreen{
@@ -1622,8 +1640,9 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 			}
 		}
 		drawMainScreen(ctx, ops, dims, page)
-		layoutNavigation(ctx, ops, mainScreenTheme(page), dims,
-			NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
+		layoutNavigation(inp, ops, mainScreenTheme(page), dims, []NavButton{
+			{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
+		}...)
 		ctx.Frame()
 	}
 }
@@ -1689,9 +1708,9 @@ type NavButton struct {
 	Progress float32
 }
 
-func layoutNavigation(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, btns ...NavButton) image.Rectangle {
+func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Point, btns ...NavButton) image.Rectangle {
 	navsz := assets.NavBtnPrimary.Bounds().Size()
-	button := func(ops op.Ctx, b NavButton, pressed bool) {
+	button := func(ops op.Ctx, b NavButton) {
 		if b.Style == StyleNone {
 			return
 		}
@@ -1719,7 +1738,7 @@ func layoutNavigation(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, bt
 		case StylePrimary:
 			op.ColorOp(ops, th.Text)
 		}
-		if b.Progress == 0 && pressed {
+		if b.Progress == 0 && inp.Pressed[b.Button] {
 			op.MaskOp(ops, assets.NavBtnPrimary)
 			op.ColorOp(ops, color.NRGBA{A: theme.activeMask})
 		}
@@ -1733,7 +1752,7 @@ func layoutNavigation(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, bt
 	var r image.Rectangle
 	for _, b := range btns {
 		idx := int(b.Button - Button1)
-		button(ops.Begin(), b, ctx.Buttons[b.Button])
+		button(ops.Begin(), b)
 		y := ys[idx]
 		pos := image.Pt(dims.X-btnsz.X, y)
 		op.Position(ops, ops.End(), pos)
@@ -1949,16 +1968,17 @@ type SeedScreen struct {
 }
 
 func (s *SeedScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) bool {
+	inp := new(InputTracker)
 	for {
 	events:
 		for {
-			e, ok := ctx.Next(Button1, Button2, Center, Button3, Up, Down)
+			e, ok := inp.Next(ctx, Button1, Button2, Center, Button3, Up, Down)
 			if !ok {
 				break
 			}
 			switch e.Button {
 			case Button1:
-				if !e.Click {
+				if !inp.Clicked(e.Button) {
 					break
 				}
 				if isEmptyMnemonic(mnemonic) {
@@ -1984,13 +2004,13 @@ func (s *SeedScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip3
 					ctx.Frame()
 				}
 			case Button2, Center:
-				if !e.Click {
+				if !inp.Clicked(e.Button) {
 					break
 				}
 				inputWordsFlow(ctx, ops, th, mnemonic, s.selected)
 				continue
 			case Button3:
-				if !e.Click || !isMnemonicComplete(mnemonic) {
+				if !inp.Clicked(e.Button) || !isMnemonicComplete(mnemonic) {
 					break
 				}
 				showErr := func(scr *ErrorScreen) {
@@ -2045,12 +2065,14 @@ func (s *SeedScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip3
 		dims := ctx.Platform.DisplaySize()
 		s.Draw(ctx, ops, th, dims, mnemonic)
 
-		layoutNavigation(ctx, ops, th, dims,
-			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-			NavButton{Button: Button2, Style: StyleSecondary, Icon: assets.IconEdit},
-		)
+		layoutNavigation(inp, ops, th, dims, []NavButton{
+			{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
+			{Button: Button2, Style: StyleSecondary, Icon: assets.IconEdit},
+		}...)
 		if isMnemonicComplete(mnemonic) {
-			layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark})
+			layoutNavigation(inp, ops, th, dims, []NavButton{
+				{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
+			}...)
 		}
 		ctx.Frame()
 	}
@@ -2211,24 +2233,25 @@ func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (int, b
 			ctx.Frame()
 		}
 	}
+	inp := new(InputTracker)
 	for {
 		for {
-			e, ok := ctx.Next(Button1, Button2, Button3)
+			e, ok := inp.Next(ctx, Button1, Button2, Button3)
 			if !ok {
 				break
 			}
 			switch e.Button {
 			case Button1:
-				if e.Click {
+				if inp.Clicked(e.Button) {
 					return 0, false
 				}
 			case Button2:
-				if !e.Click {
+				if !inp.Clicked(e.Button) {
 					break
 				}
 				NewAddressesScreen(s.Descriptor).Show(ctx, ops, th)
 			case Button3:
-				if !e.Click {
+				if !inp.Clicked(e.Button) {
 					break
 				}
 				if err := validateDescriptor(ctx.Platform.EngraverParams(), s.Descriptor); err != nil {
@@ -2276,11 +2299,11 @@ func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (int, b
 
 		dims := ctx.Platform.DisplaySize()
 		s.Draw(ctx, ops, th, dims)
-		layoutNavigation(ctx, ops, th, dims,
-			NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-			NavButton{Button: Button2, Style: StyleSecondary, Icon: assets.IconInfo},
-			NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
-		)
+		layoutNavigation(inp, ops, th, dims, []NavButton{
+			{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
+			{Button: Button2, Style: StyleSecondary, Icon: assets.IconInfo},
+			{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
+		}...)
 		ctx.Frame()
 	}
 }
@@ -2480,6 +2503,7 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 		}
 		s.engrave = engraveState{}
 	}()
+	inp := new(InputTracker)
 	for {
 	loop:
 		for {
@@ -2518,13 +2542,13 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 					s.dryRun.enabled = !s.dryRun.enabled
 				}
 			}
-			e, ok := ctx.Next(Button1, Button2, Button3)
+			e, ok := inp.Next(ctx, Button1, Button2, Button3)
 			if !ok {
 				break
 			}
 			switch e.Button {
 			case Button1:
-				if !e.Click {
+				if !inp.Clicked(e.Button) {
 					break
 				}
 				if s.canPrev() {
@@ -2565,16 +2589,16 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 					if !e.Pressed {
 						continue
 					}
-					ctx.Buttons[Button3] = false
 					confirm := new(ConfirmDelay)
 					confirm.Start(ctx, confirmDelay)
+					inp.Pressed[e.Button] = false
 					for {
 						p := confirm.Progress(ctx)
 						if p == 1. {
 							break
 						}
 						for {
-							e, ok := ctx.Next(Button3)
+							e, ok := inp.Next(ctx, Button3)
 							if !ok {
 								break
 							}
@@ -2584,13 +2608,13 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 						}
 						dims := ctx.Platform.DisplaySize()
 						s.draw(ctx, ops, th, dims)
-						s.drawNav(ctx, ops, th, dims, p)
+						s.drawNav(inp, ops, th, dims, p)
 						ctx.Frame()
 					}
 				case EngraveInstruction:
 					continue
 				default:
-					if !e.Click {
+					if !inp.Clicked(e.Button) {
 						continue
 					}
 				}
@@ -2602,7 +2626,7 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 
 		dims := ctx.Platform.DisplaySize()
 		s.draw(ctx, ops, th, dims)
-		s.drawNav(ctx, ops, th, dims, 0)
+		s.drawNav(inp, ops, th, dims, 0)
 
 		ctx.Frame()
 	}
@@ -2659,19 +2683,24 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 	}
 }
 
-func (s *EngraveScreen) drawNav(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, progress float32) {
+func (s *EngraveScreen) drawNav(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Point, progress float32) {
 	icnBack := assets.IconBack
 	if s.canPrev() {
 		icnBack = assets.IconLeft
 	}
-	layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button1, Style: StyleSecondary, Icon: icnBack})
+	layoutNavigation(inp, ops, th, dims, []NavButton{{Button: Button1, Style: StyleSecondary, Icon: icnBack}}...)
 	ins := s.instructions[s.step]
 	switch ins.Type {
 	case EngraveInstruction:
 	case ConnectInstruction:
-		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconHammer, Progress: progress})
+		layoutNavigation(inp, ops, th, dims, []NavButton{{Button: Button3, Style: StylePrimary, Icon: assets.IconHammer, Progress: progress}}...)
 	default:
-		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconRight})
+		layoutNavigation(inp, ops, th, dims, []NavButton{{
+			Button:   Button3,
+			Style:    StylePrimary,
+			Icon:     assets.IconRight,
+			Progress: progress,
+		}}...)
 	}
 }
 
@@ -2719,8 +2748,7 @@ type ButtonEvent struct {
 	Button  Button
 	Pressed bool
 	// Rune is only valid if Button is Rune.
-	Rune  rune
-	Click bool
+	Rune rune
 }
 
 type SDCardEvent struct {
@@ -2817,7 +2845,6 @@ func (a *App) Frame() {
 		}
 		wakeup = time.Time{}
 	}
-	a.ctx.Repeat()
 	a.ctx.WakeupAt(a.idle.start.Add(idleTimeout))
 	idle := now.Sub(a.idle.start) >= idleTimeout
 	if a.idle.active != idle {
@@ -2825,7 +2852,6 @@ func (a *App) Frame() {
 		if idle {
 			a.idle.state = saver.State{}
 		} else {
-			a.ctx.Buttons = [nbuttons]bool{}
 			// The screen saver has invalidated the cached
 			// frame content.
 			a.root = op.Ops{}
@@ -2879,15 +2905,10 @@ func (b ButtonEvent) Event() Event {
 	if b.Pressed {
 		pressed = 1
 	}
-	click := uint32(0)
-	if b.Click {
-		click = 1
-	}
 	e := Event{typ: buttonEvent}
 	e.data[0] = uint32(b.Button)
 	e.data[1] = pressed
 	e.data[2] = uint32(b.Rune)
-	e.data[3] = click
 	return e
 }
 
@@ -2921,7 +2942,6 @@ func (e Event) AsButton() (ButtonEvent, bool) {
 		Button:  Button(e.data[0]),
 		Pressed: e.data[1] != 0,
 		Rune:    rune(e.data[2]),
-		Click:   e.data[3] != 0,
 	}, true
 }
 
