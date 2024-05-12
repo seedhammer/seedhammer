@@ -587,7 +587,7 @@ func (c *ConfirmDelay) Start(ctx *Context, delay time.Duration) {
 }
 
 func (c *ConfirmDelay) Progress(ctx *Context) float32 {
-	if !c.Running() {
+	if c.timeout.IsZero() {
 		return 0.
 	}
 	now := ctx.Platform.Now()
@@ -597,10 +597,6 @@ func (c *ConfirmDelay) Progress(ctx *Context) float32 {
 	}
 	ctx.Platform.Wakeup()
 	return 1. - float32(d.Seconds()/confirmDelay.Seconds())
-}
-
-func (c *ConfirmDelay) Running() bool {
-	return !c.timeout.IsZero()
 }
 
 const confirmDelay = 1 * time.Second
@@ -684,7 +680,6 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 			}
 		case Button3:
 			if e.Pressed {
-				ctx.Buttons[Button3] = false
 				s.confirm.Start(ctx, confirmDelay)
 			} else {
 				s.confirm = ConfirmDelay{}
@@ -692,16 +687,9 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 		}
 	}
 	s.warning.Layout(ctx, ops, th, dims, s.Title, s.Body)
-	icn := s.Icon
-	if s.confirm.Running() {
-		icn = ProgressImage{
-			Progress: progress,
-			Src:      assets.IconProgress,
-		}
-	}
 	layoutNavigation(ctx, ops, th, dims,
 		NavButton{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-		NavButton{Button: Button3, Style: StylePrimary, Icon: icn},
+		NavButton{Button: Button3, Style: StylePrimary, Icon: s.Icon, Progress: progress},
 	)
 	return ConfirmNone
 }
@@ -1695,9 +1683,10 @@ const (
 )
 
 type NavButton struct {
-	Button Button
-	Style  ButtonStyle
-	Icon   image.Image
+	Button   Button
+	Style    ButtonStyle
+	Icon     image.Image
+	Progress float32
 }
 
 func layoutNavigation(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, btns ...NavButton) image.Rectangle {
@@ -1716,14 +1705,21 @@ func layoutNavigation(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, bt
 			op.MaskOp(ops, assets.NavBtnPrimary)
 			op.ColorOp(ops, th.Primary)
 		}
-		op.MaskOp(ops, b.Icon)
+		icn := b.Icon
+		if b.Progress > 0 {
+			icn = ProgressImage{
+				Progress: b.Progress,
+				Src:      assets.IconProgress,
+			}
+		}
+		op.MaskOp(ops, icn)
 		switch b.Style {
 		case StyleSecondary:
 			op.ColorOp(ops, th.Text)
 		case StylePrimary:
 			op.ColorOp(ops, th.Text)
 		}
-		if pressed {
+		if b.Progress == 0 && pressed {
 			op.MaskOp(ops, assets.NavBtnPrimary)
 			op.ColorOp(ops, color.NRGBA{A: theme.activeMask})
 		}
@@ -2518,7 +2514,6 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 				now := ctx.Platform.Now()
 				d := s.dryRun.timeout.Sub(now)
 				if d <= 0 {
-					ctx.Buttons[Button2] = false
 					s.dryRun.timeout = time.Time{}
 					s.dryRun.enabled = !s.dryRun.enabled
 				}
@@ -2674,14 +2669,7 @@ func (s *EngraveScreen) drawNav(ctx *Context, ops op.Ctx, th *Colors, dims image
 	switch ins.Type {
 	case EngraveInstruction:
 	case ConnectInstruction:
-		icn := image.RGBA64Image(assets.IconHammer)
-		if progress > 0 {
-			icn = ProgressImage{
-				Progress: progress,
-				Src:      assets.IconProgress,
-			}
-		}
-		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: icn})
+		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconHammer, Progress: progress})
 	default:
 		layoutNavigation(ctx, ops, th, dims, NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconRight})
 	}
