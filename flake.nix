@@ -447,13 +447,13 @@
               in
               pkgs.stdenv.mkDerivation rec {
                 pname = "libcamera";
-                version = "0.1";
+                version = "0.3";
                 patch = "0";
 
                 src = pkgs.fetchgit {
                   url = "https://git.libcamera.org/libcamera/libcamera.git";
                   rev = "v${version}.${patch}";
-                  hash = "sha256-icHZtv25QvJEv0DlELT3cDxho3Oz2BJAMNKr5W4bshk=";
+                  hash = "sha256-eCtOtdjpwn0S56ZyRVdG1QCBk1KGPh8YTXD50xev7Bc=";
                 };
 
                 patches = [
