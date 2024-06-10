@@ -950,7 +950,7 @@ var (
 			Lead: "seedhammer.com/tip#3",
 		},
 		{
-			Body:  "Place a {{.Name}} on top\nof a protective plate.",
+			Body:  "Place a {{.Name}} on the machine.",
 			Image: assets.Sh01,
 			Lead:  "seedhammer.com/tip#4",
 		},
@@ -988,7 +988,7 @@ var (
 			Lead: "seedhammer.com/tip#1",
 		},
 		{
-			Body:  "Place a {{.Name}} on top\nof a protective plate.",
+			Body:  "Place a {{.Name}} on the machine.",
 			Image: assets.Sh01,
 			Lead:  "seedhammer.com/tip#4",
 		},
