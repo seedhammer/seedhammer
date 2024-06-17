@@ -126,7 +126,7 @@ func runUI(ctx *Context, f func()) func() {
 	frames := 0
 	ctx.Frame = func() {
 		frames++
-		if frames > 10000 {
+		if frames > 1000 {
 			panic("UI is not making progress")
 		}
 		frameCh <- struct{}{}
@@ -334,6 +334,8 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	// Successfully connect, but fail during engraving.
 	p.engrave.connErr = nil
 	p.engrave.ioErr = errors.New("error during engraving")
+	delivered := make(chan struct{})
+	p.engrave.ioErrDelivered = delivered
 	// Hold connect.
 	ctxPress(ctx, Button3)
 	frame()
@@ -342,9 +344,11 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	if opsContains(ops, "error") {
 		t.Fatal("screen reported error for connection success")
 	}
+	<-delivered
 	for {
 		frame()
 		if opsContains(ops, p.engrave.ioErr.Error()) {
+			// t.Fatal("screen didn't report engraver error")
 			break
 		}
 	}
@@ -688,9 +692,10 @@ type testPlatform struct {
 	events []Event
 
 	engrave struct {
-		closed  chan []mjolnir.Cmd
-		connErr error
-		ioErr   error
+		closed         chan []mjolnir.Cmd
+		connErr        error
+		ioErr          error
+		ioErrDelivered chan<- struct{}
 	}
 
 	timeOffset time.Duration
@@ -774,23 +779,28 @@ func (p *testPlatform) Events(deadline time.Time) []Event {
 }
 
 type wrappedEngraver struct {
-	dev    *mjolnir.Simulator
-	closed chan<- []mjolnir.Cmd
-	ioErr  error
+	dev            *mjolnir.Simulator
+	closed         chan<- []mjolnir.Cmd
+	ioErr          error
+	ioErrDelivered chan<- struct{}
 }
 
 func (w *wrappedEngraver) Read(p []byte) (int, error) {
 	n, err := w.dev.Read(p)
-	if err == nil {
+	if err == nil && w.ioErr != nil {
 		err = w.ioErr
+		w.ioErr = nil
+		close(w.ioErrDelivered)
 	}
 	return n, err
 }
 
 func (w *wrappedEngraver) Write(p []byte) (int, error) {
 	n, err := w.dev.Write(p)
-	if err == nil {
+	if err == nil && w.ioErr != nil {
 		err = w.ioErr
+		w.ioErr = nil
+		close(w.ioErrDelivered)
 	}
 	return n, err
 }
@@ -818,7 +828,7 @@ func (p *testPlatform) Engraver() (Engraver, error) {
 	}
 	sim := mjolnir.NewSimulator()
 	return &engraver{
-		dev: &wrappedEngraver{sim, p.engrave.closed, p.engrave.ioErr},
+		dev: &wrappedEngraver{sim, p.engrave.closed, p.engrave.ioErr, p.engrave.ioErrDelivered},
 	}, nil
 }
 
@@ -883,22 +893,14 @@ done:
 			ctx.Frame()
 		}
 	}
-received:
-	for {
-		select {
-		case got := <-p.engrave.closed:
-			// Verify the step is advanced after engrave completion.
-			for scr.instructions[scr.step].Type == EngraveInstruction {
-				ctx.Frame()
-			}
-			want := simEngrave(t, side)
-			if !reflect.DeepEqual(want, got) {
-				t.Fatalf("engraver commands mismatch for side %v", side)
-			}
-			break received
-		default:
-			ctx.Frame()
-		}
+	got := <-p.engrave.closed
+	// Verify the step is advanced after engrave completion.
+	for scr.instructions[scr.step].Type == EngraveInstruction {
+		ctx.Frame()
+	}
+	want := simEngrave(t, side)
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("engraver commands mismatch for side %v", side)
 	}
 }
 
