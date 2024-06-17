@@ -561,7 +561,7 @@ func TestSeed(t *testing.T) {
 		Keys:              1,
 		MasterFingerprint: mfp,
 		Font:              constant.Font,
-		Size:              backup.SmallPlate,
+		Size:              backup.SquarePlate,
 	}
 	side, err := backup.EngraveSeed(p.EngraverParams(), seedDesc)
 	if err != nil {
@@ -569,7 +569,7 @@ func TestSeed(t *testing.T) {
 	}
 	plate := Plate{
 		Sides:             []engrave.Plan{side},
-		Size:              backup.SmallPlate,
+		Size:              backup.SquarePlate,
 		MasterFingerprint: mfp,
 	}
 
@@ -816,7 +816,7 @@ func (p *testPlatform) EngraverParams() engrave.Params {
 	return mjolnir.Params
 }
 
-var plateSizes = []backup.PlateSize{backup.SmallPlate, backup.SquarePlate, backup.LargePlate}
+var plateSizes = []backup.PlateSize{backup.SquarePlate, backup.LargePlate}
 
 func (p *testPlatform) PlateSizes() []backup.PlateSize {
 	return plateSizes

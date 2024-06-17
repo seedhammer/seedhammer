@@ -893,8 +893,6 @@ func engravePlate(sizes []backup.PlateSize, params engrave.Params, desc urtypes.
 
 func plateImage(p backup.PlateSize) image.RGBA64Image {
 	switch p {
-	case backup.SmallPlate:
-		return assets.Sh01
 	case backup.SquarePlate:
 		return assets.Sh02
 	case backup.LargePlate:
@@ -906,8 +904,6 @@ func plateImage(p backup.PlateSize) image.RGBA64Image {
 
 func plateName(p backup.PlateSize) string {
 	switch p {
-	case backup.SmallPlate:
-		return "SH01"
 	case backup.SquarePlate:
 		return "SH02"
 	case backup.LargePlate:
@@ -951,7 +947,7 @@ var (
 		},
 		{
 			Body:  "Place a {{.Name}} on the machine.",
-			Image: assets.Sh01,
+			Image: assets.Sh02,
 			Lead:  "seedhammer.com/tip#4",
 		},
 		{
@@ -989,7 +985,7 @@ var (
 		},
 		{
 			Body:  "Place a {{.Name}} on the machine.",
-			Image: assets.Sh01,
+			Image: assets.Sh02,
 			Lead:  "seedhammer.com/tip#4",
 		},
 		{
@@ -2377,8 +2373,8 @@ func NewEngraveScreen(ctx *Context, plate Plate) *EngraveScreen {
 			"{{.Name}}", plateName(plate.Size),
 		)
 		s.instructions[i].resolvedBody = repl.Replace(ins.Body)
-		// As a special case, the Sh01 image is a placeholder for the plate-specific image.
-		if ins.Image == assets.Sh01 {
+		// As a special case, the Sh02 image is a placeholder for the plate-specific image.
+		if ins.Image == assets.Sh02 {
 			s.instructions[i].Image = plateImage(plate.Size)
 		}
 	}

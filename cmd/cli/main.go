@@ -30,7 +30,7 @@ var (
 	dryrun     = flag.Bool("n", false, "dry run")
 	output     = flag.String("o", "plates", "output plates to directory")
 	side       = flag.String("side", "front", "plate side, front or back")
-	size       = flag.String("size", "SH02", "plate size (SH01, SH02, SH03)")
+	size       = flag.String("size", "SH02", "plate size (SH02, SH03)")
 	descriptor = flag.String("descriptor", "wpkh([97a6d3c2/84h/1h/0h]tpubDD5cTgxiP4qYJgBgkS6arjQH3GsJEHExFZWvumhNGGe4gBShn9u3b4TdpG2DvRg3knNXV7fBdmaw6cH2kKYdk2aXjQZYsnTchA4aFsZWehG)", "output descriptor")
 	mnemonic   = flag.String("mnemonic", "vocal tray giggle tool duck letter category pattern train magnet excite swamp", "seed phrase")
 )
@@ -115,14 +115,12 @@ func run() error {
 	}
 	var psz backup.PlateSize
 	switch *size {
-	case "SH01":
-		psz = backup.SmallPlate
 	case "SH02":
 		psz = backup.SquarePlate
 	case "SH03":
 		psz = backup.LargePlate
 	default:
-		return fmt.Errorf("-size must be 'SH01', 'SH02' or 'SH03'")
+		return fmt.Errorf("-size must be 'SH02' or 'SH03'")
 	}
 	params := mjolnir.Params
 	var sideCmd engrave.Plan

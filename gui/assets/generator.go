@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"go/format"
 	"image"
+	"image/color"
 	"image/draw"
 	_ "image/png"
 	"log"
@@ -47,6 +48,42 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		// Convert RGBA images to image.Paletted.
+		if nrgba, ok := img.(*image.NRGBA); ok {
+			// Convert to alpha pre-multiplied RGBA.
+			rgba := image.NewRGBA(nrgba.Bounds())
+			draw.Draw(rgba, rgba.Bounds(), nrgba, nrgba.Bounds().Min, draw.Src)
+			paletteMap := make(map[color.RGBA64]uint8)
+			b := rgba.Bounds()
+			index := uint8(0)
+			for y := b.Min.Y; y < b.Max.Y; y++ {
+				for x := b.Min.X; x < b.Max.X; x++ {
+					c := rgba.RGBA64At(x, y)
+					idx, ok := paletteMap[c]
+					if !ok {
+						idx = index
+						paletteMap[c] = idx
+						index++
+						if index < idx {
+							log.Fatalf("too many colors in %q:", p)
+						}
+					}
+				}
+			}
+			palette := make([]color.Color, len(paletteMap))
+			for col, idx := range paletteMap {
+				palette[idx] = col
+			}
+			pimg := image.NewPaletted(rgba.Bounds(), palette)
+			for y := b.Min.Y; y < b.Max.Y; y++ {
+				for x := b.Min.X; x < b.Max.X; x++ {
+					c := rgba.RGBA64At(x, y)
+					idx := paletteMap[c]
+					pimg.SetColorIndex(x, y, idx)
+				}
+			}
+			img = pimg
+		}
 		name := p[:len(p)-len(filepath.Ext(p))]
 		ninePatchPrefix, ninePatchSuffix := "", ""
 		if ext := filepath.Ext(name); ext == ".9" {
@@ -75,18 +112,6 @@ func main() {
 			fmt.Fprintf(out, "Pix: unsafe.Slice(unsafe.StringData(%sData[:%d]), len(%[1]sData[:%[2]d])),\n", goName, start)
 			fmt.Fprintf(out, "Rect: paletted.Rectangle{MinX: %d, MinY: %d, MaxX: %d, MaxY: %d},\n", b.Min.X, b.Min.Y, b.Max.X, b.Max.Y)
 			fmt.Fprintf(out, "Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(%sData[%d:]), len(%[1]sData[%[2]d:]))),\n", goName, start)
-		case *image.NRGBA:
-			// Force efficient indexed images for now.
-			log.Fatal("only indexed images are supported")
-
-			// Convert to alpha pre-multiplied RGBA.
-			rgba := image.NewRGBA(img.Bounds())
-			draw.Draw(rgba, rgba.Bounds(), img, img.Bounds().Min, draw.Src)
-			data.Write(rgba.Pix)
-			fmt.Fprintf(out, "image.RGBA{\n")
-			fmt.Fprintf(out, "Pix: unsafe.Slice(unsafe.StringData(%sData), len(%[1]sData)),\n", goName)
-			fmt.Fprintf(out, "Stride: %#v,\n", rgba.Stride)
-			fmt.Fprintf(out, "Rect: %#v,\n", rgba.Rect)
 		default:
 			log.Fatalf("unsupported image format for %q: %T\n", p, img)
 		}

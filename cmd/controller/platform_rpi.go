@@ -155,7 +155,7 @@ func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
 }
 
 func (p *Platform) PlateSizes() []backup.PlateSize {
-	return []backup.PlateSize{backup.SmallPlate, backup.SquarePlate, backup.LargePlate}
+	return []backup.PlateSize{backup.SquarePlate, backup.LargePlate}
 }
 
 func (p *Platform) EngraverParams() engrave.Params {

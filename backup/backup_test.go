@@ -72,11 +72,11 @@ func TestEngrave(t *testing.T) {
 		size      PlateSize
 	}{
 		// Seed only variants.
-		{1, 1, 0, urtypes.P2SH, 12, SmallPlate},
+		{1, 1, 0, urtypes.P2SH, 12, SquarePlate},
 		{1, 1, 0, urtypes.P2TR, 24, SquarePlate},
 		{1, 1, 1, urtypes.P2WPKH, 24, SquarePlate},
 
-		{1, 1, 0, urtypes.P2WSH, 12, SmallPlate},
+		{1, 1, 0, urtypes.P2WSH, 12, SquarePlate},
 		{1, 1, 0, urtypes.P2WSH, 24, SquarePlate},
 		{3, 5, 1, urtypes.P2SH_P2WSH, 24, LargePlate},
 

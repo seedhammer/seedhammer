@@ -242,26 +242,18 @@ var (
 	//go:embed progress-circle.bin
 	ProgressCircleData string
 
-	Sh01 = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(Sh01Data[:8710]), len(Sh01Data[:8710])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 134, MaxY: 65},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(Sh01Data[8710:]), len(Sh01Data[8710:]))),
-	}
-	//go:embed sh01.bin
-	Sh01Data string
-
 	Sh02 = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(Sh02Data[:8710]), len(Sh02Data[:8710])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 134, MaxY: 65},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(Sh02Data[8710:]), len(Sh02Data[8710:]))),
+		Pix:     unsafe.Slice(unsafe.StringData(Sh02Data[:5720]), len(Sh02Data[:5720])),
+		Rect:    paletted.Rectangle{MinX: 1, MinY: 0, MaxX: 89, MaxY: 65},
+		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(Sh02Data[5720:]), len(Sh02Data[5720:]))),
 	}
 	//go:embed sh02.bin
 	Sh02Data string
 
 	Sh03 = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(Sh03Data[:8710]), len(Sh03Data[:8710])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 134, MaxY: 65},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(Sh03Data[8710:]), len(Sh03Data[8710:]))),
+		Pix:     unsafe.Slice(unsafe.StringData(Sh03Data[:5720]), len(Sh03Data[:5720])),
+		Rect:    paletted.Rectangle{MinX: 1, MinY: 0, MaxX: 89, MaxY: 65},
+		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(Sh03Data[5720:]), len(Sh03Data[5720:]))),
 	}
 	//go:embed sh03.bin
 	Sh03Data string

@@ -23,15 +23,12 @@ import (
 type PlateSize int
 
 const (
-	SmallPlate PlateSize = iota
-	SquarePlate
+	SquarePlate PlateSize = iota
 	LargePlate
 )
 
 func (p PlateSize) Dims() image.Point {
 	switch p {
-	case SmallPlate:
-		return image.Pt(85, 55)
 	case SquarePlate:
 		return image.Pt(85, 85)
 	case LargePlate:
@@ -270,20 +267,11 @@ func frontSideSeed(params engrave.Params, plate Seed, plateDims image.Point) (en
 
 	// Engrave version, mfp and page.
 	const version = "V1"
-	margin := params.I(outerMargin)
 	innerMargin := params.I(innerMargin)
 	metaMargin := params.I(4)
 	page := fmt.Sprintf("%d/%d", plate.KeyIdx+1, plate.Keys)
 	mfp := strings.ToUpper(fmt.Sprintf("%.8x", plate.MasterFingerprint))
-	switch plate.Size {
-	case SmallPlate:
-		pagec, _ := dims(engrave.String(plate.Font, params.F(plateSmallFontSize), page).Engrave)
-		cmd(engrave.Offset(margin, plateDims.Y-innerMargin, engrave.Rotate(-math.Pi/2, pagec)))
-		mfpc, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, params.F(plateSmallFontSize), mfp).Engrave))
-		cmd(engrave.Offset(margin, (plateDims.Y-sz.Y)/2, mfpc))
-		txt, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, params.F(plateSmallFontSize), version).Engrave))
-		cmd(engrave.Offset(margin, innerMargin, txt))
-	default:
+	{
 		offy := (plateDims.Y-col1b.Y)/2 - metaMargin
 		pagec, sz := dims(engrave.String(plate.Font, params.F(plateSmallFontSize), page).Engrave)
 		cmd(engrave.Offset(innerMargin, offy-sz.Y, pagec))
@@ -312,7 +300,7 @@ func frontSideSeed(params engrave.Params, plate Seed, plateDims image.Point) (en
 	qr, sz := dims(qrCmd)
 	cmd(engrave.Offset(params.I(60)-sz.X/2, (plateDims.Y-sz.Y)/2, qr))
 
-	if plate.Size != SmallPlate {
+	{
 		// Engrave bottom of column 2.
 		col2, col2b := dims(wordColumn(constant, plate.Font, params.F(plateFontSize), plate.Mnemonic, endCol2, len(plate.Mnemonic)))
 		cmd(engrave.Offset(params.I(44), (plateDims.Y+col1b.Y)/2-col2b.Y, col2))
@@ -320,11 +308,7 @@ func frontSideSeed(params engrave.Params, plate Seed, plateDims image.Point) (en
 
 	// Engrave title.
 	title := strings.ToUpper(plate.Title)
-	switch plate.Size {
-	case SmallPlate:
-		title, sz := dims(engrave.Rotate(-math.Pi/2, engrave.String(plate.Font, params.F(plateSmallFontSize), title).Engrave))
-		cmd(engrave.Offset(plateDims.X-margin-sz.X, (plateDims.Y-sz.Y)/2, title))
-	default:
+	{
 		offy := (plateDims.Y+col1b.Y)/2 + metaMargin
 		title, sz := dims(engrave.String(plate.Font, params.F(plateSmallFontSize), title).Engrave)
 		cmd(engrave.Offset((plateDims.X-sz.X)/2, offy, title))

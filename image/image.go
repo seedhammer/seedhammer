@@ -2,9 +2,8 @@ package image
 
 import "image"
 
-// Crop returns the bounds of the smallest rectangle
-// that contains all the image's pixels where the its
-// alpha is non-zero.
+// Crop returns the smallest rectangle that contains all
+// the image's pixels where the its alpha is non-zero.
 func Crop(img image.RGBA64Image) image.Rectangle {
 	r := img.Bounds()
 	emptyCol := func(x int) bool {
