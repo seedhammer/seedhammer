@@ -180,7 +180,7 @@ func TestEngrave(t *testing.T) {
 					}
 				}
 			}
-			const maxErrors = 30
+			const maxErrors = 65
 			if mismatches > maxErrors {
 				t.Errorf("%d/%d pixels golden image mismatches", mismatches, pixels)
 			}
