@@ -293,7 +293,7 @@ func frontSideSeed(params engrave.Params, plate Seed, plateDims image.Point) (en
 	cmd(engrave.Offset(params.I(44), (plateDims.Y-col1b.Y)/2, col2))
 
 	// Engrave seed QR.
-	qrCmd, err := engrave.ConstantQR(params.StrokeWidth, 3, qr.Q, seedqr.CompactQR(plate.Mnemonic))
+	qrCmd, err := engrave.ConstantQR(params.StrokeWidth, 3, qr.M, seedqr.QR(plate.Mnemonic))
 	if err != nil {
 		return nil, err
 	}
