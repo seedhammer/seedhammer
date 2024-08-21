@@ -3,17 +3,31 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/23.11";
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/master";
     utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, utils }:
+  outputs = { self, nixpkgs, nixpkgs-unstable, utils }:
     utils.lib.eachDefaultSystem (system:
       let
         arch = builtins.head (builtins.split "-" system);
         localpkgs = import nixpkgs {
           inherit system;
         };
+        localpkgs-unstable = import nixpkgs-unstable {
+          inherit system;
+        };
         crosspkgs = import nixpkgs {
+          inherit system;
+          crossSystem = {
+            config = "armv6l-unknown-linux-musleabihf";
+            gcc = {
+              arch = "armv6k";
+              fpu = "vfp";
+            };
+          };
+        };
+        crosspkgs-unstable = import nixpkgs-unstable {
           inherit system;
           crossSystem = {
             config = "armv6l-unknown-linux-musleabihf";
@@ -357,6 +371,7 @@
             let
               libcamera = self.packages.${system}.libcamera;
               pkgs = crosspkgs;
+              pkgs-unstable = crosspkgs-unstable;
               tags = builtins.concatStringsSep "," ([ "netgo" ] ++ (if debug then [ "debug" ] else [ ]));
             in
             pkgs.stdenv.mkDerivation {
@@ -364,7 +379,7 @@
               src = ./.;
 
               nativeBuildInputs = with pkgs.buildPackages; [
-                go_1_21
+                pkgs-unstable.buildPackages.go_1_23
                 nukeReferences
               ];
 
@@ -403,7 +418,7 @@
         };
         packages =
           {
-            go-deps = let pkgs = localpkgs; in pkgs.stdenvNoCC.mkDerivation {
+            go-deps = let pkgs = localpkgs; pkgs-unstable = localpkgs-unstable; in pkgs.stdenvNoCC.mkDerivation {
               pname = "go-deps";
               version = "1";
 
@@ -415,7 +430,7 @@
 
               nativeBuildInputs = with pkgs.buildPackages; [
                 cacert
-                go_1_21
+                pkgs-unstable.buildPackages.go_1_23
               ];
 
               installPhase = ''
@@ -426,7 +441,7 @@
 
               outputHashMode = "recursive";
               outputHashAlgo = "sha256";
-              outputHash = "/zqXGuXFvwjNc+mwJdpRfg9f3TO+zi7A6UL0witdDmg=";
+              outputHash = "6Gdc2/H4Ov9VA+7Omgvb4XInL/WBveAOg90hO+ApeKY=";
             };
             controller = self.lib.${system}.mkcontroller false;
             controller-debug = self.lib.${system}.mkcontroller true;
