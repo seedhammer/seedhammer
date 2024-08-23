@@ -16,10 +16,10 @@ type Line struct {
 }
 
 type Style struct {
-	Face          *bitmap.Face
-	Alignment     Alignment
-	LineHeight    float32
-	LetterSpacing int
+	Face            *bitmap.Face
+	Alignment       Alignment
+	LineHeightScale float32
+	LetterSpacing   int
 }
 
 type Alignment int
@@ -29,6 +29,14 @@ const (
 	AlignEnd
 	AlignCenter
 )
+
+func (l Style) LineHeight() int {
+	lheight := l.Face.Metrics().Height.Ceil()
+	if l.LineHeightScale != 0 {
+		lheight = int(float32(lheight) * l.LineHeightScale)
+	}
+	return lheight
+}
 
 func (l Style) Layout(maxWidth int, txt string) ([]Line, image.Point) {
 	var lines []Line
@@ -41,10 +49,7 @@ func (l Style) Layout(maxWidth int, txt string) ([]Line, image.Point) {
 	idx := 0
 	m := l.Face.Metrics()
 	asc, desc := m.Ascent, m.Descent
-	lheight := m.Height.Ceil()
-	if l.LineHeight != 0 {
-		lheight = int(float32(lheight) * l.LineHeight)
-	}
+	lheight := l.LineHeight()
 	doty := asc.Ceil()
 	endLine := func() {
 		prevC = -1

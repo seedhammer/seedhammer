@@ -178,11 +178,7 @@ type richText struct {
 }
 
 func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA, txt string) {
-	lines, _ := text.Style{
-		Face:       style.Face,
-		Alignment:  style.Alignment,
-		LineHeight: style.LineHeight,
-	}.Layout(width, txt)
+	lines, _ := style.Layout(width, txt)
 	for _, line := range lines {
 		doty := line.Dot.Y + r.Y
 		inner := ops.Begin()
