@@ -225,12 +225,10 @@ func NewAddressesScreen(desc urtypes.OutputDescriptor) *AddressesScreen {
 }
 
 func (s *AddressesScreen) Show(ctx *Context, ops op.Ctx, th *Colors) {
-	const linesPerPage = 8
-	const linesPerScroll = linesPerPage - 3
-
 	const maxPage = len(s.addresses)
 	inp := new(InputTracker)
 	for {
+		scrollDelta := 0
 		for {
 			e, ok := inp.Next(ctx, Button1, Left, Right, Up, Down)
 			if !ok {
@@ -253,11 +251,11 @@ func (s *AddressesScreen) Show(ctx *Context, ops op.Ctx, th *Colors) {
 				}
 			case Up:
 				if e.Pressed {
-					s.scroll -= linesPerScroll
+					scrollDelta--
 				}
 			case Down:
 				if e.Pressed {
-					s.scroll += linesPerScroll
+					scrollDelta++
 				}
 			}
 		}
@@ -291,22 +289,18 @@ func (s *AddressesScreen) Show(ctx *Context, ops op.Ctx, th *Colors) {
 		var bodytxt richText
 		addrs := s.addresses[s.page]
 		for _, addr := range addrs {
-			bodytxt.Add(ops, bodyst, body.Dx(), th.Text, addr)
+			bodytxt.Add(ops, bodyst, inner.Dx(), th.Text, addr)
 		}
 
 		op.Position(ops, left, content.W(leftsz))
 		op.Position(ops, right, content.E(rightsz))
-		maxScroll := len(bodytxt.Lines) - linesPerPage
-		if s.scroll > maxScroll {
-			s.scroll = maxScroll
-		}
-		if s.scroll < 0 {
-			s.scroll = 0
-		}
-		off := bodytxt.Lines[s.scroll].Y - bodytxt.Lines[0].Y
+
+		s.scroll += scrollDelta * body.Dy() / 2
+		maxScroll := bodytxt.Y - inner.Dy()
+		s.scroll = min(max(0, s.scroll), maxScroll)
 		ops.Begin()
 		for _, l := range bodytxt.Lines {
-			op.Position(ops, l.W, inner.Min.Sub(image.Pt(0, off)))
+			op.Position(ops, l.W, inner.Min.Sub(image.Pt(0, s.scroll)))
 		}
 		fadeClip(ops, ops.End(), image.Rectangle(body))
 
