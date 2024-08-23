@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"golang.org/x/image/draw"
-	"golang.org/x/image/math/fixed"
 	"seedhammer.com/font/bitmap"
 	"seedhammer.com/image/rgb565"
 )
@@ -128,9 +127,8 @@ func (o *Ops) Reset() {
 }
 
 type drawState struct {
-	pos   image.Point
-	clip  image.Rectangle
-	union image.Rectangle
+	pos  image.Point
+	clip image.Rectangle
 }
 
 func (f *frame) Reset() {
@@ -142,9 +140,8 @@ func (f *frame) Reset() {
 	f.drawOps = f.drawOps[:0]
 }
 
-func (o *Ops) ExtractText(dst image.Rectangle) []string {
+func (o *Ops) ExtractText(dst image.Rectangle) string {
 	o.serialize(drawState{clip: dst}, opCursor{})
-	var text []string
 	var b strings.Builder
 	for _, fop := range o.frame.drawOps {
 		for _, op := range o.frame.ops[fop.start:fop.end] {
@@ -154,12 +151,8 @@ func (o *Ops) ExtractText(dst image.Rectangle) []string {
 			_, r := decodeGlyphImage(op.op.ImageArguments)
 			b.WriteRune(r)
 		}
-		if b.Len() > 0 {
-			text = append(text, b.String())
-			b.Reset()
-		}
 	}
-	return text
+	return b.String()
 }
 
 func (o *Ops) Clip(dst image.Rectangle) image.Rectangle {
@@ -304,20 +297,10 @@ func (o *Ops) drawMasks(dst draw.Image, clip image.Rectangle, src imageOp, pos i
 		drawMask(dst, clip, o.materialize(src), clip.Min.Sub(pos), maskSrc, mfbPos, draw.Over)
 		return
 	}
-	end := 1
-	if mask := masks[0]; mask.op.mask == unionMask {
-		for _, mask := range masks[1:] {
-			if mask.op.mask != unionMask {
-				break
-			}
-			end++
-		}
-	}
-	for _, mask := range masks[:end] {
-		o.maskStack = append(o.maskStack, mask)
-		o.drawMasks(dst, clip.Intersect(mask.clip), src, pos, maskfb, masks[end:])
-		o.maskStack = o.maskStack[:len(o.maskStack)-1]
-	}
+	mask := masks[0]
+	o.maskStack = append(o.maskStack, mask)
+	o.drawMasks(dst, clip.Intersect(mask.clip), src, pos, maskfb, masks[1:])
+	o.maskStack = o.maskStack[:len(o.maskStack)-1]
 }
 
 func (o *Ops) materialize(op imageOp) image.Image {
@@ -401,16 +384,7 @@ func (o *Ops) serialize(state drawState, from opCursor) {
 			}
 			r := op.Bounds.Add(state.pos)
 			clip := state.clip.Intersect(r)
-			switch op.mask {
-			case unionMask:
-				state.union = state.union.Union(r)
-			default:
-				if u := state.union; !u.Empty() {
-					clip = clip.Intersect(u)
-					state.union = image.Rectangle{}
-				}
-				state.clip = clip
-			}
+			state.clip = clip
 			fop := frameOp{pos: state.pos, op: op, clip: clip}
 			if op.mask != imageMask {
 				o.maskStack = append(o.maskStack, fop)
@@ -506,6 +480,22 @@ func ImageOp(ops Ctx, img image.Image, mask bool) {
 	addImageOp(ops, img, Image{}, m, img.Bounds(), nil, nil)
 }
 
+func GlyphOp(ops Ctx, face *bitmap.Face, r rune) {
+	m, _, ok := face.Glyph(r)
+	if !ok {
+		ClipOp{}.Add(ops)
+		return
+	}
+	addImageOp(
+		ops, nil,
+		glyphImage,
+		intersectMask,
+		m.Bounds(),
+		[]any{face},
+		[]uint32{uint32(r)},
+	)
+}
+
 func ParamImageOp(ops Ctx, img Image, mask bool, bounds image.Rectangle, refs []any, args []uint32) {
 	m := imageMask
 	if mask {
@@ -535,7 +525,6 @@ type maskType int
 const (
 	imageMask maskType = iota
 	intersectMask
-	unionMask
 )
 
 type imageOp struct {
@@ -598,43 +587,3 @@ func (c CallOp) Add(ops Ctx) {
 type beginOp struct{}
 
 type endOp struct{}
-
-type TextOp struct {
-	Face          *bitmap.Face
-	Dot           image.Point
-	Txt           string
-	LetterSpacing int
-}
-
-func (t TextOp) Add(ops Ctx) {
-	prevC := rune(-1)
-	dot := fixed.I(t.Dot.X)
-	empty := true
-	for _, c := range t.Txt {
-		if prevC >= 0 {
-			dot += t.Face.Kern(prevC, c)
-		}
-		m, advance, ok := t.Face.Glyph(c)
-		if !ok {
-			continue
-		}
-		empty = false
-		off := image.Pt(dot.Round(), t.Dot.Y)
-		Offset(ops, off)
-		addImageOp(
-			ops, nil,
-			glyphImage,
-			unionMask,
-			m.Bounds(),
-			[]any{t.Face},
-			[]uint32{uint32(c)},
-		)
-		Offset(ops, off.Mul(-1))
-		advance += fixed.I(t.LetterSpacing)
-		dot += advance
-		prevC = c
-	}
-	if empty {
-		ClipOp{}.Add(ops)
-	}
-}

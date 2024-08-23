@@ -1,8 +1,10 @@
 package text
 
 import (
+	"fmt"
 	"image"
 	"iter"
+	"strconv"
 	"unicode"
 	"unicode/utf8"
 
@@ -10,10 +12,10 @@ import (
 	"seedhammer.com/font/bitmap"
 )
 
-type Line struct {
-	Text  string
-	Width int
-	Dot   image.Point
+type Glyph struct {
+	Rune    rune
+	Dot     fixed.Int26_6
+	Advance fixed.Int26_6
 }
 
 type Style struct {
@@ -39,93 +41,289 @@ func (l Style) LineHeight() int {
 	return lheight
 }
 
-func (l Style) Measure(maxWidth int, txt string) image.Point {
-	var dims image.Point
-	for line := range l.Layout(maxWidth, txt) {
-		dims.X = max(dims.X, line.Width)
-		dims.Y = line.Dot.Y
-	}
+func (l Style) Measure(maxWidth int, format string, args ...any) image.Point {
+	l.Alignment = AlignStart
 	m := l.Face.Metrics()
+	asc := m.Ascent
+	lheight := l.LineHeight()
+	dims := image.Point{Y: asc.Ceil()}
+	for line := range l.Layout(maxWidth, format, args...) {
+		dims.X = max(dims.X, (line.Dot + line.Advance).Ceil())
+		if line.Rune == '\n' {
+			dims.Y += lheight
+		}
+	}
 	dims.Y += m.Descent.Ceil()
 	return dims
 }
 
-func (l Style) Layout(maxWidth int, txt string) iter.Seq[Line] {
-	return func(yield func(Line) bool) {
-		prevC := rune(-1)
-		adv := fixed.I(0)
-		wordAdv := fixed.I(0)
-		wordIdx := 0
-		prev := 0
-		idx := 0
-		m := l.Face.Metrics()
-		asc := m.Ascent
-		lheight := l.LineHeight()
-		doty := asc.Ceil()
-		endLine := func() bool {
-			prevC = -1
-			dotx := 0
-			width := adv.Ceil()
+// formatter is a simpler fmt.Sprintf that doesn't allocate.
+type formatter struct {
+	idx    int
+	auxIdx int
+	argIdx int
+	buf    [20]byte
+	bufLen int
+	state  formatterState
+}
+
+type formatterState int
+
+const (
+	formatFormat formatterState = iota
+	formatArg
+	formatBuf
+)
+
+func (f *formatter) Next(format string, args ...any) (rune, bool) {
+	next := func() rune {
+		c, n := utf8.DecodeRuneInString(format[f.idx:])
+		f.idx += n
+		return c
+	}
+	for {
+		switch f.state {
+		case formatFormat:
+			if len(format[f.idx:]) == 0 {
+				return 0, false
+			}
+			if r := next(); r != '%' {
+				return r, true
+			}
+			if len(format[f.idx:]) == 0 {
+				panic("missing format verb")
+			}
+			start := f.idx
+			r := next()
+			prec := -1
+			pad := -1
+			dot := r == '.'
+			if dot {
+				if len(format[f.idx:]) == 0 {
+					panic("missing precision")
+				}
+				start = f.idx
+				r = next()
+			}
+			for '0' <= r && r <= '9' {
+				if len(format[f.idx:]) == 0 {
+					panic("missing format verb")
+				}
+				r = next()
+			}
+			if start < f.idx-1 {
+				v, err := strconv.ParseUint(format[start:f.idx-1], 10, 32)
+				if err != nil {
+					panic(err)
+				}
+				if dot {
+					prec = int(v)
+				} else {
+					pad = int(v)
+				}
+			}
+			switch r := byte(r); r {
+			case '%':
+				return '%', true
+			case 'f', 'F':
+				if prec == -1 {
+					prec = 6
+				}
+				fallthrough
+			case 'g', 'G':
+				switch arg := args[f.argIdx].(type) {
+				case float32:
+					f.bufLen = len(strconv.AppendFloat(f.buf[:0], float64(arg), r, prec, 32))
+				case float64:
+					f.bufLen = len(strconv.AppendFloat(f.buf[:0], arg, r, prec, 64))
+				default:
+					panic("unsupported argument type")
+				}
+				if f.bufLen > len(f.buf) {
+					panic("float format string overflows buffer")
+				}
+				f.argIdx++
+				f.state = formatBuf
+				f.auxIdx = 0
+			case 'b', 'x', 'd':
+				base := 2
+				switch r {
+				case 'x':
+					base = 16
+				case 'd':
+					base = 10
+				}
+				switch arg := args[f.argIdx].(type) {
+				case int:
+					f.bufLen = len(strconv.AppendInt(f.buf[:0], int64(arg), base))
+				case uint32:
+					f.bufLen = len(strconv.AppendUint(f.buf[:0], uint64(arg), base))
+				default:
+					panic("unsupported argument type")
+				}
+				if f.bufLen > len(f.buf) {
+					panic("float format string overflows buffer")
+				}
+				f.argIdx++
+				// Extend with zeroes.
+				if prec != -1 && f.bufLen < prec {
+					n := prec - f.bufLen
+					buf := f.buf[:prec]
+					copy(buf[n:], buf[:f.bufLen])
+					for i := range n {
+						buf[i] = '0'
+					}
+					f.bufLen = prec
+				}
+				// Pad with spaces.
+				if pad != -1 && f.bufLen < pad {
+					n := pad - f.bufLen
+					buf := f.buf[:pad]
+					copy(buf[n:], buf[:f.bufLen])
+					for i := range n {
+						buf[i] = ' '
+					}
+					f.bufLen = pad
+				}
+				f.state = formatBuf
+				f.auxIdx = 0
+			case 's':
+				f.state = formatArg
+				f.auxIdx = 0
+			default:
+				panic("unsupported format verb")
+			}
+		case formatArg:
+			a := args[f.argIdx].(string)
+			a = a[f.auxIdx:]
+			if len(a) == 0 {
+				f.argIdx++
+				f.state = formatFormat
+				continue
+			}
+			r, n := utf8.DecodeRuneInString(a)
+			f.auxIdx += n
+			return r, true
+		case formatBuf:
+			buf := f.buf[f.auxIdx:f.bufLen]
+			if len(buf) == 0 {
+				f.state = formatFormat
+				continue
+			}
+			r, n := utf8.DecodeRune(buf)
+			f.auxIdx += n
+			return r, true
+		}
+	}
+}
+
+func (l Style) Layout(maxWidth int, format string, args ...any) iter.Seq[Glyph] {
+	// Enable printf vet warnings.
+	if false {
+		_ = fmt.Sprintf(format, args...)
+	}
+	return func(yield func(Glyph) bool) {
+		var cursor struct {
+			prevR     rune
+			formatter formatter
+		}
+		next := func() (rune, fixed.Int26_6, bool) {
+			r, ok := cursor.formatter.Next(format, args...)
+			if !ok {
+				return 0, 0, false
+			}
+			a, ok := l.Face.GlyphAdvance(r)
+			if !ok {
+				cursor.prevR = -1
+			}
+			if cursor.prevR >= 0 {
+				a += l.Face.Kern(cursor.prevR, r)
+			}
+			cursor.prevR = r
+			a += fixed.I(l.LetterSpacing)
+			return r, a, true
+		}
+		prevCur := cursor
+		checkpoint := cursor
+		width := fixed.I(0)
+		runes := 0
+		for {
+			// Compute line extent in runes and width.
+			lineRunes := 0
+			lineWidth := fixed.I(0)
+			cursor = checkpoint
+			spaceBreak := false
+			breakWidth := fixed.I(0)
+			eof := false
+			for {
+				if runes > 0 && width.Ceil() > maxWidth {
+					break
+				}
+				r, a, ok := next()
+				if !ok {
+					eof = true
+					lineRunes = runes
+					lineWidth = width
+					break
+				}
+				space := unicode.IsSpace(r)
+				if space || (lineRunes == 0 && (width+a).Ceil() > maxWidth) {
+					spaceBreak = space
+					breakWidth = a
+					lineRunes = runes
+					lineWidth = width
+				}
+				runes++
+				width += a
+				if r == '\n' {
+					break
+				}
+			}
+			runes -= lineRunes
+			width -= lineWidth
+			// Rewind and yield glyphs.
+			checkpoint = cursor
+			cursor = prevCur
+			dot := fixed.I(0)
 			switch l.Alignment {
 			case AlignCenter:
-				dotx = (maxWidth - width) / 2
+				dot = (fixed.I(maxWidth) - lineWidth) / 2
 			case AlignEnd:
-				dotx = maxWidth - width
+				dot = fixed.I(maxWidth) - lineWidth
 			}
-			l := Line{
-				Text:  txt[prev:idx],
-				Width: width,
-				Dot:   image.Pt(dotx, doty),
-			}
-			wordIdx = 0
-			wordAdv = 0
-			doty += lheight
-			return yield(l)
-		}
-		for idx < len(txt) {
-			c, n := utf8.DecodeRuneInString(txt[idx:])
-			a, ok := l.Face.GlyphAdvance(c)
-			if !ok {
-				prevC = -1
-				idx += n
-				continue
-			}
-			softnl := unicode.IsSpace(c)
-			if softnl {
-				wordIdx = idx
-				wordAdv = adv
-			}
-			if prevC >= 0 {
-				a += l.Face.Kern(prevC, c)
-			}
-			a += fixed.I(l.LetterSpacing)
-			if c == '\n' || (idx > prev && (adv+a).Ceil() > maxWidth) {
-				if wordIdx > 0 {
-					idx = wordIdx
-					adv = wordAdv
-					_, n = utf8.DecodeRuneInString(txt[idx:])
-					softnl = true
+			for lineRunes > 0 {
+				lineRunes--
+				r, a, ok := next()
+				if !ok {
+					panic("underflow")
 				}
-				if !endLine() {
+				g := Glyph{
+					Rune:    r,
+					Dot:     dot,
+					Advance: a,
+				}
+				dot += a
+				if !yield(g) {
 					return
 				}
-				prev = idx
-				idx += n
-				adv = a
-				if softnl {
-					// Skip space or newline.
-					prev += n
-					adv = 0
-				}
-				continue
 			}
-			idx += n
-			prevC = c
-			adv += a
-		}
-		idx = len(txt)
-		if prev < idx {
-			if !endLine() {
+			if lineRunes == 0 && !eof {
+				g := Glyph{
+					Rune: '\n',
+					Dot:  dot,
+				}
+				if !yield(g) {
+					return
+				}
+			}
+			// Skip line-breaking space.
+			if spaceBreak {
+				runes--
+				width -= breakWidth
+				next()
+			}
+			prevCur = cursor
+			if eof {
 				return
 			}
 		}

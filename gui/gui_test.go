@@ -169,8 +169,9 @@ func resetOps(ops *op.Ops, f func()) func() {
 func opsContains(ops *op.Ops, str string) bool {
 	clip := image.Rectangle{Max: image.Pt(testDisplayDim, testDisplayDim)}
 	str = strings.ToLower(str)
-	txt := strings.Join(ops.ExtractText(clip), " ")
-	return strings.Index(strings.ToLower(txt), str) != -1
+	txt := strings.ToLower(ops.ExtractText(clip))
+	clean := strings.ReplaceAll(strings.ToLower(str), " ", "")
+	return strings.Index(txt, clean) != -1
 }
 
 func TestMainScreen(t *testing.T) {
