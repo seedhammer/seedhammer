@@ -205,19 +205,26 @@ type AddressesScreen struct {
 
 func NewAddressesScreen(desc urtypes.OutputDescriptor) *AddressesScreen {
 	s := new(AddressesScreen)
-	for i := 0; i < 20; i++ {
-		addr, err := address.Receive(desc, uint32(i))
-		if err != nil {
-			// Very unlikely.
-			continue
+	counter := 0
+	for page := range 2 {
+		for len(s.addresses[page]) < 20 {
+			var addr string
+			var err error
+			switch page {
+			case 0:
+				addr, err = address.Receive(desc, uint32(counter))
+			case 1:
+				addr, err = address.Change(desc, uint32(counter))
+			}
+			counter++
+			if err != nil {
+				// Very unlikely.
+				continue
+			}
+			const addrLen = 12
+			fmtAddr := fmt.Sprintf("%d: %s", len(s.addresses[page])+1, shortenAddress(addrLen, addr))
+			s.addresses[page] = append(s.addresses[page], fmtAddr)
 		}
-		const addrLen = 12
-		s.addresses[0] = append(s.addresses[0], shortenAddress(addrLen, addr))
-		change, err := address.Change(desc, uint32(i))
-		if err != nil {
-			continue
-		}
-		s.addresses[1] = append(s.addresses[1], shortenAddress(addrLen, change))
 	}
 	return s
 }
@@ -288,8 +295,8 @@ func (s *AddressesScreen) Show(ctx *Context, ops op.Ctx, th *Colors) {
 		bodyst := ctx.Styles.body
 		var bodytxt richText
 		addrs := s.addresses[s.page]
-		for i, addr := range addrs {
-			bodytxt.Add(ops, bodyst, body.Dx(), th.Text, fmt.Sprintf("%d: %s", i+1, addr))
+		for _, addr := range addrs {
+			bodytxt.Add(ops, bodyst, body.Dx(), th.Text, addr)
 		}
 
 		op.Position(ops, left, content.W(leftsz))
