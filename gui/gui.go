@@ -184,14 +184,13 @@ func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA,
 	}
 }
 
-type AddressesScreen struct {
-	addresses [2][]string
-	page      int
-	scroll    int
-}
+func ShowAddressesScreen(ctx *Context, ops op.Ctx, th *Colors, desc urtypes.OutputDescriptor) {
+	var s struct {
+		addresses [2][]string
+		page      int
+		scroll    int
+	}
 
-func NewAddressesScreen(desc urtypes.OutputDescriptor) *AddressesScreen {
-	s := new(AddressesScreen)
 	counter := 0
 	for page := range 2 {
 		for len(s.addresses[page]) < 20 {
@@ -213,10 +212,7 @@ func NewAddressesScreen(desc urtypes.OutputDescriptor) *AddressesScreen {
 			s.addresses[page] = append(s.addresses[page], fmtAddr)
 		}
 	}
-	return s
-}
 
-func (s *AddressesScreen) Show(ctx *Context, ops op.Ctx, th *Colors) {
 	const maxPage = len(s.addresses)
 	inp := new(InputTracker)
 	for {
@@ -2200,7 +2196,7 @@ func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (int, b
 				if !inp.Clicked(e.Button) {
 					break
 				}
-				NewAddressesScreen(s.Descriptor).Show(ctx, ops, th)
+				ShowAddressesScreen(ctx, ops, th, s.Descriptor)
 			case Button3:
 				if !inp.Clicked(e.Button) {
 					break
