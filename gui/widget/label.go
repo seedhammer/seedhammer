@@ -14,7 +14,8 @@ func Label(ops op.Ctx, l text.Style, col color.NRGBA, txt string) image.Point {
 }
 
 func LabelW(ops op.Ctx, l text.Style, width int, col color.NRGBA, txt string) image.Point {
-	lines, sz := l.Layout(width, txt)
+	sz := l.Measure(width, txt)
+	lines := l.Layout(sz.X, txt)
 	for _, line := range lines {
 		(&op.TextOp{
 			Face:          l.Face,

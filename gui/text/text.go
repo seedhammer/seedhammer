@@ -38,28 +38,44 @@ func (l Style) LineHeight() int {
 	return lheight
 }
 
-func (l Style) Layout(maxWidth int, txt string) ([]Line, image.Point) {
+func (l Style) Measure(maxWidth int, txt string) image.Point {
+	lines := l.Layout(maxWidth, txt)
+	var dims image.Point
+	for _, line := range lines {
+		dims.X = max(dims.X, line.Width)
+		dims.Y = line.Dot.Y
+	}
+	m := l.Face.Metrics()
+	dims.Y += m.Descent.Ceil()
+	return dims
+}
+
+func (l Style) Layout(maxWidth int, txt string) []Line {
 	var lines []Line
 	prevC := rune(-1)
 	adv := fixed.I(0)
 	wordAdv := fixed.I(0)
 	wordIdx := 0
-	maxAdv := 0
 	prev := 0
 	idx := 0
 	m := l.Face.Metrics()
-	asc, desc := m.Ascent, m.Descent
+	asc := m.Ascent
 	lheight := l.LineHeight()
 	doty := asc.Ceil()
 	endLine := func() {
 		prevC = -1
-		if a := adv.Ceil(); a > maxAdv {
-			maxAdv = a
+		dotx := 0
+		width := adv.Ceil()
+		switch l.Alignment {
+		case AlignCenter:
+			dotx = (maxWidth - width) / 2
+		case AlignEnd:
+			dotx = maxWidth - width
 		}
 		lines = append(lines, Line{
 			Text:  txt[prev:idx],
-			Width: adv.Ceil(),
-			Dot:   image.Pt(0, doty),
+			Width: width,
+			Dot:   image.Pt(dotx, doty),
 		})
 		wordIdx = 0
 		wordAdv = 0
@@ -108,16 +124,5 @@ func (l Style) Layout(maxWidth int, txt string) ([]Line, image.Point) {
 	if prev < idx {
 		endLine()
 	}
-	for i, line := range lines {
-		switch l.Alignment {
-		case AlignCenter:
-			lines[i].Dot.X = (maxAdv - line.Width) / 2
-		case AlignEnd:
-			lines[i].Dot.X = maxAdv - line.Width
-		}
-	}
-	return lines, image.Point{
-		X: maxAdv,
-		Y: doty - lheight + desc.Ceil(),
-	}
+	return lines
 }

@@ -178,19 +178,19 @@ type richText struct {
 }
 
 func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA, txt string) {
-	lines, _ := style.Layout(width, txt)
+	lines := style.Layout(width, txt)
+	offy := r.Y
 	for _, line := range lines {
-		doty := line.Dot.Y + r.Y
+		r.Y = line.Dot.Y + offy
 		inner := ops.Begin()
 		(&op.TextOp{
 			Face: style.Face,
-			Dot:  image.Pt(line.Dot.X, doty),
+			Dot:  image.Pt(line.Dot.X, r.Y),
 			Txt:  line.Text,
 		}).Add(inner)
 		op.ColorOp(inner, col)
-		r.Lines = append(r.Lines, linePos{ops.End(), doty})
+		r.Lines = append(r.Lines, linePos{ops.End(), r.Y})
 	}
-	r.Y += lines[len(lines)-1].Dot.Y
 }
 
 type AddressesScreen struct {
@@ -1160,7 +1160,7 @@ type Keyboard struct {
 
 func NewKeyboard(ctx *Context) *Keyboard {
 	k := new(Keyboard)
-	_, k.widest = ctx.Styles.keyboard.Layout(math.MaxInt, "W")
+	k.widest = ctx.Styles.keyboard.Measure(math.MaxInt, "W")
 	bsb := assets.KeyBackspace.Bounds()
 	bsWidth := bsb.Min.X*2 + bsb.Dx()
 	k.backspace = image.Pt(bsWidth, k.widest.Y)
@@ -2058,7 +2058,7 @@ func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point
 	layoutTitle(ctx, ops, dims.X, th.Text, "Confirm Seed")
 
 	style := ctx.Styles.word
-	_, longestPrefix := style.Layout(math.MaxInt, "24: ")
+	longestPrefix := style.Measure(math.MaxInt, "24: ")
 	layoutWord := func(ops op.Ctx, col color.NRGBA, n int, word string) image.Point {
 		prefix := widget.Label(ops.Begin(), style, col, fmt.Sprintf("%d: ", n))
 		op.Position(ops, ops.End(), image.Pt(longestPrefix.X-prefix.X, 0))
