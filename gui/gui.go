@@ -167,28 +167,20 @@ const (
 	backupWallet program = iota
 )
 
-type linePos struct {
-	W op.CallOp
-	Y int
-}
-
 type richText struct {
-	Lines []linePos
-	Y     int
+	Y int
 }
 
 func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA, txt string) {
 	offy := r.Y
 	for line := range style.Layout(width, txt) {
 		r.Y = line.Dot.Y + offy
-		inner := ops.Begin()
 		(&op.TextOp{
 			Face: style.Face,
 			Dot:  image.Pt(line.Dot.X, r.Y),
 			Txt:  line.Text,
-		}).Add(inner)
-		op.ColorOp(inner, col)
-		r.Lines = append(r.Lines, linePos{ops.End(), r.Y})
+		}).Add(ops)
+		op.ColorOp(ops, col)
 	}
 }
 
@@ -285,23 +277,23 @@ func (s *AddressesScreen) Show(ctx *Context, ops op.Ctx, th *Colors) {
 		body := content.Shrink(leadingSize, rightsz.X+12, 0, leftsz.X+12)
 		inner := body.Shrink(scrollFadeDist, 0, scrollFadeDist, 0)
 
-		bodyst := ctx.Styles.body
-		var bodytxt richText
-		addrs := s.addresses[s.page]
-		for _, addr := range addrs {
-			bodytxt.Add(ops, bodyst, inner.Dx(), th.Text, addr)
-		}
-
 		op.Position(ops, left, content.W(leftsz))
 		op.Position(ops, right, content.E(rightsz))
+
+		var bodytxt richText
+		ops.Begin()
+		addrs := s.addresses[s.page]
+		for _, addr := range addrs {
+			ops := ops
+			bodytxt.Add(ops, ctx.Styles.body, inner.Dx(), th.Text, addr)
+		}
+		addresses := ops.End()
 
 		s.scroll += scrollDelta * body.Dy() / 2
 		maxScroll := bodytxt.Y - inner.Dy()
 		s.scroll = min(max(0, s.scroll), maxScroll)
-		ops.Begin()
-		for _, l := range bodytxt.Lines {
-			op.Position(ops, l.W, inner.Min.Sub(image.Pt(0, s.scroll)))
-		}
+		pos := inner.Min.Sub(image.Pt(0, s.scroll))
+		op.Position(ops.Begin(), addresses, pos)
 		fadeClip(ops, ops.End(), image.Rectangle(body))
 
 		layoutNavigation(inp, ops, th, dims, []NavButton{{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack}}...)
@@ -2280,39 +2272,34 @@ func (s *DescriptorScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image
 	btnw := assets.NavBtnPrimary.Bounds().Dx()
 	body := r.Shrink(leadingSize, btnw, 0, btnw)
 
-	type linePos struct {
-		w op.CallOp
-		y int
-	}
-	var bodytxt richText
+	{
+		ops := ops.Begin()
+		var bodytxt richText
 
-	bodyst := ctx.Styles.body
-	subst := ctx.Styles.subtitle
-	if desc.Title != "" {
-		bodytxt.Add(ops, subst, body.Dx(), th.Text, "Title")
-		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Title)
+		bodyst := ctx.Styles.body
+		subst := ctx.Styles.subtitle
+		if desc.Title != "" {
+			bodytxt.Add(ops, subst, body.Dx(), th.Text, "Title")
+			bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Title)
+			bodytxt.Y += infoSpacing
+		}
+		bodytxt.Add(ops, subst, body.Dx(), th.Text, "Type")
+		var typetxt string
+		switch desc.Type {
+		case urtypes.Singlesig:
+			typetxt = "Singlesig"
+		default:
+			typetxt = fmt.Sprintf("%d-of-%d multisig", desc.Threshold, len(desc.Keys))
+		}
+		if len(desc.Keys) > 0 && desc.Keys[0].Network != &chaincfg.MainNetParams {
+			typetxt += " (testnet)"
+		}
+		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, typetxt)
 		bodytxt.Y += infoSpacing
+		bodytxt.Add(ops, subst, body.Dx(), th.Text, "Script")
+		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Script.String())
 	}
-	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Type")
-	var typetxt string
-	switch desc.Type {
-	case urtypes.Singlesig:
-		typetxt = "Singlesig"
-	default:
-		typetxt = fmt.Sprintf("%d-of-%d multisig", desc.Threshold, len(desc.Keys))
-	}
-	if len(desc.Keys) > 0 && desc.Keys[0].Network != &chaincfg.MainNetParams {
-		typetxt += " (testnet)"
-	}
-	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, typetxt)
-	bodytxt.Y += infoSpacing
-	bodytxt.Add(ops, subst, body.Dx(), th.Text, "Script")
-	bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Script.String())
 
-	ops.Begin()
-	for _, l := range bodytxt.Lines {
-		l.W.Add(ops)
-	}
 	op.Position(ops, ops.End(), body.Min.Add(image.Pt(0, scrollFadeDist)))
 }
 
