@@ -346,9 +346,9 @@ type ScanScreen struct {
 
 func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 	var (
-		feed      *image.Gray
-		cameraErr error
-		decoder   QRDecoder
+		feed, feed2, gray *image.Gray
+		cameraErr         error
+		decoder           QRDecoder
 	)
 	inp := new(InputTracker)
 	for {
@@ -372,6 +372,9 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 		dims := ctx.Platform.DisplaySize()
 		if feed == nil || dims != feed.Bounds().Size() {
 			feed = image.NewGray(image.Rectangle{Max: dims})
+			copy := *feed
+			feed2 = &copy
+			gray = new(image.Gray)
 		}
 		ctx.Platform.CameraFrame(dims.Mul(cameraFrameScale))
 		for {
@@ -382,12 +385,12 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 			cameraErr = f.Error
 			if cameraErr == nil {
 				ycbcr := f.Image.(*image.YCbCr)
-				gray := &image.Gray{Pix: ycbcr.Y, Stride: ycbcr.YStride, Rect: ycbcr.Bounds()}
+				*gray = image.Gray{Pix: ycbcr.Y, Stride: ycbcr.YStride, Rect: ycbcr.Bounds()}
 
+				// Swap image (but not backing store) to ensure the graphics backend treats
+				// it as dirty.
+				feed, feed2 = feed2, feed
 				scaleRot(feed, gray, ctx.RotateCamera)
-				// Re-create image (but not backing store) to ensure redraw.
-				copy := *feed
-				feed = &copy
 				results, _ := ctx.Platform.ScanQR(gray)
 				for _, res := range results {
 					if v, ok := decoder.parseQR(res); ok {
