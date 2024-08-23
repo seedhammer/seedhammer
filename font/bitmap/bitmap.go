@@ -2,6 +2,7 @@ package bitmap
 
 import (
 	"encoding/binary"
+	"sort"
 	"unicode"
 
 	"golang.org/x/image/font"
@@ -84,27 +85,15 @@ func (f *Face) GlyphAdvance(r rune) (fixed.Int26_6, bool) {
 }
 
 func (f *Face) Kern(r1, r2 rune) fixed.Int26_6 {
-	cmp := func(kerns []byte, r1, r2 rune, i int) int {
+	nkerns := int(bo.Uint16(f.data[offNumKerns:]))
+	kerns := f.data[OffKerns : OffKerns+nkerns*KernElemSize]
+	i, found := sort.Find(nkerns, func(i int) int {
 		kr1, kr2 := rune(kerns[i*KernElemSize+0]), rune(kerns[i*KernElemSize+1])
 		if d := int(r1 - kr1); d != 0 {
 			return d
 		}
 		return int(r2 - kr2)
-	}
-	nkerns := bo.Uint16(f.data[offNumKerns:])
-	kerns := f.data[OffKerns : OffKerns+nkerns*KernElemSize]
-	// Inline sort.Find because TinyGo allocates the closure variables
-	// despite the closure not escaping.
-	i, j := 0, int(nkerns)
-	for i < j {
-		h := int(uint(i+j) >> 1)
-		if cmp(kerns, r1, r2, h) > 0 {
-			i = h + 1
-		} else {
-			j = h
-		}
-	}
-	i, found := i, i < int(nkerns) && cmp(kerns, r1, r2, i) == 0
+	})
 	if !found {
 		return 0
 	}
