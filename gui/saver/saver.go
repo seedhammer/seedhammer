@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"image/draw"
 	"math/rand/v2"
+	"strings"
 
 	"golang.org/x/image/math/fixed"
 	"seedhammer.com/gui/assets"
@@ -16,8 +17,9 @@ type State struct {
 		snake image.Rectangle
 		logo  image.Rectangle
 	}
-	snake []joint
-	food  struct {
+	snake    []joint
+	snakeBuf [snakeLen + 20]joint
+	food     struct {
 		color int
 		image.Point
 	}
@@ -54,12 +56,18 @@ const snakeLen = 5
 
 type logo struct {
 	Bounds image.Rectangle
-	Boxes  []image.Point
+	boxes  string
 }
+
+var (
+	logoNarrow = buildLogo(false)
+	logoWide   = buildLogo(true)
+)
 
 var (
 	tail  = rgb(0xd9d9d9)
 	white = rgb(0xffffff)
+	black = rgb(0x000000)
 )
 
 var colors = []image.Image{
@@ -74,7 +82,11 @@ var colors = []image.Image{
 }
 
 func logoFor(width int) logo {
-	return buildLogo(width > 400)
+	if width > 400 {
+		return logoWide
+	} else {
+		return logoNarrow
+	}
 }
 
 func (s *State) reset(dims image.Point) {
@@ -107,7 +119,7 @@ func (s *State) reset(dims image.Point) {
 		location.X = dims.X + snakeLen
 	}
 
-	s.snake = []joint{}
+	s.snake = s.snakeBuf[:0]
 	for len(s.snake) < snakeLen {
 		location.X += s.dx
 		location.Y += s.dy
@@ -212,13 +224,12 @@ update:
 				s.mode = modeGameOver
 				continue update
 			}
-
 		}
 		j := joint{
 			Point: newHead,
 		}
-		if newHead == s.food.Point {
-			s.snake = append(s.snake, j)
+		grow := newHead == s.food.Point
+		if grow {
 			placeFood(s, dims)
 			for {
 				color := rand.IntN(len(colors))
@@ -227,10 +238,11 @@ update:
 					break
 				}
 			}
-		} else {
-			s.snake = append(s.snake[:0], s.snake[1:]...)
-			s.snake = append(s.snake, j)
 		}
+		if !grow || len(s.snake) == cap(s.snake) {
+			s.snake = append(s.snake[:0], s.snake[1:]...)
+		}
+		s.snake = append(s.snake, j)
 		break
 	}
 	if s.mode == modeGameOver {
@@ -280,7 +292,7 @@ func drawScreen(screen Screen, dr image.Rectangle, f func(chunk draw.RGBA64Image
 		if !ok {
 			break
 		}
-		imageDraw(c, c.Bounds(), image.NewUniform(color.Black), image.Point{}, draw.Src)
+		imageDraw(c, c.Bounds(), black, image.Point{}, draw.Src)
 		f(c)
 	}
 }
@@ -309,7 +321,10 @@ func (s *State) Draw(screen Screen) {
 	drawScreen(screen, lr, func(screen draw.RGBA64Image) {
 		if s.mode == modeGameOver {
 			b := s.prev.logo
-			drawBoxes(screen, logo.Boxes, b.Min.X, b.Min.Y)
+			off := b.Min
+			for c := range logo.Boxes {
+				drawBox(screen, c.X*gridSize+off.X, c.Y*gridSize+off.Y, white)
+			}
 		}
 	})
 	var snake image.Rectangle
@@ -347,14 +362,20 @@ func (s *State) drawSnake(screen draw.RGBA64Image) {
 		if i == len(s.snake)-1 {
 			color = white
 		}
-		dr := image.Rectangle{
-			Min: image.Pt(j.X*gridSize, j.Y*gridSize+s.sY.Round()),
-		}
-		dr.Max = dr.Min.Add(image.Pt(boxSize, boxSize))
+		p := image.Pt(j.X*gridSize, j.Y*gridSize+s.sY.Round())
 		if j.filled {
-			clearBox(screen, dr.Min.X, dr.Min.Y, color)
+			clearBox(screen, p.X, p.Y, color)
 		} else {
-			drawBox(screen, dr.Min.X, dr.Min.Y, color)
+			drawBox(screen, p.X, p.Y, color)
+		}
+	}
+}
+
+func (l logo) Boxes(yield func(image.Point) bool) {
+	for i := 0; i < len(l.boxes); i += 2 {
+		x, y := l.boxes[i], l.boxes[i+1]
+		if !yield(image.Pt(int(x), int(y))) {
+			return
 		}
 	}
 }
@@ -422,6 +443,7 @@ func buildLogo(wide bool) logo {
 	logo := logo{
 		Bounds: image.Rectangle{Min: image.Pt(10000, 10000)},
 	}
+	var logoBoxes strings.Builder
 	buildBoxes := func(boxes []image.Point, x, y int) {
 		for _, b := range boxes {
 			b = b.Add(image.Pt(x, y))
@@ -429,7 +451,8 @@ func buildLogo(wide bool) logo {
 				Min: image.Pt(b.X, b.Y),
 				Max: image.Pt(b.X+1, b.Y+1),
 			})
-			logo.Boxes = append(logo.Boxes, b)
+			logoBoxes.WriteByte(byte(b.X))
+			logoBoxes.WriteByte(byte(b.Y))
 		}
 	}
 	buildBoxes(S, 0+seedOff, 0)
@@ -448,6 +471,7 @@ func buildLogo(wide bool) logo {
 		Min: logo.Bounds.Min.Mul(gridSize),
 		Max: logo.Bounds.Max.Mul(gridSize),
 	}
+	logo.boxes = logoBoxes.String()
 
 	return logo
 }
