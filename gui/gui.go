@@ -2286,17 +2286,16 @@ func (s *DescriptorScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image
 			bodytxt.Y += infoSpacing
 		}
 		bodytxt.Add(ops, subst, body.Dx(), th.Text, "Type")
-		var typetxt string
+		testnet := ""
+		if len(desc.Keys) > 0 && desc.Keys[0].Network != &chaincfg.MainNetParams {
+			testnet = " (testnet)"
+		}
 		switch desc.Type {
 		case urtypes.Singlesig:
-			typetxt = "Singlesig"
+			bodytxt.Add(ops, bodyst, body.Dx(), th.Text, "Singlesig%s", testnet)
 		default:
-			typetxt = fmt.Sprintf("%d-of-%d multisig", desc.Threshold, len(desc.Keys))
+			bodytxt.Add(ops, bodyst, body.Dx(), th.Text, "%d-of-%d multisig%s", desc.Threshold, len(desc.Keys), testnet)
 		}
-		if len(desc.Keys) > 0 && desc.Keys[0].Network != &chaincfg.MainNetParams {
-			typetxt += " (testnet)"
-		}
-		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, typetxt)
 		bodytxt.Y += infoSpacing
 		bodytxt.Add(ops, subst, body.Dx(), th.Text, "Script")
 		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Script.String())
