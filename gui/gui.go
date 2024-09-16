@@ -196,7 +196,7 @@ func ShowAddressesScreen(ctx *Context, ops op.Ctx, th *Colors, desc urtypes.Outp
 	}
 
 	counter := 0
-	for page := range 2 {
+	for page := range len(s.addresses) {
 		for len(s.addresses[page]) < 20 {
 			var addr string
 			var err error
