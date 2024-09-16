@@ -13,8 +13,7 @@ import (
 )
 
 type State struct {
-	before time.Time
-	prev   struct {
+	prev struct {
 		snake image.Rectangle
 		logo  image.Rectangle
 	}
@@ -275,7 +274,6 @@ type Screen interface {
 	Dirty(r image.Rectangle) error
 	// NextChunk returns the next chunk of the refresh.
 	NextChunk() (draw.RGBA64Image, bool)
-	Now() time.Time
 }
 
 func drawScreen(screen Screen, dr image.Rectangle, f func(chunk draw.RGBA64Image)) {
@@ -300,15 +298,6 @@ func imageDraw(dst draw.RGBA64Image, dr image.Rectangle, src image.Image, sp ima
 }
 
 func (s *State) Draw(screen Screen) {
-	// Throttle frame time.
-	now := screen.Now()
-	d := now.Sub(s.before)
-	s.before = now
-	const minFrameTime = 40 * time.Millisecond
-	if sleep := minFrameTime - d; sleep > 0 {
-		time.Sleep(sleep)
-	}
-
 	dims := screen.DisplaySize()
 	s.update(dims)
 	lr := s.prev.logo

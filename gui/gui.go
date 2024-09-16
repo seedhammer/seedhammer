@@ -2792,8 +2792,8 @@ func (a *App) Frame() {
 		}
 		wakeup = time.Time{}
 	}
-	a.ctx.WakeupAt(a.idle.start.Add(idleTimeout))
-	idle := now.Sub(a.idle.start) >= idleTimeout
+	idleWakeup := a.idle.start.Add(idleTimeout)
+	idle := now.Sub(idleWakeup) >= 0
 	if a.idle.active != idle {
 		a.idle.active = idle
 		if idle {
@@ -2806,7 +2806,12 @@ func (a *App) Frame() {
 	}
 	if a.idle.active {
 		a.idle.state.Draw(a.ctx.Platform)
+		// Throttle frame time.
+		const minFrameTime = 40 * time.Millisecond
+		a.ctx.WakeupAt(now.Add(minFrameTime))
 		return
+	} else {
+		a.ctx.WakeupAt(idleWakeup)
 	}
 	dims := a.ctx.Platform.DisplaySize()
 	start := time.Now()
