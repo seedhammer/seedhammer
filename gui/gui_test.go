@@ -8,6 +8,7 @@ import (
 	"image/draw"
 	"image/png"
 	"io"
+	"math"
 	"os"
 	"reflect"
 	"strings"
@@ -123,13 +124,17 @@ func TestValidateDescriptor(t *testing.T) {
 }
 
 func runUI(ctx *Context, f func()) func() {
+	return runUILimit(ctx, 1000, f)
+}
+
+func runUILimit(ctx *Context, limit int, f func()) func() {
 	token := new(int)
 	frameCh := make(chan struct{})
 	closed := make(chan struct{})
 	frames := 0
 	ctx.Frame = func() {
 		frames++
-		if frames > 1000 {
+		if frames > limit {
 			panic("UI is not making progress")
 		}
 		frameCh <- struct{}{}
@@ -172,6 +177,49 @@ func opsContains(ops *op.Ops, str string) bool {
 	txt := strings.ToLower(ops.ExtractText(clip))
 	clean := strings.ReplaceAll(strings.ToLower(str), " ", "")
 	return strings.Index(txt, clean) != -1
+}
+
+func TestAllocs(t *testing.T) {
+	res := testing.Benchmark(func(b *testing.B) {
+		desc := urtypes.OutputDescriptor{
+			Script:    urtypes.P2WSH,
+			Type:      urtypes.SortedMulti,
+			Threshold: 2,
+			Keys:      make([]urtypes.KeyDescriptor, 5),
+		}
+		m := fillDescriptor(t, desc, desc.Script.DerivationPath(), 12, 0)
+		ds := &DescriptorScreen{
+			Descriptor: desc,
+			Mnemonic:   m,
+		}
+		screens := []func(*Context, op.Ctx){
+			func(ctx *Context, ops op.Ctx) {
+				mainFlow(ctx, ops)
+			},
+			func(ctx *Context, ops op.Ctx) {
+				ds.Confirm(ctx, ops, &descriptorTheme)
+			},
+		}
+		frames := make([]func(), 0, len(screens))
+		for _, s := range screens {
+			ops := new(op.Ops)
+			ctx := NewContext(newPlatform())
+			quit := runUILimit(ctx, math.MaxInt, func() {
+				s(ctx, ops.Context())
+			})
+			defer quit()
+			frames = append(frames, resetOps(ops, ctx.Frame))
+		}
+		b.StartTimer()
+		for range b.N {
+			for _, f := range frames {
+				f()
+			}
+		}
+	})
+	if a := res.AllocsPerOp(); a > 0 {
+		t.Errorf("got %d allocs, expected %d", a, 0)
+	}
 }
 
 func TestMainScreen(t *testing.T) {
