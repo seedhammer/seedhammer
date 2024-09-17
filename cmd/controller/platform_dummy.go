@@ -46,8 +46,8 @@ func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
 func (p *Platform) Wakeup() {
 }
 
-func (p *Platform) Events(deadline time.Time) []gui.Event {
-	return nil
+func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Event {
+	return evts
 }
 
 func (p *Platform) CameraFrame(dims image.Point) {

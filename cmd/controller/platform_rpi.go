@@ -83,7 +83,7 @@ func (p *Platform) Wakeup() {
 	}
 }
 
-func (p *Platform) Events(deadline time.Time) []gui.Event {
+func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Event {
 	c := &p.camera
 	if c.close != nil {
 		if c.frame != nil {
@@ -96,7 +96,6 @@ func (p *Platform) Events(deadline time.Time) []gui.Event {
 		}
 		c.active = false
 	}
-	var evts []gui.Event
 	for {
 		// Give the input go routines a chance to process
 		// incoming events.

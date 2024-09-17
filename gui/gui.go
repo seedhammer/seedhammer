@@ -2653,7 +2653,7 @@ func (s *EngraveScreen) drawNav(inp *InputTracker, ops op.Ctx, th *Colors, dims 
 }
 
 type Platform interface {
-	Events(deadline time.Time) []Event
+	AppendEvents(deadline time.Time, evts []Event) []Event
 	Wakeup()
 	PlateSizes() []backup.PlateSize
 	Engraver() (Engraver, error)
@@ -2784,6 +2784,7 @@ func Run(pl Platform, version string) func(yield func() bool) {
 			mainFlow(ctx, a.root.Context())
 		}
 		startTime := time.Now()
+		var evts []Event
 		for range it {
 			dirty := a.root.Clip(image.Rectangle{Max: a.ctx.Platform.DisplaySize()})
 			layoutTime := time.Now()
@@ -2812,7 +2813,7 @@ func Run(pl Platform, version string) func(yield func() bool) {
 				}
 				wakeup := a.ctx.Wakeup
 				a.ctx.Reset()
-				for _, e := range a.ctx.Platform.Events(wakeup) {
+				for _, e := range a.ctx.Platform.AppendEvents(wakeup, evts[:0]) {
 					a.idle.start = a.ctx.Platform.Now()
 					if se, ok := e.AsSDCard(); ok {
 						a.ctx.EmptySDSlot = !se.Inserted
