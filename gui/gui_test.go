@@ -8,6 +8,7 @@ import (
 	"image/draw"
 	"image/png"
 	"io"
+	"iter"
 	"math"
 	"os"
 	"reflect"
@@ -72,12 +73,12 @@ func TestDescriptorScreenError(t *testing.T) {
 			ctx := NewContext(newPlatform())
 			// Ok descriptor, ok error message, back.
 			ctxButton(ctx, Button3, Button3, Button1)
-			quit := runUI(ctx, func() {
+			for range runUI(ctx, func() {
 				if _, ok := scr.Confirm(ctx, op.Ctx{}, &descriptorTheme); ok != test.ok {
 					t.Fatalf("DescriptorScreen.Confirm returned %v, expected %v", ok, test.ok)
 				}
-			})
-			defer quit()
+			}) {
+			}
 		})
 	}
 }
@@ -123,51 +124,36 @@ func TestValidateDescriptor(t *testing.T) {
 	}
 }
 
-func runUI(ctx *Context, f func()) func() {
+func runUI(ctx *Context, f func()) iter.Seq[struct{}] {
 	return runUILimit(ctx, 1000, f)
 }
 
-func runUILimit(ctx *Context, limit int, f func()) func() {
-	token := new(int)
-	frameCh := make(chan struct{})
-	closed := make(chan struct{})
-	frames := 0
-	ctx.Frame = func() {
-		frames++
-		if frames > limit {
-			panic("UI is not making progress")
-		}
-		frameCh <- struct{}{}
-		select {
-		case <-frameCh:
-		case <-closed:
-		}
-	}
-	go func() {
+func runUILimit(ctx *Context, limit int, f func()) iter.Seq[struct{}] {
+	return func(yield func(struct{}) bool) {
+		token := new(int)
 		defer func() {
 			if v := recover(); v != nil && v != token {
 				panic(v)
 			}
 		}()
-		defer close(closed)
-		<-frameCh
-		f()
-	}()
-	quit := func() {
+		frames := 0
 		ctx.Frame = func() {
-			panic(token)
+			frames++
+			if frames > limit {
+				panic("UI is not making progress")
+			}
+			if !yield(struct{}{}) {
+				panic(token)
+			}
 		}
-		close(frameCh)
-		<-closed
-		ctx.Frame = nil
+		f()
 	}
-	return quit
 }
 
-func resetOps(ops *op.Ops, f func()) func() {
-	return func() {
+func resetOps(ops *op.Ops, f func() (struct{}, bool)) func() (struct{}, bool) {
+	return func() (struct{}, bool) {
 		ops.Reset()
-		f()
+		return f()
 	}
 }
 
@@ -200,15 +186,15 @@ func TestAllocs(t *testing.T) {
 				ds.Confirm(ctx, ops, &descriptorTheme)
 			},
 		}
-		frames := make([]func(), 0, len(screens))
+		frames := make([]func() (struct{}, bool), 0, len(screens))
 		for _, s := range screens {
 			ops := new(op.Ops)
 			ctx := NewContext(newPlatform())
-			quit := runUILimit(ctx, math.MaxInt, func() {
+			next, quit := iter.Pull(runUILimit(ctx, math.MaxInt, func() {
 				s(ctx, ops.Context())
-			})
+			}))
 			defer quit()
-			frames = append(frames, resetOps(ops, ctx.Frame))
+			frames = append(frames, resetOps(ops, next))
 		}
 		b.StartTimer()
 		for range b.N {
@@ -227,11 +213,11 @@ func TestMainScreen(t *testing.T) {
 	ctx := NewContext(p)
 
 	ops := new(op.Ops)
-	quit := runUI(ctx, func() {
+	next, quit := iter.Pull(runUI(ctx, func() {
 		mainFlow(ctx, ops.Context())
-	})
+	}))
 	defer quit()
-	frame := resetOps(ops, ctx.Frame)
+	frame := resetOps(ops, next)
 	// Test sd card warning.
 	ctxButton(ctx, Button3)
 	frame()
@@ -270,13 +256,13 @@ func TestNonParticipatingSeed(t *testing.T) {
 	ctxButton(ctx, Button3)
 
 	ops := new(op.Ops)
-	quit := runUI(ctx, func() {
+	frame, quit := iter.Pull(runUI(ctx, func() {
 		if _, ok := scr.Confirm(ctx, ops.Context(), &descriptorTheme); ok {
 			t.Fatal("a non-participating seed was accepted")
 		}
-	})
+	}))
 	defer quit()
-	ctx.Frame()
+	frame()
 	if !opsContains(ops, "Unknown Wallet") {
 		t.Fatal("a non-participating seed was accepted")
 	}
@@ -320,16 +306,16 @@ func TestEngraveScreenCancel(t *testing.T) {
 	// Hold confirm.
 	ctxPress(ctx, Button3)
 	var cancelled bool
-	quit := runUI(ctx, func() {
+	frame, quit := iter.Pull(runUI(ctx, func() {
 		cancelled = !scr.Engrave(ctx, op.Ctx{}, &engraveTheme)
-	})
+	}))
 	defer quit()
-	ctx.Frame()
+	frame()
 	if cancelled {
 		t.Error("exited screen without confirmation")
 	}
 	p.timeOffset += confirmDelay
-	ctx.Frame()
+	frame()
 	if !cancelled {
 		t.Error("failed to exit screen")
 	}
@@ -378,15 +364,15 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 	ctx := NewContext(p)
 	scr := newTestEngraveScreen(t, ctx)
 	ops := new(op.Ops)
-	quit := runUI(ctx, func() {
+	frame, quit := iter.Pull(runUI(ctx, func() {
 		scr.Engrave(ctx, ops.Context(), &engraveTheme)
-	})
+	}))
 	defer quit()
-	frame := resetOps(ops, ctx.Frame)
+	frame = resetOps(ops, frame)
 	// Press next until connect is reached.
 	for scr.instructions[scr.step].Type != ConnectInstruction {
 		ctxButton(ctx, Button3)
-		ctx.Frame()
+		frame()
 	}
 	// Hold connect.
 	ctxPress(ctx, Button3)
@@ -437,11 +423,11 @@ func TestScanScreenConnectError(t *testing.T) {
 	camErr := errors.New("failed to open camera")
 	ctx.events = append(ctx.events, FrameEvent{Error: camErr}.Event())
 	ops := new(op.Ops)
-	quit := runUI(ctx, func() {
+	frame, quit := iter.Pull(runUI(ctx, func() {
 		scr.Scan(ctx, ops.Context())
-	})
+	}))
 	defer quit()
-	frame := resetOps(ops, ctx.Frame)
+	frame = resetOps(ops, frame)
 	frame()
 	if !opsContains(ops, camErr.Error()) {
 		t.Fatal("initial camera error not reported")
@@ -457,11 +443,11 @@ func TestScanScreenStreamError(t *testing.T) {
 	camErr := errors.New("error during streaming")
 	ctx.events = append(ctx.events, FrameEvent{Error: camErr}.Event())
 	ops := new(op.Ops)
-	quit := runUI(ctx, func() {
+	frame, quit := iter.Pull(runUI(ctx, func() {
 		scr.Scan(ctx, ops.Context())
-	})
+	}))
 	defer quit()
-	ctx.Frame()
+	frame()
 	if !opsContains(ops, camErr.Error()) {
 		t.Fatal("streaming camera error not reported")
 	}
@@ -521,11 +507,11 @@ func TestSeedScreenScanInvalid(t *testing.T) {
 	ctxButton(ctx, Down, Button3)
 	ctxQR(t, ctx, p, "UR:CRYPTO-SEED/OYADGDIYWLAMAEJSZSWDWYTLTIFEENFTLNMNWKBDHNSSRO")
 	ops := new(op.Ops)
-	quit := runUI(ctx, func() {
+	frame, quit := iter.Pull(runUI(ctx, func() {
 		newMnemonicFlow(ctx, ops.Context(), &descriptorTheme)
-	})
+	}))
 	defer quit()
-	ctx.Frame()
+	frame()
 	if !opsContains(ops, "invalid seed") {
 		t.Error("invalid seed accepted")
 	}
@@ -543,12 +529,12 @@ func TestSeedScreenInvalidSeed(t *testing.T) {
 	var confirmed bool
 	ops := new(op.Ops)
 	var exited bool
-	quit := runUI(ctx, func() {
+	frame, quit := iter.Pull(runUI(ctx, func() {
 		scr.Confirm(ctx, ops.Context(), &singleTheme, m)
 		exited = true
-	})
+	}))
 	defer quit()
-	frame := resetOps(ops, ctx.Frame)
+	frame = resetOps(ops, frame)
 	frame()
 	if confirmed || !opsContains(ops, "invalid seed") {
 		t.Fatal("invalid seed accepted")
@@ -642,15 +628,15 @@ func TestSeed(t *testing.T) {
 
 	var completed bool
 	scr := NewEngraveScreen(ctx, plate)
-	quit := runUI(ctx, func() {
+	frame, quit := iter.Pull(runUI(ctx, func() {
 		completed = scr.Engrave(ctx, op.Ctx{}, &engraveTheme)
-	})
+	}))
 	defer quit()
 
-	testEngraving(t, p, ctx, scr, side)
+	testEngraving(t, p, ctx, scr, side, frame)
 	for !completed {
 		ctxButton(ctx, Button3)
-		ctx.Frame()
+		frame()
 	}
 }
 
@@ -704,16 +690,16 @@ func TestMulti(t *testing.T) {
 		}
 		var completed bool
 		scr := NewEngraveScreen(ctx, plate)
-		quit := runUI(ctx, func() {
+		frame, quit := iter.Pull(runUI(ctx, func() {
 			completed = scr.Engrave(ctx, op.Ctx{}, &engraveTheme)
-		})
+		}))
 		defer quit()
 		for _, side := range plate.Sides {
-			testEngraving(t, p, ctx, scr, side)
+			testEngraving(t, p, ctx, scr, side, frame)
 		}
 		for !completed {
 			ctxButton(ctx, Button3)
-			ctx.Frame()
+			frame()
 		}
 	}
 }
@@ -942,7 +928,7 @@ func qrFrame(t *testing.T, p *testPlatform, content string) FrameEvent {
 	}
 }
 
-func testEngraving(t *testing.T, p *testPlatform, ctx *Context, scr *EngraveScreen, side engrave.Plan) {
+func testEngraving(t *testing.T, p *testPlatform, ctx *Context, scr *EngraveScreen, side engrave.Plan, frame func() (struct{}, bool)) {
 	p.engrave.closed = make(chan []mjolnir.Cmd)
 done:
 	for {
@@ -952,18 +938,18 @@ done:
 		case ConnectInstruction:
 			// Hold connect.
 			ctxPress(ctx, Button3)
-			ctx.Frame()
+			frame()
 			p.timeOffset += confirmDelay
-			ctx.Frame()
+			frame()
 		default:
 			ctxButton(ctx, Button3)
-			ctx.Frame()
+			frame()
 		}
 	}
 	got := <-p.engrave.closed
 	// Verify the step is advanced after engrave completion.
 	for scr.instructions[scr.step].Type == EngraveInstruction {
-		ctx.Frame()
+		frame()
 	}
 	want := simEngrave(t, side)
 	if !reflect.DeepEqual(want, got) {

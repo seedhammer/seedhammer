@@ -2749,97 +2749,104 @@ func (b Button) String() string {
 	}
 }
 
-type App struct {
-	root op.Ops
-	mask *image.Alpha
-	ctx  *Context
-	idle struct {
-		start  time.Time
-		active bool
-		state  saver.State
-	}
-}
-
-func NewApp(pl Platform, version string) (*App, error) {
-	ctx := NewContext(pl)
-	ctx.Version = version
-	a := &App{
-		ctx: ctx,
-	}
-	a.idle.start = pl.Now()
-	frameCh := make(chan struct{})
-	ctx.Frame = func() {
-		frameCh <- struct{}{}
-		<-frameCh
-	}
-	go func() {
-		<-frameCh
-		mainFlow(ctx, a.root.Context())
-	}()
-	return a, nil
-}
-
 const idleTimeout = 3 * time.Minute
 
-func (a *App) Frame() {
-	wakeup := a.ctx.Wakeup
-	a.ctx.Reset()
-	now := a.ctx.Platform.Now()
-	for _, e := range a.ctx.Platform.Events(wakeup) {
-		a.idle.start = now
-		if se, ok := e.AsSDCard(); ok {
-			a.ctx.EmptySDSlot = !se.Inserted
-		} else {
-			a.ctx.Events(e)
+func Run(pl Platform, version string) func(yield func() bool) {
+	return func(yield func() bool) {
+		ctx := NewContext(pl)
+		ctx.Version = version
+		a := struct {
+			root op.Ops
+			mask *image.Alpha
+			ctx  *Context
+			idle struct {
+				start  time.Time
+				active bool
+				state  saver.State
+			}
+		}{
+			ctx: ctx,
 		}
-		wakeup = time.Time{}
-	}
-	idleWakeup := a.idle.start.Add(idleTimeout)
-	idle := now.Sub(idleWakeup) >= 0
-	if a.idle.active != idle {
-		a.idle.active = idle
-		if idle {
-			a.idle.state = saver.State{}
-		} else {
-			// The screen saver has invalidated the cached
-			// frame content.
-			a.root = op.Ops{}
+		a.idle.start = pl.Now()
+
+		it := func(yield func() bool) {
+			stop := new(int)
+			ctx.Frame = func() {
+				if !yield() {
+					panic(stop)
+				}
+			}
+			defer func() {
+				if err := recover(); err != stop {
+					panic(err)
+				}
+			}()
+			mainFlow(ctx, a.root.Context())
 		}
-	}
-	if a.idle.active {
-		a.idle.state.Draw(a.ctx.Platform)
-		// Throttle frame time.
-		const minFrameTime = 40 * time.Millisecond
-		a.ctx.WakeupAt(now.Add(minFrameTime))
-		return
-	} else {
-		a.ctx.WakeupAt(idleWakeup)
-	}
-	dims := a.ctx.Platform.DisplaySize()
-	start := time.Now()
-	a.root.Reset()
-	a.ctx.Frame()
-	dirty := a.root.Clip(image.Rectangle{Max: dims})
-	layoutTime := time.Now()
-	renderTime := time.Now()
-	if err := a.ctx.Platform.Dirty(dirty); err != nil {
-		panic(err)
-	}
-	for {
-		fb, ok := a.ctx.Platform.NextChunk()
-		if !ok {
-			break
+		startTime := time.Now()
+		for range it {
+			dirty := a.root.Clip(image.Rectangle{Max: a.ctx.Platform.DisplaySize()})
+			layoutTime := time.Now()
+			if err := a.ctx.Platform.Dirty(dirty); err != nil {
+				panic(err)
+			}
+			for {
+				fb, ok := a.ctx.Platform.NextChunk()
+				if !ok {
+					break
+				}
+				fbdims := fb.Bounds().Size()
+				if a.mask == nil || fbdims != a.mask.Bounds().Size() {
+					a.mask = image.NewAlpha(image.Rectangle{Max: fbdims})
+				}
+				a.root.Draw(fb, a.mask)
+			}
+			drawTime := time.Now()
+			if a.ctx.Platform.Debug() {
+				log.Printf("frame: %v layout: %v draw: %v %v",
+					drawTime.Sub(startTime), layoutTime.Sub(startTime), drawTime.Sub(layoutTime), dirty)
+			}
+			for {
+				if !yield() {
+					return
+				}
+				wakeup := a.ctx.Wakeup
+				a.ctx.Reset()
+				for _, e := range a.ctx.Platform.Events(wakeup) {
+					a.idle.start = a.ctx.Platform.Now()
+					if se, ok := e.AsSDCard(); ok {
+						a.ctx.EmptySDSlot = !se.Inserted
+					} else {
+						a.ctx.Events(e)
+					}
+					wakeup = time.Time{}
+				}
+				idleWakeup := a.idle.start.Add(idleTimeout)
+				now := a.ctx.Platform.Now()
+				idle := now.Sub(idleWakeup) >= 0
+				if a.idle.active != idle {
+					a.idle.active = idle
+					if idle {
+						a.idle.state = saver.State{}
+					} else {
+						// The screen saver has invalidated the cached
+						// frame content.
+						a.root = op.Ops{}
+					}
+				}
+				if a.idle.active {
+					a.idle.state.Draw(a.ctx.Platform)
+					// Throttle screen saver speed.
+					const minFrameTime = 40 * time.Millisecond
+					a.ctx.WakeupAt(now.Add(minFrameTime))
+					continue
+				}
+				a.ctx.WakeupAt(idleWakeup)
+				break
+			}
+			a.root.Reset()
+			startTime = time.Now()
 		}
-		fbdims := fb.Bounds().Size()
-		if a.mask == nil || fbdims != a.mask.Bounds().Size() {
-			a.mask = image.NewAlpha(image.Rectangle{Max: fbdims})
-		}
-		a.root.Draw(fb, a.mask)
-	}
-	drawTime := time.Now()
-	if a.ctx.Platform.Debug() {
-		log.Printf("frame: %v layout: %v render: %v draw: %v %v",
-			drawTime.Sub(start), layoutTime.Sub(start), renderTime.Sub(layoutTime), drawTime.Sub(renderTime), dirty)
 	}
 }
 

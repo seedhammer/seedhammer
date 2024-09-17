@@ -25,13 +25,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	a, err := gui.NewApp(p, version)
-	if err != nil {
-		return err
+	for range gui.Run(p, version) {
 	}
-	for {
-		a.Frame()
-	}
+	return nil
 }
 
 var debug = false
