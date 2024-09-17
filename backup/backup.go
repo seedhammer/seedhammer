@@ -273,11 +273,11 @@ func frontSideSeed(params engrave.Params, plate Seed, plateDims image.Point) (en
 	mfp := strings.ToUpper(fmt.Sprintf("%.8x", plate.MasterFingerprint))
 	{
 		offy := (plateDims.Y-col1b.Y)/2 - metaMargin
-		pagec, sz := dims(engrave.String(plate.Font, params.F(plateSmallFontSize), page).Engrave)
+		pagec, sz := dims(engrave.String(plate.Font, params.F(plateSmallFontSize), page).Engrave())
 		cmd(engrave.Offset(innerMargin, offy-sz.Y, pagec))
-		mfpc, sz := dims(engrave.String(plate.Font, params.F(plateSmallFontSize), mfp).Engrave)
+		mfpc, sz := dims(engrave.String(plate.Font, params.F(plateSmallFontSize), mfp).Engrave())
 		cmd(engrave.Offset((plateDims.X-sz.X)/2, offy-sz.Y, mfpc))
-		txt, sz := dims(engrave.String(plate.Font, params.F(plateSmallFontSize), version).Engrave)
+		txt, sz := dims(engrave.String(plate.Font, params.F(plateSmallFontSize), version).Engrave())
 		cmd(engrave.Offset(plateDims.X-sz.X-innerMargin, offy-sz.Y, txt))
 	}
 
@@ -310,7 +310,7 @@ func frontSideSeed(params engrave.Params, plate Seed, plateDims image.Point) (en
 	title := strings.ToUpper(plate.Title)
 	{
 		offy := (plateDims.Y+col1b.Y)/2 + metaMargin
-		title, sz := dims(engrave.String(plate.Font, params.F(plateSmallFontSize), title).Engrave)
+		title, sz := dims(engrave.String(plate.Font, params.F(plateSmallFontSize), title).Engrave())
 		cmd(engrave.Offset((plateDims.X-sz.X)/2, offy, title))
 	}
 	all := engrave.Commands(cmds...)
@@ -331,7 +331,7 @@ func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize 
 		word := strings.ToUpper(bip39.LabelFor(w))
 		txt := constant.String(word)
 		cmds = append(cmds,
-			engrave.Offset(0, y, num.Engrave),
+			engrave.Offset(0, y, num.Engrave()),
 			engrave.Offset(d.X, y, txt),
 		)
 		y += d.Y
@@ -346,7 +346,7 @@ func descriptorSide(params engrave.Params, fnt *vector.Face, urs []string, size 
 	}
 	fontSize := params.F(plateFontSizeUR)
 	str := func(s string) engrave.Plan {
-		return engrave.String(fnt, fontSize, s).Engrave
+		return engrave.String(fnt, fontSize, s).Engrave()
 	}
 
 	// Compute character width, assuming the font is fixed width.

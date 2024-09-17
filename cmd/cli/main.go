@@ -168,7 +168,9 @@ func dump(sideCmd engrave.Plan, size backup.PlateSize, keyIdx int, output string
 	img := image.NewNRGBA(image.Rectangle{Max: dims})
 	params := mjolnir.Params
 	r := engrave.NewRasterizer(img, img.Bounds(), float32(ppmm)/float32(params.Millimeter), params.StrokeWidth*ppmm/params.Millimeter)
-	sideCmd(r.Command)
+	for c := range sideCmd {
+		r.Command(c)
+	}
 	r.Rasterize()
 	buf := new(bytes.Buffer)
 	if err := png.Encode(buf, img); err != nil {

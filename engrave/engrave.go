@@ -11,6 +11,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"iter"
 	"math"
 	"math/rand"
 	"sort"
@@ -40,7 +41,7 @@ func (p Params) I(v int) int {
 }
 
 // Plan is an iterator over the commands of an engraving.
-type Plan func(yield func(Command))
+type Plan iter.Seq[Command]
 
 type Command struct {
 	Line  bool
@@ -48,9 +49,13 @@ type Command struct {
 }
 
 func Commands(plans ...Plan) Plan {
-	return func(yield func(Command)) {
+	return func(yield func(Command) bool) {
 		for _, p := range plans {
-			p(yield)
+			for c := range p {
+				if !yield(c) {
+					return
+				}
+			}
 		}
 	}
 }
@@ -81,11 +86,13 @@ func offsetting(x, y int) transform {
 }
 
 func transformPlan(t transform, p Plan) Plan {
-	return func(yield func(Command)) {
-		p(func(c Command) {
+	return func(yield func(Command) bool) {
+		for c := range p {
 			c.Coord = t.transform(c.Coord)
-			yield(c)
-		})
+			if !yield(c) {
+				return
+			}
+		}
 	}
 }
 
@@ -112,11 +119,13 @@ func Line(p image.Point) Command {
 }
 
 func DryRun(p Plan) Plan {
-	return func(yield func(Command)) {
-		p(func(cmd Command) {
-			cmd.Line = false
-			yield(cmd)
-		})
+	return func(yield func(Command) bool) {
+		for c := range p {
+			c.Line = false
+			if !yield(c) {
+				return
+			}
+		}
 	}
 }
 
@@ -125,7 +134,7 @@ func QR(strokeWidth int, scale int, level qr.Level, content []byte) (Plan, error
 	if err != nil {
 		return nil, err
 	}
-	return func(yield func(Command)) {
+	return func(yield func(Command) bool) {
 		dim := qr.Size
 		for y := 0; y < dim; y++ {
 			for i := 0; i < scale; i++ {
@@ -141,8 +150,9 @@ func QR(strokeWidth int, scale int, level qr.Level, content []byte) (Plan, error
 				drawLine := func(endx int) {
 					start := image.Pt(firstx*scale*strokeWidth+radius, line*strokeWidth)
 					end := image.Pt(endx*scale*strokeWidth-radius, line*strokeWidth)
-					yield(Move(start))
-					yield(Line(end))
+					if !yield(Move(start)) || !yield(Line(end)) {
+						return
+					}
 					draw = false
 				}
 				for x := -1; x <= dim; x++ {
@@ -241,7 +251,7 @@ func ConstantQR(strokeWidth, scale int, level qr.Level, content []byte) (Plan, e
 	if err != nil {
 		return nil, err
 	}
-	return c.engrave, nil
+	return c.engrave(), nil
 }
 
 func constantQR(strokeWidth, scale int, level qr.Level, content []byte) (*constantQRCmd, error) {
@@ -472,19 +482,35 @@ type constantQRCmd struct {
 	plan         []image.Point
 }
 
-func (q constantQRCmd) engraveAlignMarker(yield func(Command), off image.Point) {
-	for _, m := range alignmentMarker {
-		center := q.centerOf(m.Add(off))
-		yield(Move(center))
-		q.engraveModule(yield, center)
+func (q constantQRCmd) engraveAlignMarker(off image.Point) Plan {
+	return func(yield func(Command) bool) {
+		for _, m := range alignmentMarker {
+			center := q.centerOf(m.Add(off))
+			if !yield(Move(center)) {
+				return
+			}
+			for c := range q.engraveModule(center) {
+				if !yield(c) {
+					return
+				}
+			}
+		}
 	}
 }
 
-func (q constantQRCmd) engravePositionMarker(yield func(Command), off image.Point) {
-	for _, m := range positionMarker {
-		center := q.centerOf(m.Add(off))
-		yield(Move(center))
-		q.engraveModule(yield, center)
+func (q constantQRCmd) engravePositionMarker(off image.Point) Plan {
+	return func(yield func(Command) bool) {
+		for _, m := range positionMarker {
+			center := q.centerOf(m.Add(off))
+			if !yield(Move(center)) {
+				return
+			}
+			for c := range q.engraveModule(center) {
+				if !yield(c) {
+					return
+				}
+			}
+		}
 	}
 }
 
@@ -497,46 +523,61 @@ func (q constantQRCmd) centerOf(p image.Point) image.Point {
 	}
 }
 
-func (q constantQRCmd) engrave(yield func(Command)) {
-	for _, off := range q.posMarkers {
-		q.engravePositionMarker(yield, off)
+func (q constantQRCmd) engrave() Plan {
+	return func(yield func(Command) bool) {
+		cont := true
+		for _, off := range q.posMarkers {
+			for c := range q.engravePositionMarker(off) {
+				cont = cont && yield(c)
+			}
+		}
+		for _, off := range q.alignMarkers {
+			for c := range q.engraveAlignMarker(off) {
+				cont = cont && yield(c)
+			}
+		}
+		sw := q.strokeWidth
+		prev := q.centerOf(q.start)
+		yield(Move(prev))
+		moveDist := qrMoves * sw * q.scale
+		for _, m := range q.plan {
+			center := q.centerOf(m)
+			for c := range constantMove(center, prev, moveDist) {
+				cont = cont && yield(c)
+			}
+			prev = center
+			for c := range q.engraveModule(center) {
+				cont = cont && yield(c)
+			}
+			cont = cont && yield(Line(center))
+		}
+		end := q.centerOf(q.end)
+		for c := range constantMove(end, prev, moveDist) {
+			cont = cont && yield(c)
+		}
 	}
-	for _, off := range q.alignMarkers {
-		q.engraveAlignMarker(yield, off)
-	}
-	sw := q.strokeWidth
-	prev := q.centerOf(q.start)
-	yield(Move(prev))
-	moveDist := qrMoves * sw * q.scale
-	for _, m := range q.plan {
-		center := q.centerOf(m)
-		constantMove(yield, center, prev, moveDist)
-		prev = center
-		q.engraveModule(yield, center)
-		yield(Line(center))
-	}
-	end := q.centerOf(q.end)
-	constantMove(yield, end, prev, moveDist)
 }
 
-func (q constantQRCmd) engraveModule(yield func(Command), center image.Point) {
-	sw := q.strokeWidth
-	switch q.scale {
-	case 3:
-		yield(Line(center.Add(image.Pt(sw, 0))))
-		yield(Line(center.Add(image.Pt(sw, sw))))
-		yield(Line(center.Add(image.Pt(-sw, sw))))
-		yield(Line(center.Add(image.Pt(-sw, -sw))))
-		yield(Line(center.Add(image.Pt(sw, -sw))))
-	case 4:
-		yield(Line(center.Add(image.Pt(-sw, 0))))
-		yield(Line(center.Add(image.Pt(-sw, -sw))))
-		yield(Line(center.Add(image.Pt(2*sw, -sw))))
-		yield(Line(center.Add(image.Pt(2*sw, 2*sw))))
-		yield(Line(center.Add(image.Pt(-sw, 2*sw))))
-		yield(Line(center.Add(image.Pt(-sw, sw))))
-		yield(Line(center.Add(image.Pt(sw, sw))))
-		yield(Line(center.Add(image.Pt(sw, 0))))
+func (q constantQRCmd) engraveModule(center image.Point) Plan {
+	return func(yield func(Command) bool) {
+		sw := q.strokeWidth
+		switch q.scale {
+		case 3:
+			_ = yield(Line(center.Add(image.Pt(sw, 0)))) &&
+				yield(Line(center.Add(image.Pt(sw, sw)))) &&
+				yield(Line(center.Add(image.Pt(-sw, sw)))) &&
+				yield(Line(center.Add(image.Pt(-sw, -sw)))) &&
+				yield(Line(center.Add(image.Pt(sw, -sw))))
+		case 4:
+			_ = yield(Line(center.Add(image.Pt(-sw, 0)))) &&
+				yield(Line(center.Add(image.Pt(-sw, -sw)))) &&
+				yield(Line(center.Add(image.Pt(2*sw, -sw)))) &&
+				yield(Line(center.Add(image.Pt(2*sw, 2*sw)))) &&
+				yield(Line(center.Add(image.Pt(-sw, 2*sw)))) &&
+				yield(Line(center.Add(image.Pt(-sw, sw)))) &&
+				yield(Line(center.Add(image.Pt(sw, sw)))) &&
+				yield(Line(center.Add(image.Pt(sw, 0))))
+		}
 	}
 }
 
@@ -731,9 +772,11 @@ func NewConstantStringer(face *vector.Face, em int, shortest, longest int) *Cons
 }
 
 func (c *ConstantStringer) String(txt string) Plan {
-	cmd := func(yield func(Command)) {
+	cmd := func(yield func(Command) bool) {
 		needle := c.wordStart
-		yield(Move(needle))
+		if !yield(Move(needle)) {
+			return
+		}
 		repeats := c.longest / len(txt)
 		rest := c.longest - repeats*len(txt)
 		for i, r := range txt {
@@ -748,18 +791,25 @@ func (c *ConstantStringer) String(txt string) Plan {
 				// Move to center. Always equal distance.
 				center := off.Add(image.Pt(c.dims.X/2, c.dims.Y/2))
 				needle = center
-				yield(Move(needle))
+				cont := yield(Move(needle))
 				start := l.path[0].Add(off)
-				constantMove(yield, start, needle, c.moveDist)
+				for c := range constantMove(start, needle, c.moveDist) {
+					cont = cont && yield(c)
+				}
 				needle = start
 				for _, pos := range l.path[1:] {
 					needle = pos.Add(off)
-					yield(Line(needle))
+					cont = cont && yield(Line(needle))
 				}
-				constantMove(yield, center, needle, c.moveDist)
+				for c := range constantMove(center, needle, c.moveDist) {
+					cont = cont && yield(c)
+				}
 				needle = center
 				end := off.Add(image.Pt(c.dims.X, c.dims.Y/2))
-				yield(Move(end))
+				cont = cont && yield(Move(end))
+				if !cont {
+					return
+				}
 				needle = end
 			}
 		}
@@ -773,10 +823,16 @@ func (c *ConstantStringer) String(txt string) Plan {
 			mid := needle.Add(dir.Mul(d).Div(dist))
 			wantDist -= ManhattanDist(mid, needle)
 			needle = mid
-			yield(Move(needle))
+			if !yield(Move(needle)) {
+				return
+			}
 		}
 		// Then let constantMove take care of the rest.
-		constantMove(yield, c.wordEnd, needle, wantDist)
+		for c := range constantMove(c.wordEnd, needle, wantDist) {
+			if !yield(c) {
+				return
+			}
+		}
 	}
 
 	// Verify constant-ness.
@@ -789,7 +845,9 @@ func (c *ConstantStringer) String(txt string) Plan {
 
 func isConstantQR(cmd *constantQRCmd, dim int) bool {
 	pt := new(pattern)
-	cmd.engrave(pt.Command)
+	for c := range cmd.engrave() {
+		pt.Command(c)
+	}
 	start, end := constantTimeStartEnd(dim)
 	start = cmd.centerOf(start)
 	end = cmd.centerOf(end)
@@ -819,7 +877,9 @@ func isConstantQR(cmd *constantQRCmd, dim int) bool {
 
 func (c *ConstantStringer) isConstant(cmd Plan) bool {
 	pt := new(pattern)
-	cmd(pt.Command)
+	for c := range cmd {
+		pt.Command(c)
+	}
 	// Constant start and end points.
 	if pt.start != c.wordStart || pt.end != c.wordEnd {
 		return false
@@ -859,43 +919,46 @@ func (c *ConstantStringer) isConstant(cmd Plan) bool {
 // constantMove assumes the distance between dst and src is less than or
 // equal to dist.
 // constantMove panics if dst equals src and dist is 1.
-func constantMove(yield func(Command), dst, src image.Point, dist int) {
-	// extra is the distance to spend.
-	extra := dist - ManhattanDist(dst, src)
-	if dst == src {
-		if extra == 1 {
-			panic("dst and src coincides and dist allows no movement")
+func constantMove(dst, src image.Point, dist int) Plan {
+	return func(yield func(Command) bool) {
+		// extra is the distance to spend.
+		extra := dist - ManhattanDist(dst, src)
+		cont := true
+		if dst == src {
+			if extra == 1 {
+				panic("dst and src coincides and dist allows no movement")
+			}
+			// If src and dst coincides the implied square reduces to a
+			// point which cannot be used for spending moves.
+			// Instead move half of extra away and continue from there.
+			d := extra / 2
+			src = src.Add(image.Pt(d, 0))
+			cont = cont && yield(Move(src))
+			extra -= d * 2
 		}
-		// If src and dst coincides the implied square reduces to a
-		// point which cannot be used for spending moves.
-		// Instead move half of extra away and continue from there.
-		d := extra / 2
-		src = src.Add(image.Pt(d, 0))
-		yield(Move(src))
-		extra -= d * 2
-	}
-	defer yield(Move(dst))
-	dp := src.Sub(dst)
-	d := manhattanLen(dp)
-	// axis is the direction from dst to src along the longest axis.
-	axis := dp.Div(d)
-	// Tie-break diagonals arbitrarily.
-	if axis.X != 0 && axis.Y != 0 {
-		axis.X = 0
-	}
-	for extra > 0 {
 		dp := src.Sub(dst)
-		axis = image.Pt(-axis.Y, axis.X)
-		// cornerDist is the distance from src to the corner along
-		// moveDir.
-		cornerDist := d - dp.X*axis.X - dp.Y*axis.Y
-		moveDist := cornerDist
-		if moveDist > extra {
-			moveDist = extra
+		d := manhattanLen(dp)
+		// axis is the direction from dst to src along the longest axis.
+		axis := dp.Div(d)
+		// Tie-break diagonals arbitrarily.
+		if axis.X != 0 && axis.Y != 0 {
+			axis.X = 0
 		}
-		extra -= moveDist
-		src = src.Add(axis.Mul(moveDist))
-		yield(Move(src))
+		for extra > 0 {
+			dp := src.Sub(dst)
+			axis = image.Pt(-axis.Y, axis.X)
+			// cornerDist is the distance from src to the corner along
+			// moveDir.
+			cornerDist := d - dp.X*axis.X - dp.Y*axis.Y
+			moveDist := cornerDist
+			if moveDist > extra {
+				moveDist = extra
+			}
+			extra -= moveDist
+			src = src.Add(axis.Mul(moveDist))
+			cont = cont && yield(Move(src))
+		}
+		cont = cont && yield(Move(dst))
 	}
 }
 
@@ -970,15 +1033,17 @@ type StringCmd struct {
 	txt  string
 }
 
-func (s *StringCmd) Engrave(yield func(Command)) {
-	s.engrave(yield)
+func (s *StringCmd) Engrave() Plan {
+	return func(yield func(Command) bool) {
+		s.engrave(yield)
+	}
 }
 
 func (s *StringCmd) Measure() image.Point {
 	return s.engrave(nil)
 }
 
-func (s *StringCmd) engrave(yield func(Command)) image.Point {
+func (s *StringCmd) engrave(yield func(Command) bool) image.Point {
 	m := s.face.Metrics()
 	pos := image.Pt(0, (int(m.Ascent)*s.em+int(m.Height)-1)/int(m.Height))
 	addScale := func(p1, p2 image.Point) image.Point {
@@ -999,6 +1064,7 @@ func (s *StringCmd) engrave(yield func(Command)) image.Point {
 			panic(fmt.Errorf("unsupported rune: %s", string(r)))
 		}
 		if yield != nil {
+			cont := true
 			for {
 				seg, ok := segs.Next()
 				if !ok {
@@ -1007,10 +1073,10 @@ func (s *StringCmd) engrave(yield func(Command)) image.Point {
 				switch seg.Op {
 				case vector.SegmentOpMoveTo:
 					p1 := addScale(pos, seg.Arg)
-					yield(Move(p1))
+					cont = cont && yield(Move(p1))
 				case vector.SegmentOpLineTo:
 					p1 := addScale(pos, seg.Arg)
-					yield(Line(p1))
+					cont = cont && yield(Line(p1))
 				default:
 					panic(errors.New("unsupported segment"))
 				}
@@ -1096,12 +1162,14 @@ func (m *measureProgram) expand(p image.Point) {
 	}
 }
 
-func Measure(c Plan) image.Rectangle {
+func Measure(plan Plan) image.Rectangle {
 	inf := image.Rectangle{Min: image.Pt(1e6, 1e6), Max: image.Pt(-1e6, -1e6)}
 	measure := &measureProgram{
 		bounds: inf,
 	}
-	c(measure.Command)
+	for c := range plan {
+		measure.Command(c)
+	}
 	b := measure.bounds
 	if b == inf {
 		b = image.Rectangle{}

@@ -76,9 +76,9 @@ func FuzzConstantQR(f *testing.F) {
 func measureMoves(p Plan) image.Rectangle {
 	inf := image.Rectangle{Min: image.Pt(1e6, 1e6), Max: image.Pt(-1e6, -1e6)}
 	bounds := inf
-	p(func(cmd Command) {
+	for cmd := range p {
 		if cmd.Line {
-			return
+			continue
 		}
 		p := cmd.Coord
 		if p.X < bounds.Min.X {
@@ -91,7 +91,7 @@ func measureMoves(p Plan) image.Rectangle {
 		} else if p.Y > bounds.Max.Y {
 			bounds.Max.Y = p.Y
 		}
-	})
+	}
 	if bounds == inf {
 		bounds = image.Rectangle{}
 	}

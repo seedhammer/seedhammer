@@ -2396,10 +2396,10 @@ func (s *EngraveScreen) moveStep(ctx *Context, ops op.Ctx, th *Colors) bool {
 		}
 		totalDist := 0
 		pen := image.Point{}
-		plan(func(cmd engrave.Command) {
+		for cmd := range plan {
 			totalDist += engrave.ManhattanDist(pen, cmd.Coord)
 			pen = cmd.Coord
-		})
+		}
 		cancel := make(chan struct{})
 		errs := make(chan error, 1)
 		progress := make(chan float32, 1)
@@ -2411,18 +2411,20 @@ func (s *EngraveScreen) moveStep(ctx *Context, ops op.Ctx, th *Colors) bool {
 		go func() {
 			defer wakeup()
 			defer dev.Close()
-			pplan := func(yield func(cmd engrave.Command)) {
+			pplan := func(yield func(cmd engrave.Command) bool) {
 				dist := 0
 				completed := 0
 				pen := image.Point{}
-				plan(func(cmd engrave.Command) {
-					yield(cmd)
+				for cmd := range plan {
+					if !yield(cmd) {
+						return
+					}
 					completed++
 					dist += engrave.ManhattanDist(pen, cmd.Coord)
 					pen = cmd.Coord
 					// Don't spam the progress channel.
 					if completed%10 != 0 && dist < totalDist {
-						return
+						continue
 					}
 					select {
 					case <-progress:
@@ -2431,7 +2433,7 @@ func (s *EngraveScreen) moveStep(ctx *Context, ops op.Ctx, th *Colors) bool {
 					p := float32(dist) / float32(totalDist)
 					progress <- p
 					wakeup()
-				})
+				}
 			}
 			errs <- dev.Engrave(s.plate.Size, pplan, cancel)
 		}()

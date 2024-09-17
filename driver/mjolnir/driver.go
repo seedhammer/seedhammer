@@ -234,14 +234,20 @@ func Engrave(dev io.ReadWriter, opts Options, plan engrave.Plan, quit <-chan str
 
 	runProgram := func(plan engrave.Plan) {
 		p := &program{}
-		plan(p.Command)
+		for c := range plan {
+			p.Command(c)
+		}
 		p.Prepare()
 		defer func() {
 			for i := p.sent; i < p.count; i++ {
 				<-p.cmds
 			}
 		}()
-		go plan(p.Command)
+		go func() {
+			for c := range plan {
+				p.Command(c)
+			}
+		}()
 		p.sent = 0
 		// Round up to nearest batch size. Note that the rounding
 		// adds another, empty, batch in case we fill up the last one.
@@ -295,7 +301,7 @@ func Engrave(dev io.ReadWriter, opts Options, plan engrave.Plan, quit <-chan str
 	}
 
 	moveTo := func(p image.Point) {
-		runProgram(func(yield func(engrave.Command)) {
+		runProgram(func(yield func(engrave.Command) bool) {
 			yield(engrave.Move(p))
 		})
 	}

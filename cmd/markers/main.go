@@ -63,7 +63,7 @@ func Engrave(dev string, coords []image.Point) error {
 	defer s.Close()
 
 	params := mjolnir.Params
-	design := func(yield func(engrave.Command)) {
+	design := func(yield func(engrave.Command) bool) {
 		for i := 0; i < *repeat; i++ {
 			for _, c := range coords {
 				szf := params.I(2.0)
@@ -73,14 +73,17 @@ func Engrave(dev string, coords []image.Point) error {
 				if left.X < 0 {
 					left.X = 0
 				}
-				yield(engrave.Move(left))
-				yield(engrave.Line(c.Add(image.Pt(+sz, 0))))
+				cont := yield(engrave.Move(left)) &&
+					yield(engrave.Line(c.Add(image.Pt(+sz, 0))))
 				top := c.Add(image.Pt(0, -sz))
 				if top.Y < 0 {
 					top.Y = 0
 				}
-				yield(engrave.Move(top))
-				yield(engrave.Line(c.Add(image.Pt(0, +sz))))
+				cont = cont && yield(engrave.Move(top)) &&
+					yield(engrave.Line(c.Add(image.Pt(0, +sz))))
+				if !cont {
+					return
+				}
 			}
 		}
 	}
