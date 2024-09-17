@@ -4,8 +4,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"math/rand"
-	"time"
+	"math/rand/v2"
 
 	"golang.org/x/image/math/fixed"
 	"seedhammer.com/gui/assets"
@@ -30,7 +29,6 @@ type State struct {
 	shTop  int
 	mode   mode
 	delay  int
-	rand   *rand.Rand
 
 	clear struct {
 		x int
@@ -86,12 +84,11 @@ func (s *State) reset(dims image.Point) {
 	s.sY = 0
 	s.sV = 0
 	s.mode = modeSnake
-	s.rand = rand.New(rand.NewSource(time.Now().UnixNano()))
 	location := image.Point{
-		X: s.rand.Intn(dims.X / gridSize),
-		Y: s.rand.Intn(dims.Y / gridSize),
+		X: rand.IntN(dims.X / gridSize),
+		Y: rand.IntN(dims.Y / gridSize),
 	}
-	switch s.rand.Intn(4) {
+	switch rand.IntN(4) {
 	case 0:
 		s.dx = 0
 		s.dy = -1
@@ -122,8 +119,8 @@ func (s *State) reset(dims image.Point) {
 func placeFood(s *State, dims image.Point) {
 outer:
 	for {
-		s.food.X = s.rand.Intn(dims.X/gridSize-2*1) + 1
-		s.food.Y = s.rand.Intn(dims.Y/gridSize-2*1) + 1
+		s.food.X = rand.IntN(dims.X/gridSize-2*1) + 1
+		s.food.Y = rand.IntN(dims.Y/gridSize-2*1) + 1
 		for _, j := range s.snake {
 			if j.Point == s.food.Point {
 				continue outer
@@ -224,7 +221,7 @@ update:
 			s.snake = append(s.snake, j)
 			placeFood(s, dims)
 			for {
-				color := s.rand.Intn(len(colors))
+				color := rand.IntN(len(colors))
 				if color != s.food.color {
 					s.food.color = color
 					break
