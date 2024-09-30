@@ -9,6 +9,7 @@ import (
 	"image/draw"
 	"log"
 	"math"
+	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -2796,7 +2797,7 @@ func Run(pl Platform, version string) func(yield func() bool) {
 		var evts []Event
 		for range it {
 			dirty := a.root.Clip(image.Rectangle{Max: a.ctx.Platform.DisplaySize()})
-			layoutTime := time.Now()
+			layoutTime := time.Since(startTime)
 			if err := a.ctx.Platform.Dirty(dirty); err != nil {
 				panic(err)
 			}
@@ -2811,10 +2812,12 @@ func Run(pl Platform, version string) func(yield func() bool) {
 				}
 				a.root.Draw(fb, a.mask)
 			}
-			drawTime := time.Now()
+			drawTime := time.Since(startTime)
 			if a.ctx.Platform.Debug() {
-				log.Printf("frame: %v layout: %v draw: %v %v",
-					drawTime.Sub(startTime), layoutTime.Sub(startTime), drawTime.Sub(layoutTime), dirty)
+				var mem runtime.MemStats
+				runtime.ReadMemStats(&mem)
+				log.Printf("frame: %v layout: %v draw: %v %v mem %d allocs %d",
+					drawTime, layoutTime, drawTime-layoutTime, dirty, mem.HeapInuse, mem.Mallocs-mem.Frees)
 			}
 			for {
 				if !yield() {
