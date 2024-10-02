@@ -1,4 +1,4 @@
-//go:build ignore
+//go:build tools
 
 // gen converts the PNG assets to embedded image literals.
 package main

@@ -1,4 +1,4 @@
-//go:build ignore
+//go:build tools
 
 // generator converts an OpenType file into a bitmap font.
 package main
