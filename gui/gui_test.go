@@ -398,10 +398,9 @@ func TestEngraveScreenConnectionError(t *testing.T) {
 		t.Fatal("screen reported error for connection success")
 	}
 	<-delivered
-	for {
+	for range p.wakeups {
 		frame()
 		if opsContains(ops, p.engrave.ioErr.Error()) {
-			// t.Fatal("screen didn't report engraver error")
 			break
 		}
 	}
@@ -742,7 +741,8 @@ func fillDescriptor(t *testing.T, desc urtypes.OutputDescriptor, path urtypes.Pa
 }
 
 type testPlatform struct {
-	events []Event
+	events  []Event
+	wakeups chan struct{}
 
 	engrave struct {
 		closed         chan []mjolnir.Cmd
@@ -823,6 +823,11 @@ func ctxButton(ctx *Context, bs ...Button) {
 }
 
 func (p *testPlatform) Wakeup() {
+	select {
+	case <-p.wakeups:
+	default:
+	}
+	p.wakeups <- struct{}{}
 }
 
 func (p *testPlatform) AppendEvents(deadline time.Time, evts []Event) []Event {
@@ -901,7 +906,9 @@ func (p *testPlatform) CameraFrame(dims image.Point) {
 }
 
 func newPlatform() *testPlatform {
-	return &testPlatform{}
+	return &testPlatform{
+		wakeups: make(chan struct{}, 1),
+	}
 }
 
 func qrFrame(t *testing.T, p *testPlatform, content string) FrameEvent {
