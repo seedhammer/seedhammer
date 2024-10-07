@@ -7,7 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil"
@@ -53,8 +53,8 @@ func address(desc urtypes.OutputDescriptor, index uint32, change bool) (string, 
 			}
 			keys = append(keys, addrPub)
 		}
-		sort.Slice(keys, func(i, j int) bool {
-			return bytes.Compare(keys[i].PubKey().SerializeCompressed(), keys[j].PubKey().SerializeCompressed()) == -1
+		slices.SortFunc(keys, func(addr1, addr2 *btcutil.AddressPubKey) int {
+			return bytes.Compare(addr1.PubKey().SerializeCompressed(), addr2.PubKey().SerializeCompressed())
 		})
 		script, err := txscript.MultiSigScript(keys, desc.Threshold)
 		if err != nil {

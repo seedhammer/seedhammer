@@ -14,7 +14,7 @@ import (
 	"iter"
 	"math"
 	"math/rand"
-	"sort"
+	"slices"
 
 	"github.com/kortschak/qr"
 	"github.com/srwiley/rasterx"
@@ -454,14 +454,17 @@ func findPath(modules []image.Point, visited, qr, engraved bitmap, to, from imag
 			candidates = append(candidates, p)
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		pi, pj := candidates[i], candidates[j]
+	slices.SortFunc(candidates, func(pi, pj image.Point) int {
 		di, dj := ManhattanDist(pi, to), ManhattanDist(pj, to)
 		if di == dj {
 			// Equal distance; prefer the un-engraved path.
-			return engraved.Get(pj)
+			if engraved.Get(pj) {
+				return -1
+			} else {
+				return 1
+			}
 		}
-		return di < dj
+		return di - dj
 	})
 	for _, p := range candidates {
 		path, ok := findPath(append(modules, p), visited, qr, engraved, to, p)

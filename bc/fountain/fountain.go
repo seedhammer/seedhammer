@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -202,8 +203,8 @@ func (d *Decoder) Result() ([]byte, error) {
 	for _, p := range d.completed {
 		sorted = append(sorted, p)
 	}
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].fragments[0] < sorted[j].fragments[0]
+	slices.SortFunc(sorted, func(part1, part2 *part) int {
+		return part1.fragments[0] - part2.fragments[0]
 	})
 	var msg []byte
 	for _, p := range sorted {
@@ -227,10 +228,10 @@ func Checksum(data []byte) uint32 {
 // SeqNumFor searches for a seqNum that outpus the xor of fragments.
 func SeqNumFor(seqLen int, checksum uint32, fragments []int) int {
 	seqNum := 1
-	sort.IntSlice(fragments).Sort()
+	sort.Ints(fragments)
 	for {
 		got := chooseFragments(uint32(seqNum), seqLen, checksum)
-		sort.IntSlice(got).Sort()
+		sort.Ints(got)
 		if reflect.DeepEqual(got, fragments) {
 			return seqNum
 		}
