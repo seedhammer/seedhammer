@@ -75,26 +75,27 @@ const (
 	formatBuf
 )
 
+func (f *formatter) next(format string) rune {
+	c, n := utf8.DecodeRuneInString(format[f.idx:])
+	f.idx += n
+	return c
+}
+
 func (f *formatter) Next(format string, args ...any) (rune, bool) {
-	next := func() rune {
-		c, n := utf8.DecodeRuneInString(format[f.idx:])
-		f.idx += n
-		return c
-	}
 	for {
 		switch f.state {
 		case formatFormat:
 			if len(format[f.idx:]) == 0 {
 				return 0, false
 			}
-			if r := next(); r != '%' {
+			if r := f.next(format); r != '%' {
 				return r, true
 			}
 			if len(format[f.idx:]) == 0 {
 				panic("missing format verb")
 			}
 			start := f.idx
-			r := next()
+			r := f.next(format)
 			prec := -1
 			pad := -1
 			dot := r == '.'
@@ -103,13 +104,13 @@ func (f *formatter) Next(format string, args ...any) (rune, bool) {
 					panic("missing precision")
 				}
 				start = f.idx
-				r = next()
+				r = f.next(format)
 			}
 			for '0' <= r && r <= '9' {
 				if len(format[f.idx:]) == 0 {
 					panic("missing format verb")
 				}
-				r = next()
+				r = f.next(format)
 			}
 			if start < f.idx-1 {
 				v, err := strconv.ParseUint(format[start:f.idx-1], 10, 32)
