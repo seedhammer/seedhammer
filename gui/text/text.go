@@ -81,6 +81,67 @@ func (f *formatter) next(format string) rune {
 	return c
 }
 
+func (f *formatter) doFloat(r byte, prec int, args []any) {
+	switch arg := args[f.argIdx].(type) {
+	case float32:
+		f.bufLen = len(strconv.AppendFloat(f.buf[:0], float64(arg), r, prec, 32))
+	case float64:
+		f.bufLen = len(strconv.AppendFloat(f.buf[:0], arg, r, prec, 64))
+	default:
+		panic("unsupported argument type")
+	}
+	if f.bufLen > len(f.buf) {
+		panic("float format string overflows buffer")
+	}
+	f.argIdx++
+	f.state = formatBuf
+	f.auxIdx = 0
+}
+
+func (f *formatter) doInt(r byte, prec, pad int, args []any) {
+	base := 2
+	switch r {
+	case 'x':
+		base = 16
+	case 'd':
+		base = 10
+	}
+	switch arg := args[f.argIdx].(type) {
+	case int:
+		f.bufLen = len(strconv.AppendInt(f.buf[:0], int64(arg), base))
+	case uint32:
+		f.bufLen = len(strconv.AppendUint(f.buf[:0], uint64(arg), base))
+	default:
+		panic("unsupported argument type")
+	}
+	if f.bufLen > len(f.buf) {
+		panic("float format string overflows buffer")
+	}
+	f.argIdx++
+	// Extend with zeroes.
+	if prec != -1 && f.bufLen < prec {
+		n := prec - f.bufLen
+		buf := f.buf[:prec]
+		copy(buf[n:], buf[:f.bufLen])
+		for i := range n {
+			buf[i] = '0'
+		}
+		f.bufLen = prec
+	}
+	// Pad with spaces.
+	if pad != -1 && f.bufLen < pad {
+		n := pad - f.bufLen
+		buf := f.buf[:pad]
+		copy(buf[n:], buf[:f.bufLen])
+		for i := range n {
+			buf[i] = ' '
+		}
+		f.bufLen = pad
+	}
+	f.state = formatBuf
+	f.auxIdx = 0
+}
+
 func (f *formatter) Next(format string, args ...any) (rune, bool) {
 	for {
 		switch f.state {
@@ -132,62 +193,9 @@ func (f *formatter) Next(format string, args ...any) (rune, bool) {
 				}
 				fallthrough
 			case 'g', 'G':
-				switch arg := args[f.argIdx].(type) {
-				case float32:
-					f.bufLen = len(strconv.AppendFloat(f.buf[:0], float64(arg), r, prec, 32))
-				case float64:
-					f.bufLen = len(strconv.AppendFloat(f.buf[:0], arg, r, prec, 64))
-				default:
-					panic("unsupported argument type")
-				}
-				if f.bufLen > len(f.buf) {
-					panic("float format string overflows buffer")
-				}
-				f.argIdx++
-				f.state = formatBuf
-				f.auxIdx = 0
+				f.doFloat(r, prec, args)
 			case 'b', 'x', 'd':
-				base := 2
-				switch r {
-				case 'x':
-					base = 16
-				case 'd':
-					base = 10
-				}
-				switch arg := args[f.argIdx].(type) {
-				case int:
-					f.bufLen = len(strconv.AppendInt(f.buf[:0], int64(arg), base))
-				case uint32:
-					f.bufLen = len(strconv.AppendUint(f.buf[:0], uint64(arg), base))
-				default:
-					panic("unsupported argument type")
-				}
-				if f.bufLen > len(f.buf) {
-					panic("float format string overflows buffer")
-				}
-				f.argIdx++
-				// Extend with zeroes.
-				if prec != -1 && f.bufLen < prec {
-					n := prec - f.bufLen
-					buf := f.buf[:prec]
-					copy(buf[n:], buf[:f.bufLen])
-					for i := range n {
-						buf[i] = '0'
-					}
-					f.bufLen = prec
-				}
-				// Pad with spaces.
-				if pad != -1 && f.bufLen < pad {
-					n := pad - f.bufLen
-					buf := f.buf[:pad]
-					copy(buf[n:], buf[:f.bufLen])
-					for i := range n {
-						buf[i] = ' '
-					}
-					f.bufLen = pad
-				}
-				f.state = formatBuf
-				f.auxIdx = 0
+				f.doInt(r, prec, pad, args)
 			case 's':
 				f.state = formatArg
 				f.auxIdx = 0
