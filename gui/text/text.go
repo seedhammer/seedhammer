@@ -84,19 +84,24 @@ func (f *formatter) next(format string) rune {
 func (f *formatter) doFloat(r byte, prec int, args []any) {
 	switch arg := args[f.argIdx].(type) {
 	case float32:
-		f.bufLen = len(strconv.AppendFloat(f.buf[:0], float64(arg), r, prec, 32))
+		f.bufLen = len(strconv.AppendFloat(buf[:0], float64(arg), r, prec, 32))
 	case float64:
-		f.bufLen = len(strconv.AppendFloat(f.buf[:0], arg, r, prec, 64))
+		f.bufLen = len(strconv.AppendFloat(buf[:0], arg, r, prec, 64))
 	default:
 		panic("unsupported argument type")
 	}
 	if f.bufLen > len(f.buf) {
 		panic("float format string overflows buffer")
 	}
+	copy(f.buf[:], buf[:f.bufLen])
 	f.argIdx++
 	f.state = formatBuf
 	f.auxIdx = 0
 }
+
+// TODO: get rid of this hack when TinyGo can eliminate the
+// allocation for strconv.Append* functions.
+var buf [20]byte
 
 func (f *formatter) doInt(r byte, prec, pad int, args []any) {
 	base := 2
@@ -108,15 +113,16 @@ func (f *formatter) doInt(r byte, prec, pad int, args []any) {
 	}
 	switch arg := args[f.argIdx].(type) {
 	case int:
-		f.bufLen = len(strconv.AppendInt(f.buf[:0], int64(arg), base))
+		f.bufLen = len(strconv.AppendInt(buf[:0], int64(arg), base))
 	case uint32:
-		f.bufLen = len(strconv.AppendUint(f.buf[:0], uint64(arg), base))
+		f.bufLen = len(strconv.AppendUint(buf[:0], uint64(arg), base))
 	default:
 		panic("unsupported argument type")
 	}
 	if f.bufLen > len(f.buf) {
 		panic("float format string overflows buffer")
 	}
+	copy(f.buf[:], buf[:f.bufLen])
 	f.argIdx++
 	// Extend with zeroes.
 	if prec != -1 && f.bufLen < prec {
