@@ -3,7 +3,6 @@ package text
 import (
 	"fmt"
 	"image"
-	"iter"
 	"strconv"
 	"unicode"
 	"unicode/utf8"
@@ -41,15 +40,23 @@ func (l Style) LineHeight() int {
 	return lheight
 }
 
-func (l Style) Measure(maxWidth int, format string, args ...any) image.Point {
-	l.Alignment = AlignStart
-	m := l.Face.Metrics()
+func (s Style) Measure(maxWidth int, format string, args ...any) image.Point {
+	s.Alignment = AlignStart
+	m := s.Face.Metrics()
 	asc := m.Ascent
-	lheight := l.LineHeight()
+	lheight := s.LineHeight()
 	dims := image.Point{Y: asc.Ceil()}
-	for line := range l.Layout(maxWidth, format, args...) {
-		dims.X = max(dims.X, (line.Dot + line.Advance).Ceil())
-		if line.Rune == '\n' {
+	l := &Layout{
+		MaxWidth: maxWidth,
+		Style:    s,
+	}
+	for {
+		g, ok := l.Next(format, args...)
+		if !ok {
+			break
+		}
+		dims.X = max(dims.X, (g.Dot + g.Advance).Ceil())
+		if g.Rune == '\n' {
 			dims.Y += lheight
 		}
 	}
@@ -232,115 +239,144 @@ func (f *formatter) Next(format string, args ...any) (rune, bool) {
 	}
 }
 
-func (l Style) Layout(maxWidth int, format string, args ...any) iter.Seq[Glyph] {
+type Layout struct {
+	MaxWidth int
+	Style    Style
+
+	state      layoutState
+	cursor     state
+	prevCur    state
+	checkpoint state
+	width      fixed.Int26_6
+	runes      int
+	spaceBreak bool
+	breakWidth fixed.Int26_6
+	eof        bool
+	dot        fixed.Int26_6
+	lineRunes  int
+	lineWidth  fixed.Int26_6
+}
+
+type layoutState int
+
+const (
+	layoutInit layoutState = iota
+	layoutRunes
+	layoutEOL
+)
+
+// TODO: Convert to iterator when TinyGo can move its allocations to the stack.
+func (l *Layout) Next(format string, args ...any) (Glyph, bool) {
 	// Enable printf vet warnings.
 	if false {
 		_ = fmt.Sprintf(format, args...)
 	}
-	return func(yield func(Glyph) bool) {
-		var cursor struct {
-			prevR     rune
-			formatter formatter
-		}
-		next := func() (rune, fixed.Int26_6, bool) {
-			r, ok := cursor.formatter.Next(format, args...)
+	for {
+		switch l.state {
+		case layoutInit:
+			l.init(format, args)
+		case layoutRunes:
+			if l.lineRunes == 0 {
+				l.state = layoutEOL
+				break
+			}
+			l.lineRunes--
+			r, a, ok := l.cursor.next(l.Style, format, args)
 			if !ok {
-				return 0, 0, false
+				panic("underflow")
 			}
-			a, ok := l.Face.GlyphAdvance(r)
-			if !ok {
-				cursor.prevR = -1
+			g := Glyph{
+				Rune:    r,
+				Dot:     l.dot,
+				Advance: a,
 			}
-			if cursor.prevR >= 0 {
-				a += l.Face.Kern(cursor.prevR, r)
+			l.dot += a
+			return g, true
+		case layoutEOL:
+			if l.eof {
+				return Glyph{}, false
 			}
-			cursor.prevR = r
-			a += fixed.I(l.LetterSpacing)
-			return r, a, true
-		}
-		prevCur := cursor
-		checkpoint := cursor
-		width := fixed.I(0)
-		runes := 0
-		for {
-			// Compute line extent in runes and width.
-			lineRunes := 0
-			lineWidth := fixed.I(0)
-			cursor = checkpoint
-			spaceBreak := false
-			breakWidth := fixed.I(0)
-			eof := false
-			for {
-				if runes > 0 && width.Ceil() > maxWidth {
-					break
-				}
-				r, a, ok := next()
-				if !ok {
-					eof = true
-					lineRunes = runes
-					lineWidth = width
-					break
-				}
-				space := unicode.IsSpace(r)
-				if space || (lineRunes == 0 && (width+a).Ceil() > maxWidth) {
-					spaceBreak = space
-					breakWidth = a
-					lineRunes = runes
-					lineWidth = width
-				}
-				runes++
-				width += a
-				if r == '\n' {
-					break
-				}
-			}
-			runes -= lineRunes
-			width -= lineWidth
-			// Rewind and yield glyphs.
-			checkpoint = cursor
-			cursor = prevCur
-			dot := fixed.I(0)
-			switch l.Alignment {
-			case AlignCenter:
-				dot = (fixed.I(maxWidth) - lineWidth) / 2
-			case AlignEnd:
-				dot = fixed.I(maxWidth) - lineWidth
-			}
-			for lineRunes > 0 {
-				lineRunes--
-				r, a, ok := next()
-				if !ok {
-					panic("underflow")
-				}
-				g := Glyph{
-					Rune:    r,
-					Dot:     dot,
-					Advance: a,
-				}
-				dot += a
-				if !yield(g) {
-					return
-				}
-			}
-			if lineRunes == 0 && !eof {
-				g := Glyph{
-					Rune: '\n',
-					Dot:  dot,
-				}
-				if !yield(g) {
-					return
-				}
+			g := Glyph{
+				Rune: '\n',
+				Dot:  l.dot,
 			}
 			// Skip line-breaking space.
-			if spaceBreak {
-				runes--
-				width -= breakWidth
-				next()
+			if l.spaceBreak {
+				l.runes--
+				l.width -= l.breakWidth
+				l.cursor.next(l.Style, format, args)
 			}
-			prevCur = cursor
-			if eof {
-				return
-			}
+			l.prevCur = l.cursor
+			l.state = layoutInit
+			return g, true
 		}
 	}
+}
+
+func (l *Layout) init(format string, args []any) {
+	// Compute line extent in runes and width.
+	l.lineRunes = 0
+	l.lineWidth = fixed.I(0)
+	l.cursor = l.checkpoint
+	l.spaceBreak = false
+	l.breakWidth = fixed.I(0)
+	for {
+		if l.runes > 0 && l.width.Ceil() > l.MaxWidth {
+			break
+		}
+		r, a, ok := l.cursor.next(l.Style, format, args)
+		if !ok {
+			l.eof = true
+			l.lineRunes = l.runes
+			l.lineWidth = l.width
+			break
+		}
+		space := unicode.IsSpace(r)
+		if space || (l.lineRunes == 0 && (l.width+a).Ceil() > l.MaxWidth) {
+			l.spaceBreak = space
+			l.breakWidth = a
+			l.lineRunes = l.runes
+			l.lineWidth = l.width
+		}
+		l.runes++
+		l.width += a
+		if r == '\n' {
+			break
+		}
+	}
+	l.runes -= l.lineRunes
+	l.width -= l.lineWidth
+	// Rewind and yield glyphs.
+	l.checkpoint = l.cursor
+	l.cursor = l.prevCur
+	l.dot = fixed.I(0)
+	switch l.Style.Alignment {
+	case AlignCenter:
+		l.dot = (fixed.I(l.MaxWidth) - l.lineWidth) / 2
+	case AlignEnd:
+		l.dot = fixed.I(l.MaxWidth) - l.lineWidth
+	}
+	l.state = layoutRunes
+}
+
+type state struct {
+	prevR     rune
+	formatter formatter
+}
+
+func (s *state) next(l Style, format string, args []any) (rune, fixed.Int26_6, bool) {
+	r, ok := s.formatter.Next(format, args...)
+	if !ok {
+		return 0, 0, false
+	}
+	a, ok := l.Face.GlyphAdvance(r)
+	if !ok {
+		s.prevR = -1
+	}
+	if s.prevR >= 0 {
+		a += l.Face.Kern(s.prevR, r)
+	}
+	s.prevR = r
+	a += fixed.I(l.LetterSpacing)
+	return r, a, true
 }

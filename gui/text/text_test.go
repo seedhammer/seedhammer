@@ -11,11 +11,18 @@ import (
 )
 
 func BenchmarkLayout(b *testing.B) {
-	st := Style{
-		Face: poppins.Regular16,
-	}
 	for range b.N {
-		for range st.Layout(100, "₿ %.2g%% %f %g %s %.8x", 12.345, 12.345, 12.345, "Hi", 0xcafe) {
+		args := []any{120, "Hi", 0xcafe}
+		l := &Layout{
+			MaxWidth: 100,
+			Style: Style{
+				Face: poppins.Regular16,
+			},
+		}
+		for {
+			if _, ok := l.Next("₿ %.2d%% %s %.8x", args...); !ok {
+				break
+			}
 		}
 	}
 }
@@ -89,17 +96,25 @@ func TestLayout(t *testing.T) {
 				adv = 0
 				first = true
 			}
-			for l := range st.Layout(test.width, test.format, test.args...) {
+			l := &Layout{
+				MaxWidth: test.width,
+				Style:    st,
+			}
+			for {
+				g, ok := l.Next(test.format, test.args...)
+				if !ok {
+					break
+				}
 				if first {
-					dot = l.Dot
+					dot = g.Dot
 					first = false
 				}
-				if l.Rune == '\n' {
+				if g.Rune == '\n' {
 					endline()
 					continue
 				}
-				adv += l.Advance
-				buf.WriteRune(l.Rune)
+				adv += g.Advance
+				buf.WriteRune(g.Rune)
 			}
 			endline()
 			if align == AlignStart {

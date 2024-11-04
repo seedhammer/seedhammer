@@ -175,7 +175,15 @@ func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA,
 	m := style.Face.Metrics()
 	offy := r.Y + m.Ascent.Ceil()
 	lheight := style.LineHeight()
-	for g := range style.Layout(width, format, args...) {
+	l := &text.Layout{
+		MaxWidth: width,
+		Style:    style,
+	}
+	for {
+		g, ok := l.Next(format, args...)
+		if !ok {
+			break
+		}
 		if g.Rune == '\n' {
 			offy += lheight
 			continue
