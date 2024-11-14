@@ -320,9 +320,6 @@ func (o *Ops) materialize(op imageOp) image.Image {
 func (o *Ops) serialize(state drawState, from opCursor) {
 	macros := 0
 	depth := len(o.maskStack)
-	defer func() {
-		o.maskStack = o.maskStack[:depth]
-	}()
 	origState := state
 	ops := o.frame.args[from.op:]
 	refs := o.frame.refs[from.ref:]
