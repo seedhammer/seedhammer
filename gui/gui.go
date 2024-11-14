@@ -1671,7 +1671,7 @@ type NavButton struct {
 
 func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Point, btns ...NavButton) image.Rectangle {
 	navsz := assets.NavBtnPrimary.Bounds().Size()
-	button := func(ops op.Ctx, b NavButton) {
+	button := func(ops op.Ctx, b NavButton, pressed bool) {
 		if b.Style == StyleNone {
 			return
 		}
@@ -1699,7 +1699,7 @@ func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Poin
 		case StylePrimary:
 			op.ColorOp(ops, th.Text)
 		}
-		if b.Progress == 0 && inp.Pressed[b.Button] {
+		if b.Progress == 0 && pressed {
 			op.ImageOp(ops, assets.NavBtnPrimary, true)
 			op.ColorOp(ops, color.NRGBA{A: theme.activeMask})
 		}
@@ -1713,7 +1713,7 @@ func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Poin
 	var r image.Rectangle
 	for _, b := range btns {
 		idx := int(b.Button - Button1)
-		button(ops.Begin(), b)
+		button(ops.Begin(), b, inp.Pressed[b.Button])
 		y := ys[idx]
 		pos := image.Pt(dims.X-btnsz.X, y)
 		op.Position(ops, ops.End(), pos)
