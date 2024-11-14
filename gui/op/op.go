@@ -33,8 +33,9 @@ type ImageArguments struct {
 }
 
 type Image struct {
-	id  int
-	gen ImageGenerator
+	id int
+	// gen is the ImageGenerator function as an interface.
+	gen any
 }
 
 var globalID = 0
@@ -364,15 +365,13 @@ func (o *Ops) serialize(state drawState, from opCursor) {
 		case opImage:
 			op := imageOp{
 				mask: maskType(args[0]),
-				gen: Image{
-					id: int(int32(args[1])),
-				},
 				ImageArguments: ImageArguments{
 					Bounds: decodeRect(args[2:6]),
 					Args:   args[6:],
 					Refs:   rargs[2:],
 				},
 			}
+			op.gen.id = int(int32(args[1]))
 			if src := rargs[0]; src != nil {
 				op.src = src.(image.Image)
 			}
@@ -529,7 +528,10 @@ type imageOp struct {
 
 	src image.Image
 
-	gen Image
+	gen struct {
+		id  int
+		gen ImageGenerator
+	}
 	ImageArguments
 }
 
