@@ -285,18 +285,6 @@ type Screen interface {
 	NextChunk() (draw.RGBA64Image, bool)
 }
 
-func drawScreen(screen Screen, dr image.Rectangle, f func(chunk draw.RGBA64Image)) {
-	screen.Dirty(dr)
-	for {
-		c, ok := screen.NextChunk()
-		if !ok {
-			break
-		}
-		imageDraw(c, c.Bounds(), black, image.Point{}, draw.Src)
-		f(c)
-	}
-}
-
 func imageDraw(dst draw.RGBA64Image, dr image.Rectangle, src image.Image, sp image.Point, op draw.Op) {
 	switch dst := dst.(type) {
 	case *rgb565.Image:
@@ -304,6 +292,24 @@ func imageDraw(dst draw.RGBA64Image, dr image.Rectangle, src image.Image, sp ima
 		return
 	}
 	draw.Draw(dst, dr, src, sp, op)
+}
+
+type chunks struct {
+	scr Screen
+}
+
+func (c chunks) Next() (draw.RGBA64Image, bool) {
+	img, ok := c.scr.NextChunk()
+	if !ok {
+		return nil, false
+	}
+	imageDraw(img, img.Bounds(), black, image.Point{}, draw.Src)
+	return img, true
+}
+
+func newDraw(screen Screen, dr image.Rectangle) chunks {
+	screen.Dirty(dr)
+	return chunks{screen}
 }
 
 func (s *State) Draw(screen Screen) {
@@ -318,15 +324,22 @@ func (s *State) Draw(screen Screen) {
 		s.prev.logo = logo.Bounds.Add(image.Pt(centerx, s.shTop))
 		lr = lr.Union(s.prev.logo)
 	}
-	drawScreen(screen, lr, func(screen draw.RGBA64Image) {
-		if s.mode == modeGameOver {
-			b := s.prev.logo
-			off := b.Min
-			for c := range logo.Boxes {
-				drawBox(screen, c.X*gridSize+off.X, c.Y*gridSize+off.Y, white)
-			}
+	chunks := newDraw(screen, lr)
+	b := s.prev.logo
+	off := b.Min
+	for {
+		chunk, ok := chunks.Next()
+		if !ok {
+			break
 		}
-	})
+		if s.mode != modeGameOver {
+			continue
+		}
+		for i := 0; i < len(logo.boxes); i += 2 {
+			x, y := int(logo.boxes[i]), int(logo.boxes[i+1])
+			drawBox(chunk, x*gridSize+off.X, y*gridSize+off.Y, white)
+		}
+	}
 	var snake image.Rectangle
 	for _, j := range s.snake {
 		m := image.Pt(j.X*gridSize, j.Y*gridSize+s.sY.Round())
@@ -339,20 +352,26 @@ func (s *State) Draw(screen Screen) {
 	if s.mode == modeSnake {
 		snake = snake.Union(food)
 	}
-	drawScreen(screen, snake.Union(s.prev.snake), func(screen draw.RGBA64Image) {
-		s.drawSnake(screen)
-		if s.mode == modeSnake {
-			draw.DrawMask(
-				screen,
-				food,
-				colors[s.food.color],
-				image.Pt(0, 0),
-				assets.LogoSmall,
-				image.Pt(0, 0),
-				draw.Over,
-			)
+	chunks = newDraw(screen, snake.Union(s.prev.snake))
+	for {
+		chunk, ok := chunks.Next()
+		if !ok {
+			break
 		}
-	})
+		s.drawSnake(chunk)
+		if s.mode != modeSnake {
+			continue
+		}
+		draw.DrawMask(
+			chunk,
+			food,
+			colors[s.food.color],
+			image.Pt(0, 0),
+			assets.LogoSmall,
+			image.Pt(0, 0),
+			draw.Over,
+		)
+	}
 	s.prev.snake = snake
 }
 
@@ -367,15 +386,6 @@ func (s *State) drawSnake(screen draw.RGBA64Image) {
 			clearBox(screen, p.X, p.Y, color)
 		} else {
 			drawBox(screen, p.X, p.Y, color)
-		}
-	}
-}
-
-func (l logo) Boxes(yield func(image.Point) bool) {
-	for i := 0; i < len(l.boxes); i += 2 {
-		x, y := l.boxes[i], l.boxes[i+1]
-		if !yield(image.Pt(int(x), int(y))) {
-			return
 		}
 	}
 }
