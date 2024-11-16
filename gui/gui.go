@@ -2294,7 +2294,7 @@ func (s *DescriptorScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image
 			bodytxt.Y += infoSpacing
 		}
 		bodytxt.Add(ops, subst, body.Dx(), th.Text, "Type")
-		testnet := ""
+		testnet := any("") // TODO: TinyGo allocates without explicit interface conversion.
 		if len(desc.Keys) > 0 && desc.Keys[0].Network != &chaincfg.MainNetParams {
 			testnet = " (testnet)"
 		}
