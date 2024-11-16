@@ -250,7 +250,7 @@ func Init() (*Platform, error) {
 			case p.input.wakeups <- struct{}{}:
 			default:
 			}
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 		}
 	}()
 	return p, nil
