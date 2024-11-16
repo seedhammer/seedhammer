@@ -72,7 +72,7 @@ const (
 
 	LCD_RS  = machine.NoPin
 	LCD_CS  = machine.NoPin
-	LCD_TE  = machine.GPIO4
+	LCD_TE  = machine.GPIO18
 	LCD_DC  = machine.GPIO19
 	LCD_WRX = machine.GPIO20
 	LCD_DB0 = machine.GPIO21
@@ -231,6 +231,19 @@ func Init() (*Platform, error) {
 	// Trigger reading of the initial state of input.
 	inp.wakeups <- struct{}{}
 
+	LCD_TE.Configure(machine.PinConfig{Mode: machine.PinInput})
+	// vsyncs := 0
+	// LCD_TE.SetInterrupt(machine.PinRising, func(machine.Pin) {
+	// 	vsyncs++
+	// })
+	// go func() {
+	// 	for {
+	// 		time.Sleep(time.Second)
+	// 		vs := vsyncs
+	// 		vsyncs = 0
+	// 		fmt.Println("vsyncs", vs)
+	// 	}
+	// }()
 	go func() {
 		for {
 			select {
