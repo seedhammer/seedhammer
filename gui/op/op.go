@@ -15,8 +15,14 @@ type Ops struct {
 	frame     frame
 	prevFrame frame
 
-	scratchMask genImage
-	scratchImg  genImage
+	scratch struct {
+		image     scratchImage
+		intersect scratchImage
+	}
+}
+
+type scratchImage struct {
+	img genImage
 }
 
 type Ctx struct {
@@ -287,11 +293,8 @@ func (o *Ops) drawMasks(dst draw.Image, clip image.Rectangle, src imageOp, pos i
 				if i == 0 {
 					mfb = nil
 				}
-				src := m.op.src
-				if src == nil {
-					o.scratchMask.imageOp = m.op
-					src = &o.scratchMask
-				}
+				scratch := &o.scratch.intersect
+				src := scratch.materialize(m.op)
 				drawMask(maskfb, mclip, src, maskp, mfb, mfbPos, draw.Src)
 			}
 		}
@@ -305,17 +308,20 @@ func (o *Ops) drawMasks(dst draw.Image, clip image.Rectangle, src imageOp, pos i
 }
 
 func (o *Ops) materialize(op imageOp) image.Image {
+	switch op.mask {
+	case imageMask:
+		return o.scratch.image.materialize(op)
+	default:
+		return o.scratch.intersect.materialize(op)
+	}
+}
+
+func (s *scratchImage) materialize(op imageOp) image.Image {
 	if op.src != nil {
 		return op.src
 	}
-	switch op.mask {
-	case imageMask:
-		o.scratchImg.imageOp = op
-		return &o.scratchImg
-	default:
-		o.scratchMask.imageOp = op
-		return &o.scratchMask
-	}
+	s.img.imageOp = op
+	return &s.img
 }
 
 func (o *Ops) serialize(state drawState, from opCursor) {
@@ -557,9 +563,10 @@ func addImageOp(ops Ctx, src image.Image, img Image, mask maskType, bounds image
 
 func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Point, mask image.Image, maskOff image.Point, op draw.Op) {
 	// Optimize special cases.
-	if rgb, ok := dst.(*rgb565.Image); ok {
+	switch dst := dst.(type) {
+	case *rgb565.Image:
 		if mask == nil {
-			rgb.Draw(dr, src, pos, op)
+			dst.Draw(dr, src, pos, op)
 			return
 		}
 	}
