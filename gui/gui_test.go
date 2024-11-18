@@ -27,6 +27,7 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/gui/op"
+	"seedhammer.com/image/rgb565"
 	"seedhammer.com/nonstandard"
 	"seedhammer.com/seedqr"
 )
@@ -163,6 +164,24 @@ func opsContains(ops *op.Ops, str string) bool {
 	txt := strings.ToLower(ops.ExtractText(clip))
 	clean := strings.ReplaceAll(strings.ToLower(str), " ", "")
 	return strings.Index(txt, clean) != -1
+}
+
+func BenchmarkRedraw(b *testing.B) {
+	ops := new(op.Ops)
+	ctx := NewContext(newPlatform())
+	next, quit := iter.Pull(runUILimit(ctx, math.MaxInt, func() {
+		mainFlow(ctx, ops.Context())
+	}))
+	next()
+	quit()
+	clip := image.Rectangle{Max: image.Pt(testDisplayDim, testDisplayDim)}
+	ops.Clip(clip)
+	fb := rgb565.New(clip)
+	maskfb := image.NewAlpha(clip)
+	b.ResetTimer()
+	for range b.N {
+		ops.Draw(fb, maskfb)
+	}
 }
 
 func TestAllocs(t *testing.T) {
