@@ -3,6 +3,7 @@ package gui
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"image"
 	"image/draw"
@@ -166,6 +167,8 @@ func opsContains(ops *op.Ops, str string) bool {
 	return strings.Index(txt, clean) != -1
 }
 
+var dumpImages = flag.Bool("dump", false, "dump test images")
+
 func BenchmarkRedraw(b *testing.B) {
 	ops := new(op.Ops)
 	ctx := NewContext(newPlatform())
@@ -178,6 +181,16 @@ func BenchmarkRedraw(b *testing.B) {
 	ops.Clip(clip)
 	fb := rgb565.New(clip)
 	maskfb := image.NewAlpha(clip)
+	if *dumpImages {
+		ops.Draw(fb, maskfb)
+		buf := new(bytes.Buffer)
+		if err := png.Encode(buf, fb); err != nil {
+			b.Error(err)
+		}
+		if err := os.WriteFile("benchmark_redraw.png", buf.Bytes(), 0o600); err != nil {
+			b.Error(err)
+		}
+	}
 	b.ResetTimer()
 	for range b.N {
 		ops.Draw(fb, maskfb)

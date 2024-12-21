@@ -7,7 +7,6 @@ import (
 
 	"golang.org/x/image/draw"
 	"seedhammer.com/font/bitmap"
-	"seedhammer.com/image/rgb565"
 )
 
 type Ops struct {
@@ -436,16 +435,9 @@ func (c ClipOp) Add(ops Ctx) {
 }
 
 var uniformImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) color.RGBA64 {
-	nrgba := args.Args[0]
-	r := nrgba >> 24
-	r |= r << 8
-	g := (nrgba >> 16) & 0xff
-	g |= g << 8
-	b := (nrgba >> 8) & 0xff
-	b |= b << 8
-	a := nrgba & 0xff
-	a |= a << 8
-	return color.RGBA64{R: uint16(r), G: uint16(g), B: uint16(b), A: uint16(a)}
+	col := colorFromArgs(args)
+	r, g, b, a := uint16(col.R), uint16(col.G), uint16(col.B), uint16(col.A)
+	return color.RGBA64{R: r | r<<8, G: g | g<<8, B: b | b<<8, A: a | a<<8}
 })
 
 var glyphImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) color.RGBA64 {
@@ -453,6 +445,15 @@ var glyphImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) 
 	glyph, _, _ := face.Glyph(r)
 	return glyph.RGBA64At(x, y)
 })
+
+func colorFromArgs(args ImageArguments) color.RGBA {
+	nrgba := args.Args[0]
+	r := nrgba >> 24
+	g := (nrgba >> 16) & 0xff
+	b := (nrgba >> 8) & 0xff
+	a := nrgba & 0xff
+	return color.RGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: uint8(a)}
+}
 
 func decodeGlyphImage(args ImageArguments) (*bitmap.Face, rune) {
 	return args.Refs[0].(*bitmap.Face), rune(args.Args[0])
@@ -559,25 +560,6 @@ func addImageOp(ops Ctx, src image.Image, img Image, mask maskType, bounds image
 	ops.ops.frame.args = append(ops.ops.frame.args, args...)
 	ops.ops.frame.refs = append(ops.ops.frame.refs, src, img.gen)
 	ops.ops.frame.refs = append(ops.ops.frame.refs, refs...)
-}
-
-func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Point, mask image.Image, maskOff image.Point, op draw.Op) {
-	// Optimize special cases.
-	switch dst := dst.(type) {
-	case *rgb565.Image:
-		if mask == nil {
-			dst.Draw(dr, src, pos, op)
-			return
-		}
-	}
-
-	// General case.
-	draw.DrawMask(
-		dst, dr,
-		src, pos,
-		mask, maskOff,
-		op,
-	)
 }
 
 type CallOp struct {
