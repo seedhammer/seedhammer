@@ -14,7 +14,9 @@ type Image struct {
 	Rect   image.Rectangle
 }
 
-type Color [2]byte
+type Color struct {
+	B0, B1 byte
+}
 
 func New(r image.Rectangle) *Image {
 	return &Image{
@@ -130,7 +132,7 @@ func RGB888ToRGB565(r, g, b uint8) Color {
 }
 
 func RGB565ToRGB888(rgb Color) (r, g, b uint8) {
-	c := uint16(rgb[1])<<8 | uint16(rgb[0])
+	c := uint16(rgb.B1)<<8 | uint16(rgb.B0)
 	r = uint8(c>>8) & 0xf8
 	r |= r >> 5
 	g = uint8(c>>3) & 0xfc

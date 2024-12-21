@@ -105,7 +105,7 @@ func main() {
 			for _, c := range img.Palette {
 				r, g, b, a := c.RGBA()
 				rgb565 := rgb565.RGB888ToRGB565(uint8(r>>8), uint8(g>>8), uint8(b>>8))
-				data.Write([]byte{rgb565[0], rgb565[1], uint8(a >> 8)})
+				data.Write([]byte{rgb565.B0, rgb565.B1, uint8(a >> 8)})
 			}
 			b := img.Rect
 			fmt.Fprintf(out, "paletted.Image{\n")
