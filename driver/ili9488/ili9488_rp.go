@@ -4,60 +4,133 @@
 package ili9488
 
 import (
-	"fmt"
+	"device/rp"
 	"image"
 	"machine"
+	"runtime/volatile"
 	"time"
-
-	"tinygo.org/x/drivers/delay"
+	"unsafe"
 )
 
 type Device struct {
-	dc, cs, rst, wrx, db0 machine.Pin
-	window                image.Rectangle
-	cmdBuf                [20]byte
+	pio                       *rp.PIO0_Type
+	dc, cs, rst, wrx, db0, te machine.Pin
+	window                    image.Rectangle
+	cmdBuf                    [20]byte
+	firstDraw                 bool
 }
 
 type Config struct {
 }
 
-func New(dmaChannel uint8, dc, cs, rst, wrx, db0 machine.Pin) *Device {
+func New(dmaChannel uint8, dc, cs, rst, wrx, db0, te machine.Pin, pio *rp.PIO0_Type) *Device {
 	// Hard code to DMA channel 0 for convenience.
 	if dmaChannel != 0 {
 		panic("only DMA channel 0 i supported")
 	}
 	return &Device{
+		pio: pio,
 		dc:  dc,
 		cs:  cs,
 		rst: rst,
 		wrx: wrx,
 		db0: db0,
+		te:  te,
 	}
 }
 
 const MaxDrawSize = 4096
 
+const pioStateMachine = 0
+
 func (d *Device) Configure(c Config) error {
-	for _, p := range []machine.Pin{d.cs, d.rst, d.dc, d.wrx} {
+	for _, p := range []machine.Pin{d.cs, d.rst, d.dc} {
 		p.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	}
-	for i := 0; i < 8; i++ {
-		(d.db0 + machine.Pin(i)).Configure(machine.PinConfig{Mode: machine.PinOutput})
+	mode := machine.PinPIO0
+	switch d.pio {
+	case rp.PIO0:
+	case rp.PIO1:
+		mode = machine.PinPIO1
+	default:
+		panic("unknown PIO")
 	}
-	for _, p := range []machine.Pin{d.cs, d.rst, d.dc, d.wrx} {
+	d.wrx.Configure(machine.PinConfig{Mode: mode})
+	d.te.Configure(machine.PinConfig{Mode: mode})
+	for i := 0; i < 8; i++ {
+		(d.db0 + machine.Pin(i)).Configure(machine.PinConfig{Mode: mode})
+	}
+	for _, p := range []machine.Pin{d.cs, d.rst, d.dc} {
 		p.High()
 	}
 
+	instMem := []*volatile.Register32{
+		&d.pio.INSTR_MEM0,
+		&d.pio.INSTR_MEM1,
+		&d.pio.INSTR_MEM2,
+		&d.pio.INSTR_MEM3,
+		&d.pio.INSTR_MEM4,
+		&d.pio.INSTR_MEM5,
+		&d.pio.INSTR_MEM6,
+		&d.pio.INSTR_MEM7,
+		&d.pio.INSTR_MEM8,
+		&d.pio.INSTR_MEM9,
+		&d.pio.INSTR_MEM10,
+		&d.pio.INSTR_MEM11,
+		&d.pio.INSTR_MEM12,
+		&d.pio.INSTR_MEM13,
+		&d.pio.INSTR_MEM14,
+		&d.pio.INSTR_MEM15,
+		&d.pio.INSTR_MEM16,
+		&d.pio.INSTR_MEM17,
+		&d.pio.INSTR_MEM18,
+		&d.pio.INSTR_MEM19,
+		&d.pio.INSTR_MEM20,
+		&d.pio.INSTR_MEM21,
+		&d.pio.INSTR_MEM22,
+		&d.pio.INSTR_MEM23,
+		&d.pio.INSTR_MEM24,
+		&d.pio.INSTR_MEM25,
+		&d.pio.INSTR_MEM26,
+		&d.pio.INSTR_MEM27,
+		&d.pio.INSTR_MEM28,
+		&d.pio.INSTR_MEM29,
+		&d.pio.INSTR_MEM30,
+		&d.pio.INSTR_MEM31,
+	}
+	instMem[0].Set(0x90e0)
+	instMem[1].Set(0x6008)
+	d.pio.SetSM0_PINCTRL_SIDESET_BASE(uint32(d.wrx))
+	d.pio.SetSM0_PINCTRL_SIDESET_COUNT(1)
+	d.pio.SetSM0_PINCTRL_OUT_BASE(uint32(d.db0))
+	d.pio.SetSM0_PINCTRL_OUT_COUNT(8)
+	d.pio.SetSM0_PINCTRL_IN_BASE(uint32(d.te))
+	d.pio.SetSM0_EXECCTRL_WRAP_BOTTOM(0)
+	d.pio.SetSM0_EXECCTRL_WRAP_TOP(1)
+	// The minimum write cycle time.
+	const writeCycle = 30 * time.Nanosecond
+	// The number of PIO cycles per write.
+	const cyclesPerWrite = 2
+	// The target PIO cycle time.
+	const pioCycle = writeCycle / cyclesPerWrite
+	// The target PIO clock speed.
+	const pioClock = uint64(time.Second / pioCycle)
+	const fracBits = 8
+	// Compute fractional clock divisor, rounded up.
+	clkDiv := (uint64(machine.CPUFrequency())*(1<<fracBits) + pioClock - 1) / pioClock
+	d.pio.SM0_CLKDIV.Set(uint32(clkDiv) << 8)
+	d.pio.SetSM0_SHIFTCTRL_FJOIN_TX(0b1)
+	d.pio.SetSM0_SHIFTCTRL_PULL_THRESH(8)
+
+	// Start state machine.
+	d.pio.SetCTRL_SM_ENABLE(0b1 << pioStateMachine)
+
+	// Set up pindirs.
+	d.setPindirs(d.db0, 8, 0b1)
+	d.setPindirs(d.wrx, 1, 0b1)
+
 	d.cs.Low()
 	defer d.cs.High()
-
-	var cmdErr error
-	sendCommand := func(cmd byte, data ...byte) {
-		if cmdErr != nil {
-			return
-		}
-		cmdErr = d.sendCommand(cmd, data...)
-	}
 
 	if d.rst != machine.NoPin {
 		// Reset LCD.
@@ -68,7 +141,7 @@ func (d *Device) Configure(c Config) error {
 		d.rst.High()
 		time.Sleep(50 * time.Millisecond)
 	} else {
-		sendCommand(0x01 /*SWRESET*/)
+		d.sendCommand(0x01 /*SWRESET*/)
 		time.Sleep(150 * time.Millisecond)
 	}
 
@@ -240,10 +313,7 @@ func (d *Device) Configure(c Config) error {
 		MADCTL_BGR = 1 << 3
 		MADCTL_MH  = 1 << 2
 	)
-	sendCommand(0x36 /*MADCTL*/, MADCTL_MV|MADCTL_BGR)
-	if cmdErr != nil {
-		return fmt.Errorf("lcd: SPI command: %w", cmdErr)
-	}
+	d.sendCommand(0x36 /*MADCTL*/, MADCTL_MV|MADCTL_BGR)
 	return nil
 
 	// const (
@@ -255,7 +325,7 @@ func (d *Device) Configure(c Config) error {
 	// 	MADCTL_MH  = 1 << 2
 	// )
 	// Initialize LCD registers.
-	sendCommand(0x11 /*SLPOUT*/)
+	d.sendCommand(0x11 /*SLPOUT*/)
 	time.Sleep(120 * time.Millisecond)
 	// Set rotation.
 	// const (
@@ -266,119 +336,143 @@ func (d *Device) Configure(c Config) error {
 	// 	MADCTL_BGR = 1 << 3
 	// 	MADCTL_MH  = 1 << 2
 	// )
-	sendCommand(0x36 /*MADCTL*/, MADCTL_BGR|MADCTL_MV|MADCTL_MH)
+	d.sendCommand(0x36 /*MADCTL*/, MADCTL_BGR|MADCTL_MV|MADCTL_MH)
 
-	sendCommand(0x3a /*COLMOD*/, 0x05)
-	sendCommand(0xb2 /*PORCTRL*/, 0x0c, 0x0c, 0x00, 0x33, 0x33)
-	sendCommand(0xb7 /*GCTRL*/, 0x35)
-	sendCommand(0xbb /*VCOMS*/, 0x37)
-	sendCommand(0xc0 /*LCMCTRL*/, 0x2c)
-	sendCommand(0xc2 /*VDVVRHEN*/, 0x01)
-	sendCommand(0xc3 /*VRHS*/, 0x12)
-	sendCommand(0xc4 /*VDVS*/, 0x20)
-	sendCommand(0xc6 /*FRCTRL2*/, 0x0f)
-	sendCommand(0xd0 /*PWCTRL1*/, 0xa4, 0xa1)
+	d.sendCommand(0x3a /*COLMOD*/, 0x05)
+	d.sendCommand(0xb2 /*PORCTRL*/, 0x0c, 0x0c, 0x00, 0x33, 0x33)
+	d.sendCommand(0xb7 /*GCTRL*/, 0x35)
+	d.sendCommand(0xbb /*VCOMS*/, 0x37)
+	d.sendCommand(0xc0 /*LCMCTRL*/, 0x2c)
+	d.sendCommand(0xc2 /*VDVVRHEN*/, 0x01)
+	d.sendCommand(0xc3 /*VRHS*/, 0x12)
+	d.sendCommand(0xc4 /*VDVS*/, 0x20)
+	d.sendCommand(0xc6 /*FRCTRL2*/, 0x0f)
+	d.sendCommand(0xd0 /*PWCTRL1*/, 0xa4, 0xa1)
 	const defaultGammaSettings = true
 	if !defaultGammaSettings {
-		sendCommand(0xe0 /*PVGAMCTRL*/, 0xd0, 0x04, 0x0d, 0x11, 0x13, 0x2b, 0x3f, 0x54, 0x4c, 0x18, 0x0d, 0x0b, 0x1f, 0x23)
-		sendCommand(0xe1 /*NVGAMCTRL*/, 0xd0, 0x04, 0x0c, 0x11, 0x13, 0x2C, 0x3F, 0x44, 0x51, 0x2F, 0x1F, 0x1F, 0x20, 0x23)
+		d.sendCommand(0xe0 /*PVGAMCTRL*/, 0xd0, 0x04, 0x0d, 0x11, 0x13, 0x2b, 0x3f, 0x54, 0x4c, 0x18, 0x0d, 0x0b, 0x1f, 0x23)
+		d.sendCommand(0xe1 /*NVGAMCTRL*/, 0xd0, 0x04, 0x0c, 0x11, 0x13, 0x2C, 0x3F, 0x44, 0x51, 0x2F, 0x1F, 0x1F, 0x20, 0x23)
 	}
-	sendCommand(0xba /*DGMEN: Enable Gamma*/, 0x04)
-	// sendCommand(0x21 /*INVON*/)
-	sendCommand(0x29 /*DISPON*/)
-	if cmdErr != nil {
-		return fmt.Errorf("lcd: SPI command: %w", cmdErr)
-	}
+	d.sendCommand(0xba /*DGMEN: Enable Gamma*/, 0x04)
+	// d.sendCommand(0x21 /*INVON*/)
+	d.sendCommand(0x29 /*DISPON*/)
 	return nil
 }
 
-func (d *Device) sendCommand(cmd byte, data ...byte) error {
+func (d *Device) setPindirs(base machine.Pin, npins int, dir uint8) {
+	for npins > 0 {
+		n := min(5, npins)
+		d.pio.SetSM0_PINCTRL_SET_BASE(uint32(base))
+		d.pio.SetSM0_PINCTRL_SET_COUNT(uint32(n))
+		// set pindir 0b11111 side 1.
+		const setPinDirInst = 0b111_10000_100_11111
+		d.pio.SM0_INSTR.Set(setPinDirInst)
+		npins -= n
+		base += machine.Pin(n)
+	}
+}
+
+func (d *Device) sendCommand(cmd byte, data ...byte) {
+	d.flushFIFO()
 	d.dc.Low()
 	d.sendByte(cmd)
+	d.flushFIFO()
 	d.dc.High()
 	for _, b := range data {
 		d.sendByte(b)
 	}
-	return nil
 }
 
 func (d *Device) sendByte(data byte) {
-	pin := d.db0
-	for i := 0; i < 8; i++ {
-		pin.Set(data&0x1 == 1)
-		pin++
-		data >>= 1
+	for d.pio.GetFSTAT_TXFULL()&(0b1<<pioStateMachine) != 0 {
 	}
-	d.wrx.Low()
-	// Total write cycle >= 40ns.
-	delay.Sleep(25 * time.Nanosecond)
-	d.wrx.High()
-	delay.Sleep(15 * time.Nanosecond)
+	d.pio.TXF0.Set(uint32(data))
 }
 
 func (d *Device) BeginFrame(sr image.Rectangle) error {
 	if sr.Empty() {
 		return nil
 	}
-	d.waitDMA()
+	d.flushFIFO()
 	d.cs.Low()
-	if err := d.setWindow(sr); err != nil {
-		return err
-	}
+	d.setWindow(sr)
+	d.flushFIFO()
+	d.setPullThreshold(16)
+	d.firstDraw = true
 	return nil
+}
+
+func (d *Device) setPullThreshold(thres int) {
+	// Reset output shift counter before changing the threshold.
+	d.pio.SetCTRL_SM_RESTART(0b1 << pioStateMachine)
+	d.pio.SetSM0_SHIFTCTRL_PULL_THRESH(uint32(thres))
+}
+
+func (d *Device) flushFIFO() {
+	// Clear stall flag.
+	d.pio.SetFDEBUG_TXSTALL(0b1 << pioStateMachine)
+	for d.pio.GetFDEBUG_TXSTALL()&(0b1<<pioStateMachine) == 0 {
+	}
 }
 
 func (d *Device) EndFrame() {
 	d.waitDMA()
+	d.flushFIFO()
 	d.cs.High()
+	d.setPullThreshold(8)
 }
 
 func (d *Device) Draw(buf [][2]byte) {
-	d.waitDMA()
-	for _, px := range buf {
-		d.sendByte(px[0])
-		d.sendByte(px[1])
+	if d.firstDraw {
+		// Wait for V-SYNC.
+		// wait 1 pin 0 side 1.
+		const waitInst = 0b001_10000_1_01_00000
+		d.pio.SM0_INSTR.Set(waitInst)
+		d.firstDraw = false
+	} else {
+		d.waitDMA()
 	}
 
-	// dma := rp.DMA
-	// dma.CH0_READ_ADDR.Set(uint32(uintptr(unsafe.Pointer(unsafe.SliceData(hackyBuf)))))
-	// dma.CH0_WRITE_ADDR.Set(uint32(uintptr(unsafe.Pointer(&d.bus.Bus.SSPDR))))
-	// dma.CH0_TRANS_COUNT.Set(uint32(len(hackyBuf)))
-	// const DREQ_SPI1_TX = 18
-	// dma.CH0_CTRL_TRIG.Set(
-	// 	// Increment read address on each transfer.
-	// 	rp.DMA_CH0_CTRL_TRIG_INCR_READ |
-	// 		// Transfer size is 8 bits.
-	// 		rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_SIZE_BYTE<<rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_Pos |
-	// 		// Pace transfers by the SPI transmit readyness signal.
-	// 		DREQ_SPI1_TX<<rp.DMA_CH0_CTRL_TRIG_TREQ_SEL_Pos |
-	// 		// Start transfer.
-	// 		rp.DMA_CH0_CTRL_TRIG_EN,
-	// )
+	dma := rp.DMA
+	dma.CH0_READ_ADDR.Set(uint32(uintptr(unsafe.Pointer(unsafe.SliceData(buf)))))
+	dma.CH0_WRITE_ADDR.Set(uint32(uintptr(unsafe.Pointer(&d.pio.TXF0))))
+	dma.CH0_TRANS_COUNT.Set(uint32(len(buf)))
+	const (
+		DREQ_PIO0_TX0 = 0
+		DREQ_PIO1_TX0 = 8
+	)
+	dreq := uint32(DREQ_PIO0_TX0)
+	switch d.pio {
+	case rp.PIO0:
+	case rp.PIO1:
+		dreq = DREQ_PIO1_TX0
+	}
+	dma.CH0_CTRL_TRIG.Set(
+		// Increment read address on each transfer.
+		rp.DMA_CH0_CTRL_TRIG_INCR_READ |
+			// Transfer size is 16 bits.
+			rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_SIZE_HALFWORD<<rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_Pos |
+			// Pace transfers by the PIO TX FIFO.
+			dreq<<rp.DMA_CH0_CTRL_TRIG_TREQ_SEL_Pos |
+			// Start transfer.
+			rp.DMA_CH0_CTRL_TRIG_EN,
+	)
 }
 
 func (d *Device) waitDMA() {
-	// dma := rp.DMA
-	// // Wait for DMA completion.
-	// for dma.GetCH0_CTRL_TRIG_BUSY() != 0 {
-	// }
+	dma := rp.DMA
+	// Wait for DMA completion.
+	for dma.GetCH0_CTRL_TRIG_BUSY() != 0 {
+	}
 }
 
-func (d *Device) setWindow(r image.Rectangle) error {
+func (d *Device) setWindow(r image.Rectangle) {
 	if d.window == r {
-		return nil
+		return
 	}
 	d.window = r
 
-	var cmdErr error
-	sendCommand := func(cmd byte, data ...byte) {
-		if cmdErr != nil {
-			return
-		}
-		cmdErr = d.sendCommand(cmd, data...)
-	}
-	sendCommand(0x2a /* CASET */, byte(r.Min.X>>8), byte(r.Min.X), byte((r.Max.X-1)>>8), byte(r.Max.X-1))
-	sendCommand(0x2b /* RASET */, byte(r.Min.Y>>8), byte(r.Min.Y), byte((r.Max.Y-1)>>8), byte(r.Max.Y-1))
-	sendCommand(0x2c /* RAMWR */)
-	return cmdErr
+	d.sendCommand(0x2a /* CASET */, byte(r.Min.X>>8), byte(r.Min.X), byte((r.Max.X-1)>>8), byte(r.Max.X-1))
+	d.sendCommand(0x2b /* RASET */, byte(r.Min.Y>>8), byte(r.Min.Y), byte((r.Max.Y-1)>>8), byte(r.Max.Y-1))
+	d.sendCommand(0x2c /* RAMWR */)
 }

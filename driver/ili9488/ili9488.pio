@@ -1,0 +1,12 @@
+; Driver for the 8-bit parallel interface of an
+; ILI9488 LCD display. The program writes a byte
+; every 2 clock cycles.
+.program ili9488
+
+; Side-set WRX pin.
+.side_set 1
+
+.wrap_target
+pull ifempty side 1 ; stall here if no data.
+out  pins 8  side 0
+.wrap

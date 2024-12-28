@@ -3,6 +3,7 @@
 package main
 
 import (
+	"device/rp"
 	"errors"
 	"fmt"
 	"image"
@@ -223,7 +224,7 @@ func Init() (*Platform, error) {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
 	}
 
-	p.tft = ili9488.New(0, LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0)
+	p.tft = ili9488.New(0, LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0, LCD_TE, rp.PIO0)
 	if err := p.tft.Configure(ili9488.Config{}); err != nil {
 		return nil, err
 	}
@@ -231,19 +232,6 @@ func Init() (*Platform, error) {
 	// Trigger reading of the initial state of input.
 	inp.wakeups <- struct{}{}
 
-	LCD_TE.Configure(machine.PinConfig{Mode: machine.PinInput})
-	// vsyncs := 0
-	// LCD_TE.SetInterrupt(machine.PinRising, func(machine.Pin) {
-	// 	vsyncs++
-	// })
-	// go func() {
-	// 	for {
-	// 		time.Sleep(time.Second)
-	// 		vs := vsyncs
-	// 		vsyncs = 0
-	// 		fmt.Println("vsyncs", vs)
-	// 	}
-	// }()
 	go func() {
 		for {
 			select {
