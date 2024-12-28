@@ -203,12 +203,7 @@ func parse(ttf []byte, ppem int) (*Face, error) {
 		}
 		alpha.Rect = dr
 		rcrop := simage.Crop(alpha)
-		crop := alpha4.New(alpha4.Rectangle{
-			MinX: int8(rcrop.Min.X),
-			MinY: int8(rcrop.Min.Y),
-			MaxX: int8(rcrop.Max.X),
-			MaxY: int8(rcrop.Max.Y),
-		})
+		crop := alpha4.New(alpha4.Rect(rcrop))
 		if crop.Bounds() != rcrop {
 			return nil, errors.New("glyph bounds overflows int8")
 		}

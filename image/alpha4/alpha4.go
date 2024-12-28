@@ -24,6 +24,15 @@ func New(r Rectangle) *Image {
 	}
 }
 
+func Rect(r image.Rectangle) Rectangle {
+	return Rectangle{
+		MinX: int8(r.Min.X),
+		MaxX: int8(r.Max.X),
+		MinY: int8(r.Min.Y),
+		MaxY: int8(r.Max.Y),
+	}
+}
+
 func (p *Image) ColorModel() color.Model { panic("not implemented") }
 
 func (p *Image) Bounds() image.Rectangle { return p.Rect.Rect() }
