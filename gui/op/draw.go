@@ -51,7 +51,16 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 						for x := 0; x < maxx; x++ {
 							srcCol, a := p.At(srcPix[x])
 							dstCol := dstPix[x]
-							dstPix[x] = blend565(dstCol, srcCol, a)
+							// The following call is inlined manually:
+							//
+							// dstPix[x] = blend565(dstCol, srcCol, a)
+							{
+								dr, dg, db := rgb565.RGB565ToRGB888(dstCol)
+								sr, sg, sb := rgb565.RGB565ToRGB888(srcCol)
+								a1 := uint16(255 - a)
+								r, g, b := uint8(uint16(dr)*a1/255)+sr, uint8(uint16(dg)*a1/255)+sg, uint8(uint16(db)*a1/255)+sb
+								dstPix[x] = rgb565.RGB888ToRGB565(r, g, b)
+							}
 						}
 					}
 					return
@@ -121,7 +130,15 @@ func drawAlphaUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA,
 				A: uint8(uint16(src.A) * a16 / 255),
 			}
 			dstCol := dstPix[x]
-			dstPix[x] = blend888(dstCol, srcCol)
+			// The following call is inlined manually for performance:
+			//
+			// dstPix[x] = blend888(dstCol, srcCol)
+			{
+				dr, dg, db := rgb565.RGB565ToRGB888(dstCol)
+				a1 := uint16(255 - srcCol.A)
+				r, g, b := uint8(uint16(dr)*a1/255)+srcCol.R, uint8(uint16(dg)*a1/255)+srcCol.G, uint8(uint16(db)*a1/255)+srcCol.B
+				dstPix[x] = rgb565.RGB888ToRGB565(r, g, b)
+			}
 		}
 	}
 }
