@@ -70,30 +70,23 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 						case draw.Over:
 							face, r := decodeGlyphImage(mask.ImageArguments)
 							mask, _, _ := face.Glyph(r)
-							maxx := dr.Dx()
-							dstPix := dst.Pix
-							maskPix := mask.Pix
-							srcCol := colorFromArgs(src.ImageArguments)
-							for y := 0; y < dr.Dy(); y++ {
-								dstOff := dst.PixOffset(dr.Min.X, dr.Min.Y+y)
-								dstPix := dstPix[dstOff : dstOff+maxx]
-								maskOff := mask.PixOffset(pos.X, pos.Y+y)
-								for x := 0; x < maxx; x++ {
-									i := maskOff + x
-									a := alpha4.Val(i, maskPix[i/2])
-									a16 := uint16(a)
-									srcCol := color.RGBA{
-										R: uint8(uint16(srcCol.R) * a16 / 255),
-										G: uint8(uint16(srcCol.G) * a16 / 255),
-										B: uint8(uint16(srcCol.B) * a16 / 255),
-										A: uint8(uint16(srcCol.A) * a16 / 255),
-									}
-									dstCol := dstPix[x]
-									dstPix[x] = blend888(dstCol, srcCol)
-								}
-							}
+							src := colorFromArgs(src.ImageArguments)
+							drawAlphaUniformOver(dst, dr, src, &mask, maskOff)
 							return
 						}
+					}
+				}
+			}
+		case *alpha4.Image:
+			switch src := src.(type) {
+			case *genImage:
+				switch src.gen.id {
+				case uniformImage.id:
+					switch op {
+					case draw.Over:
+						src := colorFromArgs(src.ImageArguments)
+						drawAlphaUniformOver(dst, dr, src, mask, maskOff)
+						return
 					}
 				}
 			}
@@ -107,6 +100,30 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 		mask, maskOff,
 		op,
 	)
+}
+
+func drawAlphaUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA, mask *alpha4.Image, maskOff image.Point) {
+	maxx := dr.Dx()
+	dstPix := dst.Pix
+	maskPix := mask.Pix
+	for y := 0; y < dr.Dy(); y++ {
+		dstOff := dst.PixOffset(dr.Min.X, dr.Min.Y+y)
+		dstPix := dstPix[dstOff : dstOff+maxx]
+		maskOff := mask.PixOffset(maskOff.X, maskOff.Y+y)
+		for x := 0; x < maxx; x++ {
+			i := maskOff + x
+			a := alpha4.Val(i, maskPix[i/2])
+			a16 := uint16(a)
+			srcCol := color.RGBA{
+				R: uint8(uint16(src.R) * a16 / 255),
+				G: uint8(uint16(src.G) * a16 / 255),
+				B: uint8(uint16(src.B) * a16 / 255),
+				A: uint8(uint16(src.A) * a16 / 255),
+			}
+			dstCol := dstPix[x]
+			dstPix[x] = blend888(dstCol, srcCol)
+		}
+	}
 }
 
 func blend888(d rgb565.Color, s color.RGBA) rgb565.Color {
