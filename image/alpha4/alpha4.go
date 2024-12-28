@@ -44,10 +44,10 @@ func (p *Image) AlphaAt(x, y int) color.Alpha {
 	}
 	i := p.PixOffset(x, y)
 	a2 := p.Pix[i/2]
-	return color.Alpha{alpha4(i, a2)}
+	return color.Alpha{Val(i, a2)}
 }
 
-func alpha4(i int, a2 byte) byte {
+func Val(i int, a2 byte) byte {
 	a := (a2 >> ((^i & 0b1) * 4)) & 0b1111
 	return a<<4 | a
 }
