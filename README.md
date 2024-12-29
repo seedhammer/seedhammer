@@ -118,3 +118,10 @@ in the lower right corner of the screen.
 
 The files is this repository are in the public domain as described in the [LICENSE](LICENSE) file,
 except files in directories with their own LICENSE files.
+
+### Contributions
+
+Contributors must agree to the [developer certificate of origin](https://developercertificate.org/),
+to ensure their work is compatible with the the LICENSE. Sign your commits with
+Signed-off-by statements to show your agreement with the `git commit --signoff` (or `-s`)
+command.
