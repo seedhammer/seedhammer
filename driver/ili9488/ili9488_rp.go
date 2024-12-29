@@ -336,8 +336,8 @@ func (d *Device) EndFrame() {
 func (d *Device) Draw(buf [][2]byte) {
 	d.waitDMA()
 	for _, px := range buf {
-		d.sendByte(px[1])
 		d.sendByte(px[0])
+		d.sendByte(px[1])
 	}
 
 	// dma := rp.DMA
