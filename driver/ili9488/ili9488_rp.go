@@ -17,6 +17,7 @@ type Device struct {
 	dc, cs, rst, wrx, db0, te machine.Pin
 	window                    image.Rectangle
 	cmdBuf                    [20]byte
+	firstFrame                bool
 	firstDraw                 bool
 }
 
@@ -44,6 +45,8 @@ const MaxDrawSize = 4096
 const pioStateMachine = 0
 
 func (d *Device) Configure(c Config) error {
+	d.firstFrame = true
+
 	for _, p := range []machine.Pin{d.cs, d.rst, d.dc} {
 		p.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	}
@@ -145,75 +148,6 @@ func (d *Device) Configure(c Config) error {
 		time.Sleep(150 * time.Millisecond)
 	}
 
-	const (
-
-		// register constants based on source:
-		// https://github.com/adafruit/Adafruit_ILI9341/blob/master/Adafruit_ILI9341.h
-
-		// TFTWIDTH  = 240 ///< ILI9341 max TFT width
-		// TFTHEIGHT = 320 ///< ILI9341 max TFT height
-
-		NOP     = 0x00 ///< No-op register
-		SWRESET = 0x01 ///< Software reset register
-		RDDID   = 0x04 ///< Read display identification information
-		RDDST   = 0x09 ///< Read Display Status
-
-		SLPIN  = 0x10 ///< Enter Sleep Mode
-		SLPOUT = 0x11 ///< Sleep Out
-		PTLON  = 0x12 ///< Partial Mode ON
-		NORON  = 0x13 ///< Normal Display Mode ON
-
-		RDMODE     = 0x0A ///< Read Display Power Mode
-		RDMADCTL   = 0x0B ///< Read Display MADCTL
-		RDPIXFMT   = 0x0C ///< Read Display Pixel Format
-		RDIMGFMT   = 0x0D ///< Read Display Image Format
-		RDSELFDIAG = 0x0F ///< Read Display Self-Diagnostic Result
-
-		INVOFF   = 0x20 ///< Display Inversion OFF
-		INVON    = 0x21 ///< Display Inversion ON
-		GAMMASET = 0x26 ///< Gamma Set
-		DISPOFF  = 0x28 ///< Display OFF
-		DISPON   = 0x29 ///< Display ON
-
-		CASET = 0x2A ///< Column Address Set
-		PASET = 0x2B ///< Page Address Set
-		RAMWR = 0x2C ///< Memory Write
-		RAMRD = 0x2E ///< Memory Read
-
-		PTLAR    = 0x30 ///< Partial Area
-		VSCRDEF  = 0x33 ///< Vertical Scrolling Definition
-		TEOFF    = 0x34 ///< TEOFF: Tearing Effect Line OFF
-		TEON     = 0x35 ///< TEON: Tearing Effect Line ON
-		MADCTL   = 0x36 ///< Memory Access Control
-		VSCRSADD = 0x37 ///< Vertical Scrolling Start Address
-		PIXFMT   = 0x3A ///< COLMOD: Pixel Format Set
-
-		FRMCTR1 = 0xB1 ///< Frame Rate Control (In Normal Mode/Full Colors)
-		FRMCTR2 = 0xB2 ///< Frame Rate Control (In Idle Mode/8 colors)
-		FRMCTR3 = 0xB3 ///< Frame Rate control (In Partial Mode/Full Colors)
-		INVCTR  = 0xB4 ///< Display Inversion Control
-		DFUNCTR = 0xB6 ///< Display Function Control
-
-		PWCTR1 = 0xC0 ///< Power Control 1
-		PWCTR2 = 0xC1 ///< Power Control 2
-		PWCTR3 = 0xC2 ///< Power Control 3
-		PWCTR4 = 0xC3 ///< Power Control 4
-		PWCTR5 = 0xC4 ///< Power Control 5
-		VMCTR1 = 0xC5 ///< VCOM Control 1
-		VMCTR2 = 0xC7 ///< VCOM Control 2
-
-		RDID1 = 0xDA ///< Read ID 1
-		RDID2 = 0xDB ///< Read ID 2
-		RDID3 = 0xDC ///< Read ID 3
-		RDID4 = 0xDD ///< Read ID 4
-
-		GMCTRP1 = 0xE0 ///< Positive Gamma Correction
-		GMCTRN1 = 0xE1 ///< Negative Gamma Correction
-		//PWCTR6     0xFC
-
-		MADCTL_RGB = 0x00 ///< Red-Green-Blue pixel order
-
-	)
 	// var initCmd = []byte{
 	// 	0xEF, 3, 0x03, 0x80, 0x02,
 	// 	0xCF, 3, 0x00, 0xC1, 0x30,
@@ -287,7 +221,6 @@ func (d *Device) Configure(c Config) error {
 			0xE9, 1, 0x00,
 			0xF7, 4, 0xA9, 0x51, 0x2C, 0x82,
 			0x11, 0x80, //Sleep out
-			0x29, 0x80,
 			0x00,
 		}
 	}
@@ -420,6 +353,10 @@ func (d *Device) EndFrame() {
 	d.flushFIFO()
 	d.cs.High()
 	d.setPullThreshold(8)
+	if d.firstFrame {
+		d.firstFrame = false
+		d.sendCommand(DISPON)
+	}
 }
 
 func (d *Device) Draw(buf [][2]byte) {
@@ -476,3 +413,67 @@ func (d *Device) setWindow(r image.Rectangle) {
 	d.sendCommand(0x2b /* RASET */, byte(r.Min.Y>>8), byte(r.Min.Y), byte((r.Max.Y-1)>>8), byte(r.Max.Y-1))
 	d.sendCommand(0x2c /* RAMWR */)
 }
+
+const (
+	// register constants based on source:
+	// https://github.com/adafruit/Adafruit_ILI9341/blob/master/Adafruit_ILI9341.h
+
+	NOP     = 0x00 ///< No-op register
+	SWRESET = 0x01 ///< Software reset register
+	RDDID   = 0x04 ///< Read display identification information
+	RDDST   = 0x09 ///< Read Display Status
+
+	SLPIN  = 0x10 ///< Enter Sleep Mode
+	SLPOUT = 0x11 ///< Sleep Out
+	PTLON  = 0x12 ///< Partial Mode ON
+	NORON  = 0x13 ///< Normal Display Mode ON
+
+	RDMODE     = 0x0A ///< Read Display Power Mode
+	RDMADCTL   = 0x0B ///< Read Display MADCTL
+	RDPIXFMT   = 0x0C ///< Read Display Pixel Format
+	RDIMGFMT   = 0x0D ///< Read Display Image Format
+	RDSELFDIAG = 0x0F ///< Read Display Self-Diagnostic Result
+
+	INVOFF   = 0x20 ///< Display Inversion OFF
+	INVON    = 0x21 ///< Display Inversion ON
+	GAMMASET = 0x26 ///< Gamma Set
+	DISPOFF  = 0x28 ///< Display OFF
+	DISPON   = 0x29 ///< Display ON
+
+	CASET = 0x2A ///< Column Address Set
+	PASET = 0x2B ///< Page Address Set
+	RAMWR = 0x2C ///< Memory Write
+	RAMRD = 0x2E ///< Memory Read
+
+	PTLAR    = 0x30 ///< Partial Area
+	VSCRDEF  = 0x33 ///< Vertical Scrolling Definition
+	TEOFF    = 0x34 ///< TEOFF: Tearing Effect Line OFF
+	TEON     = 0x35 ///< TEON: Tearing Effect Line ON
+	MADCTL   = 0x36 ///< Memory Access Control
+	VSCRSADD = 0x37 ///< Vertical Scrolling Start Address
+	PIXFMT   = 0x3A ///< COLMOD: Pixel Format Set
+
+	FRMCTR1 = 0xB1 ///< Frame Rate Control (In Normal Mode/Full Colors)
+	FRMCTR2 = 0xB2 ///< Frame Rate Control (In Idle Mode/8 colors)
+	FRMCTR3 = 0xB3 ///< Frame Rate control (In Partial Mode/Full Colors)
+	INVCTR  = 0xB4 ///< Display Inversion Control
+	DFUNCTR = 0xB6 ///< Display Function Control
+
+	PWCTR1 = 0xC0 ///< Power Control 1
+	PWCTR2 = 0xC1 ///< Power Control 2
+	PWCTR3 = 0xC2 ///< Power Control 3
+	PWCTR4 = 0xC3 ///< Power Control 4
+	PWCTR5 = 0xC4 ///< Power Control 5
+	VMCTR1 = 0xC5 ///< VCOM Control 1
+	VMCTR2 = 0xC7 ///< VCOM Control 2
+
+	RDID1 = 0xDA ///< Read ID 1
+	RDID2 = 0xDB ///< Read ID 2
+	RDID3 = 0xDC ///< Read ID 3
+	RDID4 = 0xDD ///< Read ID 4
+
+	GMCTRP1 = 0xE0 ///< Positive Gamma Correction
+	GMCTRN1 = 0xE1 ///< Negative Gamma Correction
+
+	MADCTL_RGB = 0x00 ///< Red-Green-Blue pixel order
+)
