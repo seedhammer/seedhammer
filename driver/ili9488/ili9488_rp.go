@@ -253,12 +253,17 @@ func (d *Device) EndFrame() {
 
 func (d *Device) Draw(buf [][2]byte) {
 	if d.firstDraw {
-		// Wait for V-SYNC.
-		// wait 1 pin 0 side 1.
-		const waitInst = 0b001_10000_1_01_00000
-		d.pio.SM0_INSTR.Set(waitInst)
 		d.firstDraw = false
+		// Wait for V-SYNC if this is the first draw of the frame
+		// and the LCD is on (!firstFrame).
+		if !d.firstFrame {
+			// Wait for V-sync.
+			// wait 1 pin 0 side 1.
+			const waitInst = 0b001_10000_1_01_00000
+			d.pio.SM0_INSTR.Set(waitInst)
+		}
 	} else {
+		// Wait for previous draw to complete.
 		d.waitDMA()
 	}
 
