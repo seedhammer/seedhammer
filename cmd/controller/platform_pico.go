@@ -93,12 +93,15 @@ const (
 	Y_DIAG       = machine.GPIO9
 	Y_STEP       = machine.GPIO8
 	Y_DIR        = machine.GPIO7
+
+	lcdDMAChannel = 0
 )
 
 var (
 	needleSenseADC = machine.ADC{Pin: NEEDLE_SENSE}
 	needlePWM      = machine.PWM7
 	touchI2C       = machine.I2C0
+	lcdPIO         = rp.PIO0
 )
 
 const (
@@ -106,25 +109,6 @@ const (
 )
 
 func Init() (*Platform, error) {
-	// CC1_DIR.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	// CC2_DIR.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	// CC1_DATA.Configure(machine.PinConfig{Mode: machine.PinInput})
-	// CC2_DATA.Configure(machine.PinConfig{Mode: machine.PinInput})
-	// CC1_DIR.Low()
-	// CC2_DIR.Low()
-	// var pdd *usbpd.Device
-	// for {
-	// 	if CC1_DATA.Get() {
-	// 		pdd = usbpd.New(CC1_DATA, CC1_DIR)
-	// 		break
-	// 	}
-	// 	if CC2_DATA.Get() {
-	// 		pdd = usbpd.New(CC2_DATA, CC2_DIR)
-	// 		break
-	// 	}
-	// }
-	// pdd.Run()
-
 	NEEDLE_PHASE.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	NEEDLE_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	NEEDLE_PHASE.Low()
@@ -142,65 +126,6 @@ func Init() (*Platform, error) {
 	}
 	needlePWM.Set(ch, 0)
 	needlePWMThreshold := time.Duration(needlePWM.Top()) * needleActivation / mjolnir2.NeedlePeriod
-	// machine.InitADC()
-	// const (
-	// 	// ADC reference voltage in millivolt (mV).
-	// 	ADCRefVoltage = 3_300
-	// 	// Sense resistor in milliohm (mΩ).
-	// 	R_IPROPI = 1200
-	// 	// A_IPROPI constant from the datasheet, in μA/A.
-	// 	A_IPROPI = 450
-	// 	// According to the datasheet, the relationship between the
-	// 	// sense voltage and the current flowing in the low side MOSFETS
-	// 	// is related by the equations
-	// 	//
-	// 	// I_PROPI (μA) = (ILS1 + ILS2) (A) x A_IPROPI (μA/A)
-	// 	// V_IPROPI (V) = I_PROPI (A) x R_IPROPI (Ω)
-	// 	//
-	// 	// Solving for the low sides currents:
-	// 	//
-	// 	// (ILS1 + ILS2) (A) = I_PROPI (μA) / A_IPROPI (μA/A) = V_IPROPI (V) / (R_IPROPI (Ω) * A_IPROPI (A/A))
-	// 	//                   = V_IPROPI (V) * s_sense (A/V)
-	// 	//
-	// 	// Compute 1/s_sense in mV/A for integer calculations.
-	// 	s_sense_inv = R_IPROPI * A_IPROPI / 1e3
-	// )
-	// needlePWM.Set(ch, uint32(needlePWMThreshold))
-	// measurements := make([]uint16, 20000)
-	// for {
-	// 	before := time.Now()
-	// 	const on = 12 * time.Millisecond
-	// 	for time.Since(before) < on {
-	// 		const currentLimit = 4500
-	// 		// Sense voltage in mV.
-	// 		v_ipropi := uint32(needleSenseADC.Get()) * ADCRefVoltage / 0xffff
-	// 		// MOSFET current in mA.
-	// 		i_ls1_ls2 := v_ipropi * 1e3 / s_sense_inv
-	// 		if i_ls1_ls2 > currentLimit {
-	// 			NEEDLE_ENABLE.Low()
-	// 			delay.Sleep(25 * time.Microsecond)
-	// 		} else {
-	// 			NEEDLE_ENABLE.High()
-	// 		}
-	// 		// for i := range measurements {
-	// 		// 	// Sense voltage in mV.
-	// 		// 	v_ipropi := uint32(needleSenseADC.Get()) * ADCRefVoltage / 0xffff
-	// 		// 	// MOSFET current in mA.
-	// 		// 	i_ls1_ls2 := v_ipropi * 1e3 / s_sense_inv
-	// 		// 	measurements[i] = uint16(i_ls1_ls2)
-	// 		// 	// fmt.Printf("Vs: %d mV %d mA\n", v_ipropi, i_ls1_ls2)
-	// 		// }
-	// 	}
-	// 	NEEDLE_ENABLE.Low()
-	// 	// println("off")
-	// 	delay.Sleep(20*time.Millisecond - on)
-	// }
-	// needlePWM.Set(ch, 0)
-	// fmt.Println("Time taken:", time.Since(before))
-	// for _, m := range measurements {
-	// 	fmt.Print(m, " ")
-	// }
-	// fmt.Println()
 
 	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
 		return nil, err
@@ -224,7 +149,7 @@ func Init() (*Platform, error) {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
 	}
 
-	p.tft = ili9488.New(0, LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0, LCD_TE, rp.PIO0)
+	p.tft = ili9488.New(lcdDMAChannel, LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0, LCD_TE, lcdPIO)
 	if err := p.tft.Configure(ili9488.Config{}); err != nil {
 		return nil, err
 	}
