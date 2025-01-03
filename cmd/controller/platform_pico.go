@@ -63,11 +63,6 @@ type Platform struct {
 }
 
 const (
-	CC1_DIR  = machine.GPIO5
-	CC2_DIR  = machine.GPIO4
-	CC1_DATA = machine.GPIO3
-	CC2_DATA = machine.GPIO2
-
 	TOUCH_SDA = machine.GPIO16
 	TOUCH_SCL = machine.GPIO17
 
