@@ -34,22 +34,17 @@ type button struct {
 
 type Platform struct {
 	wakeups chan struct{}
-	timer   *time.Timer
 
-	tft    *ili9488.Device
-	touch  *ft6x36.Device
-	needle func(bool)
+	lcdDev    *ili9488.Device
+	touchDev  *ft6x36.Device
+	needleDev func(bool)
 
-	input struct {
-		// jogStep track the steps of a jog wheel turn.
-		jogStep int
-		// jogDir tracks the button that determines the
-		// jog turn direction.
-		jogDir     int
-		touchPoint image.Point
-		debounce   <-chan time.Time
-		buttons    [1]button
-		wakeups    chan struct{}
+	touch struct {
+		last    bool
+		lastPos image.Point
+		current bool
+		pos     image.Point
+		tim     time.Time
 	}
 
 	display struct {
@@ -128,9 +123,9 @@ func Init() (*Platform, error) {
 	touch := ft6x36.New(touchI2C)
 	touch.Configure(ft6x36.Config{})
 	p := &Platform{
-		touch:   touch,
-		wakeups: make(chan struct{}, 1),
-		needle: func(enable bool) {
+		touchDev: touch,
+		wakeups:  make(chan struct{}, 1),
+		needleDev: func(enable bool) {
 			t := needlePWMThreshold
 			if !enable {
 				t = 0
@@ -138,122 +133,48 @@ func Init() (*Platform, error) {
 			needlePWM.Set(ch, uint32(t))
 		},
 	}
-	inp := &p.input
-	inp.wakeups = make(chan struct{}, 1)
 	for i := range p.display.buffers {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
 	}
 
-	p.tft = ili9488.New(lcdDMAChannel, LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0, LCD_TE, lcdPIO)
-	if err := p.tft.Configure(ili9488.Config{}); err != nil {
+	p.lcdDev = ili9488.New(lcdDMAChannel, LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0, LCD_TE, lcdPIO)
+	if err := p.lcdDev.Configure(ili9488.Config{}); err != nil {
 		return nil, err
 	}
 
-	// Trigger reading of the initial state of input.
-	inp.wakeups <- struct{}{}
-
-	go func() {
-		for {
-			select {
-			case p.input.wakeups <- struct{}{}:
-			default:
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
 	return p, nil
 }
 
-func (p *Platform) processInput() {
-	const debounceTimeout = 10 * time.Millisecond
-
-	tp, touched := p.touch.ReadTouchPoint()
-	buttons := [...]bool{touched}
-	timeout := time.Now().Add(debounceTimeout)
-	inp := &p.input
-	for i, state := range buttons {
-		btn := &inp.buttons[i]
-		if old := btn.state; old != state {
-			if btn.debounce.IsZero() {
-				btn.debounce = timeout
-				if state && i == len(buttons)-1 {
-					inp.touchPoint = tp
-				}
-			}
-		} else {
-			btn.debounce = time.Time{}
-		}
-	}
-	p.scheduleDebounce()
-}
-
-func (p *Platform) scheduleDebounce() {
-	var earliest time.Time
-	inp := &p.input
-	for i := range inp.buttons {
-		btn := &inp.buttons[i]
-		if !btn.debounce.IsZero() && (earliest.IsZero() || btn.debounce.Before(earliest)) {
-			earliest = btn.debounce
-		}
-	}
-	if !earliest.IsZero() {
-		inp.debounce = time.After(time.Until(earliest))
-	}
-}
-
-func (p *Platform) processDebounce(evts []gui.Event) []gui.Event {
-	inp := &p.input
-	now := time.Now()
-	for i := range inp.buttons {
-		btn := &inp.buttons[i]
-		if t := btn.debounce; t.IsZero() || t.After(now) {
-			continue
-		}
-		btn.debounce = time.Time{}
-		btn.state = !btn.state
-		switch i {
-		case 0: // touchpad
-			if btn.state {
-				pt := image.Point{
-					X: lcdWidth - inp.touchPoint.Y,
-					Y: inp.touchPoint.X,
-				}
-				fmt.Println("touch", pt)
-			}
-			evts = append(evts, gui.ButtonEvent{Button: gui.Button3, Pressed: btn.state}.Event())
-		}
-	}
-	p.scheduleDebounce()
-	return evts
-}
-
 func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Event {
+	const debounce = 5 * time.Millisecond
+
+	inp := &p.touch
 	for {
+		tp, touching := p.touchDev.ReadTouchPoint()
+		if touching {
+			inp.pos = tp
+		}
+		if touching != inp.current {
+			inp.tim = time.Now()
+			inp.current = touching
+		}
+		if inp.current != inp.last && time.Since(inp.tim) > debounce || inp.pos != inp.lastPos {
+			inp.last = inp.current
+			inp.lastPos = inp.pos
+			pt := image.Point{
+				X: inp.pos.Y,
+				Y: lcdHeight - inp.pos.X,
+			}
+			fmt.Println("touch", pt)
+			return evts
+		}
+		if !time.Now().Before(deadline) {
+			return evts
+		}
 		select {
-		case <-p.input.debounce:
-			evts = p.processDebounce(evts)
-		case <-p.input.wakeups:
-			p.processInput()
+		case <-p.wakeups:
+			return evts
 		default:
-			if len(evts) > 0 {
-				return evts
-			}
-			d := time.Until(deadline)
-			if p.timer == nil {
-				p.timer = time.NewTimer(d)
-			} else {
-				p.timer.Reset(d)
-			}
-			select {
-			case <-p.input.debounce:
-				evts = p.processDebounce(evts)
-			case <-p.input.wakeups:
-				p.processInput()
-			case <-p.wakeups:
-				return evts
-			case <-p.timer.C:
-				return evts
-			}
 		}
 	}
 }
@@ -290,7 +211,7 @@ func (p *Platform) Engraver() (gui.Engraver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pico: y-axis stepper: %w", err)
 	}
-	dev, err := mjolnir2.New(DRV_ENABLE, X, Y, p.needle)
+	dev, err := mjolnir2.New(DRV_ENABLE, X, Y, p.needleDev)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +247,7 @@ func (p *Platform) Dirty(r image.Rectangle) error {
 	}
 	d.remaining = (r.Dy() + d.nrows - 1) / d.nrows
 	d.fb.Stride = r.Dx()
-	return p.tft.BeginFrame(r)
+	return p.lcdDev.BeginFrame(r)
 }
 
 func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
@@ -334,11 +255,11 @@ func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
 	if d.buffered {
 		r := d.fb.Rect
 		buf := d.buffers[0][:r.Dx()*r.Dy()]
-		p.tft.Draw(buf)
+		p.lcdDev.Draw(buf)
 		d.buffers[0], d.buffers[1] = d.buffers[1], d.buffers[0]
 		d.buffered = false
 		if d.remaining == 0 {
-			p.tft.EndFrame()
+			p.lcdDev.EndFrame()
 		}
 	}
 	if d.remaining == 0 {
