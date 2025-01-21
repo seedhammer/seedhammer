@@ -383,14 +383,14 @@
                 nukeReferences
               ];
 
-              CGO_CXXFLAGS="-I${libcamera}/include";
-              CGO_LDFLAGS="-L${libcamera}/lib -static-libstdc++ -static-libgcc";
-              CGO_ENABLED="1";
-              GOOS="linux";
-              GOARCH="arm";
-              GOARM="6";
+              CGO_CXXFLAGS = "-I${libcamera}/include";
+              CGO_LDFLAGS = "-L${libcamera}/lib -static-libstdc++ -static-libgcc";
+              CGO_ENABLED = "1";
+              GOOS = "linux";
+              GOARCH = "arm";
+              GOARM = "6";
               # -buildmode=pie is required by musl.
-              GOFLAGS="-buildmode=pie -tags=${tags}";
+              GOFLAGS = "-buildmode=pie -tags=${tags}";
 
               buildPhase = ''
                 HOME="$PWD/gohome" \
@@ -651,18 +651,79 @@
               ${pkgs.mtools}/bin/mcopy -bpm -i "$dst@@$OFFSET" "$TMPDIR/cmdline.txt" ::
             '';
             default = self.packages.${system}.image;
+
+            # Raspberry Pi openocd fork with rp2350 support.
+            openocd =
+              let
+                pkgs = localpkgs-unstable;
+              in
+              with pkgs; stdenv.mkDerivation rec {
+                pname = "openocd";
+                version = "0.13.0-rpi";
+                src = fetchgit {
+                  url = "https://github.com/raspberrypi/openocd.git";
+                  sha256 = "sha256-jV5MZf4dLRRzLjVlpA//UNTOTvcenAZvvUHxfQJtzcs=";
+                };
+
+                patches = [
+                  # https://github.com/raspberrypi/openocd/issues/120
+                  (writeText "sysresetreq-core1.patch" ''
+                    diff --git a/tcl/target/rp2350.cfg b/tcl/target/rp2350.cfg
+                    index 104e8ecc4..7dbcb759e 100644
+                    --- a/tcl/target/rp2350.cfg
+                    +++ b/tcl/target/rp2350.cfg
+                    @@ -77,3 +77,5 @@ if { $_BOTH_CORES } {
+ 
+                     # srst does not exist; use SYSRESETREQ to perform a soft reset
+                     cortex_m reset_config sysresetreq
+                    +# same for the second core, to avoid a warning.
+                    +rp2350.dap.core1 cortex_m reset_config sysresetreq
+                  '')
+                ];
+                
+                nativeBuildInputs = [
+                  autoreconfHook
+                  pkg-config
+                  tcl
+                ];
+
+                buildInputs = [
+                  libusb1
+                ];
+
+                configureFlags = [
+                  "--disable-werror"
+                  "--enable-jtag_vpi"
+                  "--enable-remote-bitbang"
+                ];
+
+                enableParallelBuilding = true;
+
+                env.NIX_CFLAGS_COMPILE = toString (
+                  lib.optionals stdenv.cc.isGNU [
+                    "-Wno-error=cpp"
+                    "-Wno-error=strict-prototypes" # fixes build failure with hidapi 0.10.0
+                  ]
+                );
+              };
           };
         devShells = {
           # shell for running .#reload-fast.
           default = self.packages.${system}.controller-debug;
           # shell for running tinygo.
-          tinygo = localpkgs-unstable.mkShell {
-            packages = with localpkgs-unstable; [
-              tinygo
-              pioasm
-              go
-            ];
-          };
+          tinygo =
+            let
+              pkgs = localpkgs-unstable;
+              openocd = self.packages.${system}.openocd;
+            in
+            with pkgs; mkShell {
+              packages = [
+                (tinygo.override { openocd = openocd; })
+                gcc-arm-embedded
+                go
+                openocd
+              ];
+            };
         };
       });
 }
