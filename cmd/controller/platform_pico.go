@@ -1,4 +1,4 @@
-//go:build pico
+//go:build tinygo && (pico || pico2)
 
 package main
 
@@ -58,40 +58,38 @@ type Platform struct {
 }
 
 const (
-	TOUCH_SDA = machine.GPIO16
-	TOUCH_SCL = machine.GPIO17
+	TOUCH_SDA = machine.GPIO14
+	TOUCH_SCL = machine.GPIO15
 
 	LCD_RS  = machine.NoPin
 	LCD_CS  = machine.NoPin
-	LCD_TE  = machine.GPIO18
-	LCD_DC  = machine.GPIO19
-	LCD_WRX = machine.GPIO20
-	LCD_DB0 = machine.GPIO21
+	LCD_TE  = machine.GPIO13
+	LCD_DC  = machine.GPIO16
+	LCD_WRX = machine.GPIO17
+	LCD_DB0 = machine.GPIO18
 
-	DRV_ENABLE = machine.GPIO13
+	DRV_ENABLE = machine.GPIO10
 
-	NEEDLE_PHASE  = machine.GPIO14
-	NEEDLE_ENABLE = machine.GPIO15
-	NEEDLE_SENSE  = machine.GPIO29
+	NEEDLE_SENSE = machine.GPIO26
 
-	STEPPER_UART = machine.GPIO6
+	STEPPER_UART = machine.GPIO9
 	X_ADDR       = 0b00
-	X_DIAG       = machine.GPIO12
-	X_STEP       = machine.GPIO11
-	X_DIR        = machine.GPIO10
+	X_DIAG       = machine.GPIO7
+	X_STEP       = machine.GPIO6
+	X_DIR        = machine.GPIO5
 	Y_ADDR       = 0b01
-	Y_DIAG       = machine.GPIO9
-	Y_STEP       = machine.GPIO8
-	Y_DIR        = machine.GPIO7
+	Y_DIAG       = machine.GPIO4
+	Y_STEP       = machine.GPIO3
+	Y_DIR        = machine.GPIO2
 
 	lcdDMAChannel = 0
 )
 
 var (
 	needleSenseADC = machine.ADC{Pin: NEEDLE_SENSE}
-	needlePWM      = machine.PWM7
-	touchI2C       = machine.I2C0
-	lcdPIO         = rp.PIO0
+	// needlePWM      = machine.PWM7
+	touchI2C = machine.I2C1
+	lcdPIO   = rp.PIO0
 )
 
 const (
@@ -99,23 +97,18 @@ const (
 )
 
 func Init() (*Platform, error) {
-	NEEDLE_PHASE.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	NEEDLE_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	NEEDLE_PHASE.Low()
-	NEEDLE_ENABLE.Low()
-
-	err := needlePWM.Configure(machine.PWMConfig{
-		Period: uint64(mjolnir2.NeedlePeriod),
-	})
-	if err != nil {
-		return nil, err
-	}
-	ch, err := needlePWM.Channel(NEEDLE_ENABLE)
-	if err != nil {
-		return nil, err
-	}
-	needlePWM.Set(ch, 0)
-	needlePWMThreshold := time.Duration(needlePWM.Top()) * needleActivation / mjolnir2.NeedlePeriod
+	// err := needlePWM.Configure(machine.PWMConfig{
+	// 	Period: uint64(mjolnir2.NeedlePeriod),
+	// })
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// ch, err := needlePWM.Channel(NEEDLE_ENABLE)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// needlePWM.Set(ch, 0)
+	// needlePWMThreshold := time.Duration(needlePWM.Top()) * needleActivation / mjolnir2.NeedlePeriod
 
 	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
 		return nil, err
@@ -126,11 +119,11 @@ func Init() (*Platform, error) {
 		touchDev: touch,
 		wakeups:  make(chan struct{}, 1),
 		needleDev: func(enable bool) {
-			t := needlePWMThreshold
-			if !enable {
-				t = 0
-			}
-			needlePWM.Set(ch, uint32(t))
+			// t := needlePWMThreshold
+			// if !enable {
+			// 	t = 0
+			// }
+			// needlePWM.Set(ch, uint32(t))
 		},
 	}
 	for i := range p.display.buffers {
