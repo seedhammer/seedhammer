@@ -44,7 +44,9 @@ func (d *Device) ReadTouchPoint() (image.Point, bool) {
 	wr := d.buf[:1]
 	rd := d.buf[1:]
 	wr[0] = _TD_STATUS
-	d.bus.Tx(_Address, wr, rd)
+	if err := d.bus.Tx(_Address, wr, rd); err != nil {
+		return image.Point{}, false
+	}
 
 	switch rd[0] {
 	case 0, 255:

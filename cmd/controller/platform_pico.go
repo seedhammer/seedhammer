@@ -20,6 +20,7 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/gui"
 	"seedhammer.com/image/rgb565"
+	"tinygo.org/x/drivers/delay"
 )
 
 const (
@@ -35,9 +36,9 @@ type button struct {
 type Platform struct {
 	wakeups chan struct{}
 
-	lcdDev    *ili9488.Device
-	touchDev  *ft6x36.Device
-	needleDev func(bool)
+	lcdDev   *ili9488.Device
+	touchDev *ft6x36.Device
+	engraver *mjolnir2.Device
 
 	touch struct {
 		last    bool
@@ -70,6 +71,7 @@ const (
 
 	DRV_ENABLE = machine.GPIO10
 
+	NEEDLE       = machine.GPIO8
 	NEEDLE_SENSE = machine.GPIO26
 
 	STEPPER_UART = machine.GPIO9
@@ -103,7 +105,7 @@ func Init() (*Platform, error) {
 	// if err != nil {
 	// 	return nil, err
 	// }
-	// ch, err := needlePWM.Channel(NEEDLE_ENABLE)
+	// ch, err := needlePWM.Channel(NEEDLE)
 	// if err != nil {
 	// 	return nil, err
 	// }
@@ -118,13 +120,6 @@ func Init() (*Platform, error) {
 	p := &Platform{
 		touchDev: touch,
 		wakeups:  make(chan struct{}, 1),
-		needleDev: func(enable bool) {
-			// t := needlePWMThreshold
-			// if !enable {
-			// 	t = 0
-			// }
-			// needlePWM.Set(ch, uint32(t))
-		},
 	}
 	for i := range p.display.buffers {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
@@ -134,6 +129,34 @@ func Init() (*Platform, error) {
 	if err := p.lcdDev.Configure(ili9488.Config{}); err != nil {
 		return nil, err
 	}
+	X, err := tmc2209.New(X_ADDR, STEPPER_UART, X_DIAG, X_DIR, X_STEP)
+	if err != nil {
+		return nil, fmt.Errorf("pico: x-axis stepper: %w", err)
+	}
+	Y, err := tmc2209.New(Y_ADDR, STEPPER_UART, Y_DIAG, Y_DIR, Y_STEP)
+	if err != nil {
+		return nil, fmt.Errorf("pico: y-axis stepper: %w", err)
+	}
+	needle := func(enable bool) {
+		// t := needlePWMThreshold
+		// if !enable {
+		// 	t = 0
+		// }
+		// needlePWM.Set(ch, uint32(t))
+	}
+	engraver, err := mjolnir2.New(DRV_ENABLE, X, Y, needle)
+	if err != nil {
+		return nil, err
+	}
+	p.engraver = engraver
+	// NEEDLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	// NEEDLE.Low()
+	// for range 10 {
+	// 	NEEDLE.High()
+	// 	delay.Sleep(5 * time.Millisecond)
+	// 	NEEDLE.Low()
+	// 	delay.Sleep(15 * time.Millisecond)
+	// }
 
 	return p, nil
 }
@@ -196,19 +219,7 @@ func (e engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan str
 }
 
 func (p *Platform) Engraver() (gui.Engraver, error) {
-	X, err := tmc2209.New(X_ADDR, STEPPER_UART, X_DIAG, X_DIR, X_STEP)
-	if err != nil {
-		return nil, fmt.Errorf("pico: x-axis stepper: %w", err)
-	}
-	Y, err := tmc2209.New(Y_ADDR, STEPPER_UART, Y_DIAG, Y_DIR, Y_STEP)
-	if err != nil {
-		return nil, fmt.Errorf("pico: y-axis stepper: %w", err)
-	}
-	dev, err := mjolnir2.New(DRV_ENABLE, X, Y, p.needleDev)
-	if err != nil {
-		return nil, err
-	}
-	return engraver{dev}, nil
+	return engraver{p.engraver}, nil
 }
 
 func (p *Platform) ScanQR(img *image.Gray) ([][]byte, error) {
