@@ -20,7 +20,6 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/gui"
 	"seedhammer.com/image/rgb565"
-	"tinygo.org/x/drivers/delay"
 )
 
 const (

@@ -122,11 +122,11 @@ func New(port uint8, uart, diag, dir, step machine.Pin) (*Device, error) {
 	// then.
 	const min_SENDDELAY = 2
 	if err := d.writeNoRead(port, SLAVECONF, min_SENDDELAY<<8, 0); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tmc2209: set SLAVECONF: %w", err)
 	}
 	gconf, err := d.read(port, GCONF)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tmc2209: read GCONF: %w", err)
 	}
 	// Disable standstill operation through the UART pin (we're using it for UART).
 	gconf |= pdn_disable
@@ -135,7 +135,7 @@ func New(port uint8, uart, diag, dir, step machine.Pin) (*Device, error) {
 	// Use IRUN/IHOLD for current setting.
 	gconf &^= I_scale_analog
 	if err := d.write(port, GCONF, gconf); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tmc2209: set GCONF: %w", err)
 	}
 	irun := IRUN
 	if irun > 31 {
@@ -145,12 +145,12 @@ func New(port uint8, uart, diag, dir, step machine.Pin) (*Device, error) {
 	ihold := irun
 	ihold_irun := iholdDelay<<16 | uint32(irun)<<8 | uint32(ihold)
 	if err := d.write(port, IHOLD_IRUN, ihold_irun); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tmc2209: set IHOLD/IRUN: %w", err)
 	}
 
 	chopconf, err := d.read(port, CHOPCONF)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tmc2209: read CHOPCONF: %w", err)
 	}
 	// Set microstep resolution.
 	chopconf &^= 0b1111 << mres_shift
@@ -161,16 +161,16 @@ func New(port uint8, uart, diag, dir, step machine.Pin) (*Device, error) {
 
 	// Reset GSTAT.
 	if err := d.write(port, GSTAT, 0b111); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tmc2209: set GSTAT: %w", err)
 	}
 
 	// Coolstep interferes with sensorless homing (SGTHRS)
 	// and requires tuning. Disable for now.
 	if err := d.write(port, TCOOLTHRS, 0xfffff); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tmc2209: set TCOOLHRS: %w", err)
 	}
 	if err := d.StallThreshold(0); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tmc2209: %w", err)
 	}
 
 	return d, nil
@@ -182,7 +182,10 @@ func (d *Device) StallResult() (int, error) {
 }
 
 func (d *Device) StallThreshold(threshold uint8) error {
-	return d.write(d.port, SGTHRS, uint32(threshold))
+	if err := d.write(d.port, SGTHRS, uint32(threshold)); err != nil {
+		return fmt.Errorf("set threshold: set SGTHRS: %w", err)
+	}
+	return nil
 }
 
 func (d *Device) Reset() {
@@ -284,7 +287,7 @@ func (d *Device) rx(rx []byte) error {
 	// Wait for start bit.
 	for d.uart.Get() {
 		if time.Since(now) > timeoutCycles*period {
-			return errors.New("tmc2209: receive timeout")
+			return errors.New("rx: receive timeout")
 		}
 	}
 	// Shift period a half cycle to sample input
@@ -294,7 +297,7 @@ func (d *Device) rx(rx []byte) error {
 	for len(rem) > 0 {
 		// Start bit.
 		if d.uart.Get() {
-			berr = errors.New("tmc2209: received invalid start bit")
+			berr = errors.New("rx: received invalid start bit")
 		}
 		delay.Sleep(period)
 		for i := 0; i < 8; i++ {
@@ -307,7 +310,7 @@ func (d *Device) rx(rx []byte) error {
 		rem = rem[1:]
 		// Stop bit.
 		if !d.uart.Get() {
-			berr = errors.New("tmc2209: received invalid stop bit")
+			berr = errors.New("rx: received invalid stop bit")
 		}
 		delay.Sleep(period)
 	}
@@ -315,13 +318,13 @@ func (d *Device) rx(rx []byte) error {
 		return berr
 	}
 	if crc8(buf[:len(buf)-1]) != buf[len(buf)-1] {
-		return errors.New("tmc2209: invalid CRC for receive datagram")
+		return errors.New("rx: invalid CRC for receive datagram")
 	}
 	if (buf[0] & 0b1111) != syncNibble {
-		return errors.New("tmc2209: invalid sync nibble")
+		return errors.New("rx: invalid sync nibble")
 	}
 	if buf[1] != 0xff {
-		return errors.New("tmc2209: invalid node address")
+		return errors.New("rx: invalid node address")
 	}
 	copy(rx, buf[2:])
 
@@ -345,7 +348,7 @@ func (d *Device) read(node, addr byte) (uint32, error) {
 			continue
 		}
 		if rx[0] != addr {
-			lerr = errors.New("tmc2209: unexpected receive address")
+			lerr = errors.New("read: unexpected receive address")
 			continue
 		}
 		return uint32(rx[1])<<24 | uint32(rx[2])<<16 | uint32(rx[3])<<8 | uint32(rx[4]), nil
@@ -384,7 +387,7 @@ func (d *Device) writeNoRead(node, addr byte, val uint32, ifcnt uint32) error {
 		// Check for write error.
 		if uint8(ifcnt2)-uint8(ifcnt) != 1 {
 			ifcnt = ifcnt2
-			lerr = errors.New("tmc2209: write error")
+			lerr = errors.New("write count not updated")
 			continue
 		}
 		return nil
