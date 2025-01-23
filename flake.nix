@@ -722,6 +722,8 @@
                 gcc-arm-embedded
                 go
                 openocd
+                pioasm
+                picotool
               ];
             };
         };

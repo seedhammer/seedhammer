@@ -7,9 +7,10 @@ import (
 	"device/rp"
 	"image"
 	"machine"
-	"runtime/volatile"
 	"time"
 	"unsafe"
+
+	"seedhammer.com/driver/pio"
 )
 
 type Device struct {
@@ -49,88 +50,38 @@ func (d *Device) Configure(c Config) error {
 
 	for _, p := range []machine.Pin{d.cs, d.rst, d.dc} {
 		p.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	}
-	mode := machine.PinPIO0
-	switch d.pio {
-	case rp.PIO0:
-	case rp.PIO1:
-		mode = machine.PinPIO1
-	default:
-		panic("unknown PIO")
-	}
-	d.wrx.Configure(machine.PinConfig{Mode: mode})
-	d.te.Configure(machine.PinConfig{Mode: mode})
-	for i := 0; i < 8; i++ {
-		(d.db0 + machine.Pin(i)).Configure(machine.PinConfig{Mode: mode})
-	}
-	for _, p := range []machine.Pin{d.cs, d.rst, d.dc} {
 		p.High()
 	}
 
-	instMem := []*volatile.Register32{
-		&d.pio.INSTR_MEM0,
-		&d.pio.INSTR_MEM1,
-		&d.pio.INSTR_MEM2,
-		&d.pio.INSTR_MEM3,
-		&d.pio.INSTR_MEM4,
-		&d.pio.INSTR_MEM5,
-		&d.pio.INSTR_MEM6,
-		&d.pio.INSTR_MEM7,
-		&d.pio.INSTR_MEM8,
-		&d.pio.INSTR_MEM9,
-		&d.pio.INSTR_MEM10,
-		&d.pio.INSTR_MEM11,
-		&d.pio.INSTR_MEM12,
-		&d.pio.INSTR_MEM13,
-		&d.pio.INSTR_MEM14,
-		&d.pio.INSTR_MEM15,
-		&d.pio.INSTR_MEM16,
-		&d.pio.INSTR_MEM17,
-		&d.pio.INSTR_MEM18,
-		&d.pio.INSTR_MEM19,
-		&d.pio.INSTR_MEM20,
-		&d.pio.INSTR_MEM21,
-		&d.pio.INSTR_MEM22,
-		&d.pio.INSTR_MEM23,
-		&d.pio.INSTR_MEM24,
-		&d.pio.INSTR_MEM25,
-		&d.pio.INSTR_MEM26,
-		&d.pio.INSTR_MEM27,
-		&d.pio.INSTR_MEM28,
-		&d.pio.INSTR_MEM29,
-		&d.pio.INSTR_MEM30,
-		&d.pio.INSTR_MEM31,
-	}
-	instMem[0].Set(0x90e0)
-	instMem[1].Set(0x6008)
-	d.pio.SetSM0_PINCTRL_SIDESET_BASE(uint32(d.wrx))
-	d.pio.SetSM0_PINCTRL_SIDESET_COUNT(1)
-	d.pio.SetSM0_PINCTRL_OUT_BASE(uint32(d.db0))
-	d.pio.SetSM0_PINCTRL_OUT_COUNT(8)
-	d.pio.SetSM0_PINCTRL_IN_BASE(uint32(d.te))
-	d.pio.SetSM0_EXECCTRL_WRAP_BOTTOM(0)
-	d.pio.SetSM0_EXECCTRL_WRAP_TOP(1)
-	// The minimum write cycle time.
-	const writeCycle = 30 * time.Nanosecond
-	// The number of PIO cycles per write.
-	const cyclesPerWrite = 2
-	// The target PIO cycle time.
-	const pioCycle = writeCycle / cyclesPerWrite
-	// The target PIO clock speed.
-	const pioClock = uint64(time.Second / pioCycle)
-	const fracBits = 8
-	// Compute fractional clock divisor, rounded up.
-	clkDiv := (uint64(machine.CPUFrequency())*(1<<fracBits) + pioClock - 1) / pioClock
-	d.pio.SM0_CLKDIV.Set(uint32(clkDiv) << 8)
-	d.pio.SetSM0_SHIFTCTRL_FJOIN_TX(0b1)
-	d.pio.SetSM0_SHIFTCTRL_PULL_THRESH(8)
+	// The minimum write cycle, from the ILI9488 datasheet.
+	const minWriteCycle = 30 * time.Nanosecond
+
+	const maxWriteSpeed = uint32(time.Second / minWriteCycle)
+	const pioCyclesPerWrite = 2
+	const pioFreq = maxWriteSpeed * pioCyclesPerWrite
+
+	progOff := uint8(0)
+	conf := ili9488ProgramDefaultConfig(progOff)
+	conf.SidesetBase = d.wrx
+	conf.OutBase = d.db0
+	conf.OutCount = 8
+	conf.InBase = d.te
+	conf.InCount = 1
+	conf.FIFOMode = pio.FIFOJoinTX
+	conf.PullThreshold = 8
+	conf.Freq = pioFreq
+	pio.Program(d.pio, progOff, ili9488Instructions)
+	pio.Configure(d.pio, pioStateMachine, conf.Build())
 
 	// Start state machine.
-	d.pio.SetCTRL_SM_ENABLE(0b1 << pioStateMachine)
+	pio.Enable(d.pio, 0b1<<pioStateMachine)
 
-	// Set up pindirs.
-	d.setPindirs(d.db0, 8, 0b1)
-	d.setPindirs(d.wrx, 1, 0b1)
+	// Set up pins.
+	d.te.Configure(machine.PinConfig{Mode: machine.PinInput})
+	pio.ConfigurePins(d.pio, pioStateMachine, d.db0, 8)
+	pio.Pindirs(d.pio, pioStateMachine, d.db0, 8, machine.PinOutput)
+	pio.ConfigurePins(d.pio, pioStateMachine, d.wrx, 1)
+	pio.Pindirs(d.pio, pioStateMachine, d.wrx, 8, machine.PinOutput)
 
 	d.cs.Low()
 	defer d.cs.High()
@@ -184,19 +135,6 @@ func (d *Device) Configure(c Config) error {
 	return nil
 }
 
-func (d *Device) setPindirs(base machine.Pin, npins int, dir uint8) {
-	for npins > 0 {
-		n := min(5, npins)
-		d.pio.SetSM0_PINCTRL_SET_BASE(uint32(base))
-		d.pio.SetSM0_PINCTRL_SET_COUNT(uint32(n))
-		// set pindir 0b11111 side 1.
-		const setPinDirInst = 0b111_10000_100_11111
-		d.pio.SM0_INSTR.Set(setPinDirInst)
-		npins -= n
-		base += machine.Pin(n)
-	}
-}
-
 func (d *Device) sendCommand(cmd byte, data ...byte) {
 	d.flushFIFO()
 	d.dc.Low()
@@ -211,7 +149,7 @@ func (d *Device) sendCommand(cmd byte, data ...byte) {
 func (d *Device) sendByte(data byte) {
 	for d.pio.GetFSTAT_TXFULL()&(0b1<<pioStateMachine) != 0 {
 	}
-	d.pio.TXF0.Set(uint32(data))
+	pio.Tx(d.pio, pioStateMachine).Set(uint32(data))
 }
 
 func (d *Device) BeginFrame(sr image.Rectangle) error {
@@ -229,8 +167,8 @@ func (d *Device) BeginFrame(sr image.Rectangle) error {
 
 func (d *Device) setPullThreshold(thres int) {
 	// Reset output shift counter before changing the threshold.
-	d.pio.SetCTRL_SM_RESTART(0b1 << pioStateMachine)
-	d.pio.SetSM0_SHIFTCTRL_PULL_THRESH(uint32(thres))
+	pio.Restart(d.pio, 0b1<<pioStateMachine)
+	pio.PullThreshold(d.pio, pioStateMachine, thres)
 }
 
 func (d *Device) flushFIFO() {
@@ -258,9 +196,7 @@ func (d *Device) Draw(buf [][2]byte) {
 		// and the LCD is on (!firstFrame).
 		if !d.firstFrame {
 			// Wait for V-sync.
-			// wait 1 pin 0 side 1.
-			const waitInst = 0b001_10000_1_01_00000
-			d.pio.SM0_INSTR.Set(waitInst)
+			pio.Instr(d.pio, pioStateMachine).Set(waitForVSYNCInst)
 		}
 	} else {
 		// Wait for previous draw to complete.
@@ -269,25 +205,15 @@ func (d *Device) Draw(buf [][2]byte) {
 
 	dma := rp.DMA
 	dma.CH0_READ_ADDR.Set(uint32(uintptr(unsafe.Pointer(unsafe.SliceData(buf)))))
-	dma.CH0_WRITE_ADDR.Set(uint32(uintptr(unsafe.Pointer(&d.pio.TXF0))))
+	dma.CH0_WRITE_ADDR.Set(uint32(uintptr(unsafe.Pointer(pio.Tx(d.pio, pioStateMachine)))))
 	dma.CH0_TRANS_COUNT.Set(uint32(len(buf)))
-	const (
-		DREQ_PIO0_TX0 = 0
-		DREQ_PIO1_TX0 = 8
-	)
-	dreq := uint32(DREQ_PIO0_TX0)
-	switch d.pio {
-	case rp.PIO0:
-	case rp.PIO1:
-		dreq = DREQ_PIO1_TX0
-	}
 	dma.CH0_CTRL_TRIG.Set(
 		// Increment read address on each transfer.
 		rp.DMA_CH0_CTRL_TRIG_INCR_READ |
 			// Transfer size is 16 bits.
 			rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_SIZE_HALFWORD<<rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_Pos |
 			// Pace transfers by the PIO TX FIFO.
-			dreq<<rp.DMA_CH0_CTRL_TRIG_TREQ_SEL_Pos |
+			pio.DreqTx(d.pio, pioStateMachine)<<rp.DMA_CH0_CTRL_TRIG_TREQ_SEL_Pos |
 			// Start transfer.
 			rp.DMA_CH0_CTRL_TRIG_EN,
 	)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/draw"
+	"log"
 	"machine"
 	"time"
 	"unsafe"
@@ -35,9 +36,10 @@ type button struct {
 type Platform struct {
 	wakeups chan struct{}
 
-	lcdDev   *ili9488.Device
-	touchDev *ft6x36.Device
-	engraver *mjolnir2.Device
+	lcdDev      *ili9488.Device
+	touchDev    *ft6x36.Device
+	engraver    gui.Engraver
+	engraverErr error
 
 	touch struct {
 		last    bool
@@ -89,8 +91,9 @@ const (
 var (
 	needleSenseADC = machine.ADC{Pin: NEEDLE_SENSE}
 	// needlePWM      = machine.PWM7
-	touchI2C = machine.I2C1
-	lcdPIO   = rp.PIO0
+	touchI2C   = machine.I2C1
+	lcdPIO     = rp.PIO0
+	stepperPIO = rp.PIO1
 )
 
 const (
@@ -129,28 +132,13 @@ func Init() (*Platform, error) {
 		return nil, err
 	}
 	// Setup both drivers for sharing their UART pin.
-	tmc2209.Initialize(X_ADDR, STEPPER_UART)
-	tmc2209.Initialize(Y_ADDR, STEPPER_UART)
-	X, err := tmc2209.New(X_ADDR, STEPPER_UART, X_DIAG, X_DIR, X_STEP)
-	if err != nil {
-		return nil, fmt.Errorf("pico: x-axis stepper: %w", err)
+	e, err := configEngraver()
+	if err == nil {
+		p.engraver = engraver{e}
+	} else {
+		log.Printf("pico: %v", err)
+		p.engraverErr = err
 	}
-	Y, err := tmc2209.New(Y_ADDR, STEPPER_UART, Y_DIAG, Y_DIR, Y_STEP)
-	if err != nil {
-		return nil, fmt.Errorf("pico: y-axis stepper: %w", err)
-	}
-	needle := func(enable bool) {
-		// t := needlePWMThreshold
-		// if !enable {
-		// 	t = 0
-		// }
-		// needlePWM.Set(ch, uint32(t))
-	}
-	engraver, err := mjolnir2.New(DRV_ENABLE, X, Y, needle)
-	if err != nil {
-		return nil, err
-	}
-	p.engraver = engraver
 	// NEEDLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	// NEEDLE.Low()
 	// for range 10 {
@@ -161,6 +149,31 @@ func Init() (*Platform, error) {
 	// }
 
 	return p, nil
+}
+
+func configEngraver() (*mjolnir2.Device, error) {
+	uart, err := tmc2209.NewUART(stepperPIO, STEPPER_UART)
+	if err != nil {
+		return nil, err
+	}
+	X := tmc2209.New(uart, X_ADDR, X_DIAG, X_DIR, X_STEP)
+	Y := tmc2209.New(uart, Y_ADDR, Y_DIAG, Y_DIR, Y_STEP)
+	X.SetupSharedUART()
+	Y.SetupSharedUART()
+	if err := X.Configure(); err != nil {
+		return nil, fmt.Errorf("x-axis stepper: %w", err)
+	}
+	if err := Y.Configure(); err != nil {
+		return nil, fmt.Errorf("y-axis stepper: %w", err)
+	}
+	needle := func(enable bool) {
+		// t := needlePWMThreshold
+		// if !enable {
+		// 	t = 0
+		// }
+		// needlePWM.Set(ch, uint32(t))
+	}
+	return mjolnir2.New(DRV_ENABLE, X, Y, needle)
 }
 
 func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Event {
@@ -222,7 +235,7 @@ func (e engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan str
 }
 
 func (p *Platform) Engraver() (gui.Engraver, error) {
-	return engraver{p.engraver}, nil
+	return p.engraver, p.engraverErr
 }
 
 func (p *Platform) ScanQR(img *image.Gray) ([][]byte, error) {

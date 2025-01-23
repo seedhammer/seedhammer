@@ -8,11 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"time"
 
 	"machine"
-
-	"tinygo.org/x/drivers/delay"
 )
 
 // Motor configuration.
@@ -27,7 +24,6 @@ const (
 
 // Settings.
 const (
-	baud = 9600
 	// The number of cycles to wait for the reply of
 	// a read request.
 	timeoutCycles = 50
@@ -55,17 +51,11 @@ const (
 	// IHOLDDELAY is the number of clock cycles to delay
 	// current switch from IRUN to IHOLD on standstill.
 	iholdDelay = 0
-
-	// retries is the number of attempts for a read or a write
-	// before giving up.
-	retries = 10
 )
 
-const period = time.Second / baud
-
 type Device struct {
+	uart *UART
 	port uint8
-	uart machine.Pin
 	step machine.Pin
 	dir  machine.Pin
 	diag machine.Pin
@@ -106,39 +96,43 @@ const (
 	min_SENDDELAY = 2
 )
 
-const syncNibble = 0b0101
-
-// Initialize a stepper driver by increasing its SENDDELAY, to
-// avoid cross talk when multiple drivers share UART pin.
-func Initialize(port uint8, uart machine.Pin) {
-	// Reading from a slave may confuse another until
-	// SENDDELAY is raised. Don't read anything until
-	// then.
-	dg := writeDatagram(port, SLAVECONF, min_SENDDELAY<<8)
-	for i := 0; i < retries; i++ {
-		tx(uart, dg[:])
-	}
-}
-
-func New(port uint8, uart, diag, dir, step machine.Pin) (*Device, error) {
-	step.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	dir.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	diag.Configure(machine.PinConfig{Mode: machine.PinInput})
+func New(uart *UART, port uint8, diag, dir, step machine.Pin) *Device {
 	d := &Device{
-		port: port,
 		uart: uart,
+		port: port,
 		step: step,
 		dir:  dir,
 		diag: diag,
 	}
+	return d
+}
+
+// SetupSharedUART a stepper driver by increasing its SENDDELAY, to
+// avoid cross talk when multiple drivers share UART pin.
+func (d *Device) SetupSharedUART() error {
+	// Reading from a slave may confuse another until
+	// SENDDELAY is raised. Don't read anything until
+	// then.
+	dg := writeDatagram(d.port, SLAVECONF, min_SENDDELAY<<8)
+	for i := 0; i < attempts; i++ {
+		d.uart.tx(dg[:])
+	}
+	return nil
+}
+
+func (d *Device) Configure() error {
+	d.step.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	d.dir.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	d.diag.Configure(machine.PinConfig{Mode: machine.PinInput})
+
 	// This is redundant with [Initialize], but do it anyway in case the settings
 	// didn't stick.
-	if err := d.write(port, SLAVECONF, min_SENDDELAY<<8); err != nil {
-		return nil, fmt.Errorf("tmc2209: set SLAVECONF: %w", err)
+	if err := d.write(SLAVECONF, min_SENDDELAY<<8); err != nil {
+		return fmt.Errorf("tmc2209: set SLAVECONF: %w", err)
 	}
-	gconf, err := d.read(port, GCONF)
+	gconf, err := d.read(GCONF)
 	if err != nil {
-		return nil, fmt.Errorf("tmc2209: read GCONF: %w", err)
+		return fmt.Errorf("tmc2209: read GCONF: %w", err)
 	}
 	// Disable standstill operation through the UART pin (we're using it for UART).
 	gconf |= pdn_disable
@@ -146,8 +140,8 @@ func New(port uint8, uart, diag, dir, step machine.Pin) (*Device, error) {
 	gconf |= mstep_reg_select
 	// Use IRUN/IHOLD for current setting.
 	gconf &^= I_scale_analog
-	if err := d.write(port, GCONF, gconf); err != nil {
-		return nil, fmt.Errorf("tmc2209: set GCONF: %w", err)
+	if err := d.write(GCONF, gconf); err != nil {
+		return fmt.Errorf("tmc2209: set GCONF: %w", err)
 	}
 	irun := IRUN
 	if irun > 31 {
@@ -156,45 +150,45 @@ func New(port uint8, uart, diag, dir, step machine.Pin) (*Device, error) {
 	// IHOLD is the standstill current, equal to IRUN.
 	ihold := irun
 	ihold_irun := iholdDelay<<16 | uint32(irun)<<8 | uint32(ihold)
-	if err := d.write(port, IHOLD_IRUN, ihold_irun); err != nil {
-		return nil, fmt.Errorf("tmc2209: set IHOLD/IRUN: %w", err)
+	if err := d.write(IHOLD_IRUN, ihold_irun); err != nil {
+		return fmt.Errorf("tmc2209: set IHOLD/IRUN: %w", err)
 	}
 
-	chopconf, err := d.read(port, CHOPCONF)
+	chopconf, err := d.read(CHOPCONF)
 	if err != nil {
-		return nil, fmt.Errorf("tmc2209: read CHOPCONF: %w", err)
+		return fmt.Errorf("tmc2209: read CHOPCONF: %w", err)
 	}
 	// Set microstep resolution.
 	chopconf &^= 0b1111 << mres_shift
 	chopconf |= (8 - stepExp) << mres_shift
 	// Disable step interpolation.
 	chopconf &^= intpol
-	d.write(port, CHOPCONF, chopconf)
+	d.write(CHOPCONF, chopconf)
 
 	// Reset GSTAT.
-	if err := d.write(port, GSTAT, 0b111); err != nil {
-		return nil, fmt.Errorf("tmc2209: set GSTAT: %w", err)
+	if err := d.write(GSTAT, 0b111); err != nil {
+		return fmt.Errorf("tmc2209: set GSTAT: %w", err)
 	}
 
 	// Coolstep interferes with sensorless homing (SGTHRS)
 	// and requires tuning. Disable for now.
-	if err := d.write(port, TCOOLTHRS, 0xfffff); err != nil {
-		return nil, fmt.Errorf("tmc2209: set TCOOLHRS: %w", err)
+	if err := d.write(TCOOLTHRS, 0xfffff); err != nil {
+		return fmt.Errorf("tmc2209: set TCOOLHRS: %w", err)
 	}
 	if err := d.StallThreshold(0); err != nil {
-		return nil, fmt.Errorf("tmc2209: %w", err)
+		return fmt.Errorf("tmc2209: %w", err)
 	}
 
-	return d, nil
+	return nil
 }
 
 func (d *Device) StallResult() (int, error) {
-	res, err := d.read(d.port, SG_RESULT)
+	res, err := d.read(SG_RESULT)
 	return int(res) / 2, err
 }
 
 func (d *Device) StallThreshold(threshold uint8) error {
-	if err := d.write(d.port, SGTHRS, uint32(threshold)); err != nil {
+	if err := d.write(SGTHRS, uint32(threshold)); err != nil {
 		return fmt.Errorf("set threshold: set SGTHRS: %w", err)
 	}
 	return nil
@@ -206,7 +200,7 @@ func (d *Device) Reset() {
 }
 
 func (d *Device) Error() error {
-	stat, err := d.read(d.port, GSTAT)
+	stat, err := d.read(GSTAT)
 	if err != nil {
 		return err
 	}
@@ -258,100 +252,16 @@ func crc8(data []byte) byte {
 	return crc
 }
 
-func tx(uart machine.Pin, tx []byte) {
-	// Add sync nibble and checksum.
-	buf := make([]byte, 8)
-	buf = buf[:len(tx)+2]
-	buf[0] = syncNibble
-	copy(buf[1:], tx)
-	buf[len(buf)-1] = crc8(buf[:len(buf)-1])
-
-	uart.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	uart.High()
-
-	delay.Sleep(txWaitCycles * period)
-	// Transmit.
-	rem := buf
-	for len(rem) > 0 {
-		// Start bit.
-		uart.Low()
-		delay.Sleep(period)
-		for i := 0; i < 8; i++ {
-			bit := rem[0]&0b1 == 0b1
-			rem[0] >>= 1
-			uart.Set(bit)
-			delay.Sleep(period)
-		}
-		// Stop bit.
-		uart.High()
-		rem = rem[1:]
-		delay.Sleep(period)
-	}
-	uart.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
-}
-
-func (d *Device) rx(rx []byte) error {
-	buf := make([]byte, 8)
-	buf = buf[:len(rx)+3]
-	rem := buf
-	now := time.Now()
-	// Wait for start bit.
-	for d.uart.Get() {
-		if time.Since(now) > timeoutCycles*period {
-			return errors.New("rx: receive timeout")
-		}
-	}
-	// Shift period a half cycle to sample input
-	// in the center of a bit.
-	delay.Sleep(period / 2)
-	var berr error
-	for len(rem) > 0 {
-		// Start bit.
-		if d.uart.Get() {
-			berr = errors.New("rx: received invalid start bit")
-		}
-		delay.Sleep(period)
-		for i := 0; i < 8; i++ {
-			rem[0] >>= 1
-			if d.uart.Get() {
-				rem[0] |= 0x80
-			}
-			delay.Sleep(period)
-		}
-		// Stop bit.
-		if !d.uart.Get() {
-			berr = errors.New("rx: received invalid stop bit")
-		}
-		rem = rem[1:]
-		delay.Sleep(period)
-	}
-	if berr != nil {
-		return berr
-	}
-	if crc8(buf[:len(buf)-1]) != buf[len(buf)-1] {
-		return errors.New("rx: invalid CRC for receive datagram")
-	}
-	if (buf[0] & 0b1111) != syncNibble {
-		return errors.New("rx: invalid sync nibble")
-	}
-	if buf[1] != 0xff {
-		return errors.New("rx: invalid node address")
-	}
-	copy(rx, buf[2:])
-
-	return nil
-}
-
-func (d *Device) read(node, addr byte) (uint32, error) {
+func (d *Device) read(addr byte) (uint32, error) {
 	dg := []byte{
-		node,
+		d.port,
 		addr,
 	}
 	rx := make([]byte, 5)
 	var lerr error
-	for i := 0; i < retries; i++ {
-		tx(d.uart, dg)
-		if err := d.rx(rx); err != nil {
+	for i := 0; i < attempts; i++ {
+		d.uart.tx(dg)
+		if err := d.uart.rx(rx); err != nil {
 			lerr = err
 			continue
 		}
@@ -364,31 +274,16 @@ func (d *Device) read(node, addr byte) (uint32, error) {
 	return 0, lerr
 }
 
-func (d *Device) write(node, addr uint8, val uint32) error {
-	ifcnt, err := d.read(node, IFCNT)
+func (d *Device) write(addr uint8, val uint32) error {
+	ifcnt, err := d.read(IFCNT)
 	if err != nil {
 		return err
 	}
-	return d.writeNoRead(node, addr, val, ifcnt)
-}
-
-func writeDatagram(node, addr uint8, val uint32) [6]byte {
-	const WRITE = 0x80
-	return [...]byte{
-		node,
-		addr | WRITE,
-		byte(val >> 24), byte(val >> 16), byte(val >> 8), byte(val),
-	}
-}
-
-// writeNoRead is like write, except that it won't attempt to
-// read IFCNT before writing.
-func (d *Device) writeNoRead(node, addr byte, val uint32, ifcnt uint32) error {
-	dg := writeDatagram(node, addr, val)
+	dg := writeDatagram(d.port, addr, val)
 	var lerr error
-	for i := 0; i < retries; i++ {
-		tx(d.uart, dg[:])
-		ifcnt2, err := d.read(node, IFCNT)
+	for i := 0; i < attempts; i++ {
+		d.uart.tx(dg[:])
+		ifcnt2, err := d.read(IFCNT)
 		if err != nil {
 			lerr = err
 			continue
@@ -402,4 +297,13 @@ func (d *Device) writeNoRead(node, addr byte, val uint32, ifcnt uint32) error {
 		return nil
 	}
 	return lerr
+}
+
+func writeDatagram(node, addr uint8, val uint32) [6]byte {
+	const WRITE = 0x80
+	return [...]byte{
+		node,
+		addr | WRITE,
+		byte(val >> 24), byte(val >> 16), byte(val >> 8), byte(val),
+	}
 }
