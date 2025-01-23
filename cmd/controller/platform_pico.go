@@ -128,6 +128,9 @@ func Init() (*Platform, error) {
 	if err := p.lcdDev.Configure(ili9488.Config{}); err != nil {
 		return nil, err
 	}
+	// Setup both drivers for sharing their UART pin.
+	tmc2209.Initialize(X_ADDR, STEPPER_UART)
+	tmc2209.Initialize(Y_ADDR, STEPPER_UART)
 	X, err := tmc2209.New(X_ADDR, STEPPER_UART, X_DIAG, X_DIR, X_STEP)
 	if err != nil {
 		return nil, fmt.Errorf("pico: x-axis stepper: %w", err)
@@ -180,7 +183,8 @@ func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Even
 				X: inp.pos.Y,
 				Y: lcdHeight - inp.pos.X,
 			}
-			fmt.Println("touch", pt)
+			fmt.Println("touch", pt, inp.last)
+			evts = append(evts, gui.ButtonEvent{Button: gui.Button3, Pressed: inp.last}.Event())
 			return evts
 		}
 		if !time.Now().Before(deadline) {

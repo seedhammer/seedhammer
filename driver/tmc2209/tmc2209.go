@@ -102,9 +102,23 @@ const (
 	// CHOPCONF settings
 	mres_shift = 24
 	intpol     = 1 << 28
+
+	min_SENDDELAY = 2
 )
 
 const syncNibble = 0b0101
+
+// Initialize a stepper driver by increasing its SENDDELAY, to
+// avoid cross talk when multiple drivers share UART pin.
+func Initialize(port uint8, uart machine.Pin) {
+	// Reading from a slave may confuse another until
+	// SENDDELAY is raised. Don't read anything until
+	// then.
+	dg := writeDatagram(port, SLAVECONF, min_SENDDELAY<<8)
+	for i := 0; i < retries; i++ {
+		tx(uart, dg[:])
+	}
+}
 
 func New(port uint8, uart, diag, dir, step machine.Pin) (*Device, error) {
 	step.Configure(machine.PinConfig{Mode: machine.PinOutput})
@@ -117,11 +131,9 @@ func New(port uint8, uart, diag, dir, step machine.Pin) (*Device, error) {
 		dir:  dir,
 		diag: diag,
 	}
-	// Reading from a slave may confuse another until
-	// SENDDELAY is raised. Don't read anything until
-	// then.
-	const min_SENDDELAY = 2
-	if err := d.writeNoRead(port, SLAVECONF, min_SENDDELAY<<8, 0); err != nil {
+	// This is redundant with [Initialize], but do it anyway in case the settings
+	// didn't stick.
+	if err := d.write(port, SLAVECONF, min_SENDDELAY<<8); err != nil {
 		return nil, fmt.Errorf("tmc2209: set SLAVECONF: %w", err)
 	}
 	gconf, err := d.read(port, GCONF)
@@ -246,7 +258,7 @@ func crc8(data []byte) byte {
 	return crc
 }
 
-func (d *Device) tx(tx []byte) error {
+func tx(uart machine.Pin, tx []byte) {
 	// Add sync nibble and checksum.
 	buf := make([]byte, 8)
 	buf = buf[:len(tx)+2]
@@ -254,29 +266,28 @@ func (d *Device) tx(tx []byte) error {
 	copy(buf[1:], tx)
 	buf[len(buf)-1] = crc8(buf[:len(buf)-1])
 
-	d.uart.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	d.uart.High()
+	uart.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	uart.High()
 
 	delay.Sleep(txWaitCycles * period)
 	// Transmit.
 	rem := buf
 	for len(rem) > 0 {
 		// Start bit.
-		d.uart.Low()
+		uart.Low()
 		delay.Sleep(period)
 		for i := 0; i < 8; i++ {
 			bit := rem[0]&0b1 == 0b1
 			rem[0] >>= 1
-			d.uart.Set(bit)
+			uart.Set(bit)
 			delay.Sleep(period)
 		}
 		// Stop bit.
-		d.uart.High()
+		uart.High()
 		rem = rem[1:]
 		delay.Sleep(period)
 	}
-	d.uart.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
-	return nil
+	uart.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
 }
 
 func (d *Device) rx(rx []byte) error {
@@ -307,11 +318,11 @@ func (d *Device) rx(rx []byte) error {
 			}
 			delay.Sleep(period)
 		}
-		rem = rem[1:]
 		// Stop bit.
 		if !d.uart.Get() {
 			berr = errors.New("rx: received invalid stop bit")
 		}
+		rem = rem[1:]
 		delay.Sleep(period)
 	}
 	if berr != nil {
@@ -339,10 +350,7 @@ func (d *Device) read(node, addr byte) (uint32, error) {
 	rx := make([]byte, 5)
 	var lerr error
 	for i := 0; i < retries; i++ {
-		if err := d.tx(dg); err != nil {
-			lerr = err
-			continue
-		}
+		tx(d.uart, dg)
 		if err := d.rx(rx); err != nil {
 			lerr = err
 			continue
@@ -356,7 +364,7 @@ func (d *Device) read(node, addr byte) (uint32, error) {
 	return 0, lerr
 }
 
-func (d *Device) write(node, addr byte, val uint32) error {
+func (d *Device) write(node, addr uint8, val uint32) error {
 	ifcnt, err := d.read(node, IFCNT)
 	if err != nil {
 		return err
@@ -364,21 +372,22 @@ func (d *Device) write(node, addr byte, val uint32) error {
 	return d.writeNoRead(node, addr, val, ifcnt)
 }
 
-// writeFirst is like write, except that it won't attempt to
-// read IFCNT before writing.
-func (d *Device) writeNoRead(node, addr byte, val uint32, ifcnt uint32) error {
+func writeDatagram(node, addr uint8, val uint32) [6]byte {
 	const WRITE = 0x80
-	dg := []byte{
+	return [...]byte{
 		node,
 		addr | WRITE,
 		byte(val >> 24), byte(val >> 16), byte(val >> 8), byte(val),
 	}
+}
+
+// writeNoRead is like write, except that it won't attempt to
+// read IFCNT before writing.
+func (d *Device) writeNoRead(node, addr byte, val uint32, ifcnt uint32) error {
+	dg := writeDatagram(node, addr, val)
 	var lerr error
 	for i := 0; i < retries; i++ {
-		if err := d.tx(dg); err != nil {
-			lerr = err
-			continue
-		}
+		tx(d.uart, dg[:])
 		ifcnt2, err := d.read(node, IFCNT)
 		if err != nil {
 			lerr = err
