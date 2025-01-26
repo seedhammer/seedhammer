@@ -3,7 +3,7 @@
 // Package ft3x36 implements a TinyGo driver for the ft6x36 capacitive
 // touch controllers.
 //
-// Datasheet: https://focuslcds.com/content/FT6236.pdf
+// Datasheet: https://www.buydisplay.com/download/ic/FT6236-FT6336-FT6436L-FT6436_Datasheet.pdf
 package ft6x36
 
 import (
@@ -34,10 +34,6 @@ const (
 )
 
 func (d *Device) Configure(_ Config) {
-	// Set interrupt to polling mode.
-	d.buf[0] = _G_MODE
-	d.buf[1] = 0x00
-	d.bus.Tx(_Address, d.buf[:], nil)
 }
 
 func (d *Device) ReadTouchPoint() (image.Point, bool) {
