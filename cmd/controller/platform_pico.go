@@ -142,13 +142,24 @@ func Init() (*Platform, error) {
 		log.Printf("pico: %v", err)
 		p.engraverErr = err
 	}
+	// machine.InitADC()
+	// needleSenseADC.Configure(machine.ADCConfig{})
 	// NEEDLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	// NEEDLE.Low()
-	// for range 10 {
+	// samples := make([]uint16, 10000)
+	// samples = samples[:0]
+	// for range 2 {
+	// 	now := time.Now()
 	// 	NEEDLE.High()
-	// 	delay.Sleep(5 * time.Millisecond)
+	// 	for time.Since(now) < 5*time.Millisecond {
+	// 		samples = append(samples, needleSenseADC.Get())
+	// 	}
 	// 	NEEDLE.Low()
-	// 	delay.Sleep(15 * time.Millisecond)
+	// 	for time.Since(now) < 20*time.Millisecond {
+	// 		samples = append(samples, needleSenseADC.Get())
+	// 	}
+	// 	fmt.Println(len(samples), samples)
+	// 	samples = samples[:0]
 	// }
 
 	return p, nil
