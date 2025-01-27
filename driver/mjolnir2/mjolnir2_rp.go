@@ -37,7 +37,7 @@ const (
 const (
 	// stallThreshold is the TMC2209 SGTHRS for triggering a
 	// stall.
-	stallThreshold = 220
+	stallThreshold = 120
 	// Maximum distance to travel before giving up homing.
 	maxHomingMM = 250
 )
