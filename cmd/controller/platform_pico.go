@@ -45,9 +45,6 @@ type Platform struct {
 	touch struct {
 		last    bool
 		lastPos image.Point
-		current bool
-		pos     image.Point
-		tim     time.Time
 	}
 
 	display struct {
@@ -102,6 +99,7 @@ const (
 )
 
 func Init() (*Platform, error) {
+	boot := time.Now()
 	// err := needlePWM.Configure(machine.PWMConfig{
 	// 	Period: uint64(mjolnir2.NeedlePeriod),
 	// })
@@ -115,14 +113,8 @@ func Init() (*Platform, error) {
 	// needlePWM.Set(ch, 0)
 	// needlePWMThreshold := time.Duration(needlePWM.Top()) * needleActivation / mjolnir2.NeedlePeriod
 
-	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
-		return nil, err
-	}
-	touch := ft6x36.New(touchI2C)
-	touch.Configure(ft6x36.Config{})
 	p := &Platform{
-		touchDev: touch,
-		wakeups:  make(chan struct{}, 1),
+		wakeups: make(chan struct{}, 1),
 	}
 	for i := range p.display.buffers {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
@@ -132,6 +124,16 @@ func Init() (*Platform, error) {
 	if err := p.lcdDev.Configure(ili9488.Config{}); err != nil {
 		return nil, err
 	}
+	// The touch controller needs at least 300ms to initialize.
+	for time.Since(boot) < 310*time.Millisecond {
+		runtime.Gosched()
+	}
+	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
+		return nil, err
+	}
+	touch := ft6x36.New(touchI2C)
+	touch.Configure(ft6x36.Config{})
+	p.touchDev = touch
 	// Setup both drivers for sharing their UART pin.
 	e, err := configEngraver()
 	if err == nil {
@@ -178,24 +180,18 @@ func configEngraver() (*mjolnir2.Device, error) {
 }
 
 func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Event {
-	const debounce = 5 * time.Millisecond
-
 	inp := &p.touch
 	for {
 		tp, touching := p.touchDev.ReadTouchPoint()
-		if touching {
-			inp.pos = tp
-		}
-		if touching != inp.current {
-			inp.tim = time.Now()
-			inp.current = touching
-		}
-		if inp.current != inp.last && time.Since(inp.tim) > debounce || inp.pos != inp.lastPos {
-			inp.last = inp.current
-			inp.lastPos = inp.pos
-			pt := image.Point{
-				X: inp.pos.Y,
-				Y: lcdHeight - inp.pos.X,
+		if touching != inp.last || tp != inp.lastPos {
+			inp.last = touching
+			inp.lastPos = tp
+			var pt image.Point
+			if touching {
+				pt = image.Point{
+					X: tp.Y,
+					Y: lcdHeight - tp.X,
+				}
 			}
 			fmt.Println("touch", pt, inp.last)
 			evts = append(evts, gui.ButtonEvent{Button: gui.Button3, Pressed: inp.last}.Event())

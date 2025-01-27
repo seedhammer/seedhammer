@@ -18,6 +18,9 @@ type Device struct {
 }
 
 type Config struct {
+	// TouchThreshold controls TH_GROUP, the threshold
+	// for touch detection.
+	TouchThreshold uint8
 }
 
 func New(bus *machine.I2C) *Device {
@@ -31,9 +34,15 @@ const (
 
 	_TD_STATUS = 0x02
 	_G_MODE    = 0xa4
+	_TH_GROUP  = 0x80
+	_TH_DIFF   = 0x85
 )
 
-func (d *Device) Configure(_ Config) {
+func (d *Device) Configure(c Config) {
+	if thresh := c.TouchThreshold; thresh != 0 {
+		tx := append(d.buf[:0], _TH_GROUP, thresh)
+		d.bus.Tx(_Address, tx, nil)
+	}
 }
 
 func (d *Device) ReadTouchPoint() (image.Point, bool) {
