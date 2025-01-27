@@ -10,6 +10,7 @@ import (
 	"image/draw"
 	"log"
 	"machine"
+	"runtime"
 	"time"
 	"unsafe"
 
@@ -208,6 +209,7 @@ func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Even
 			return evts
 		default:
 		}
+		runtime.Gosched()
 	}
 }
 
