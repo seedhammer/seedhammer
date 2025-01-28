@@ -83,13 +83,19 @@ const (
 	Y_STEP       = machine.GPIO3
 	Y_DIR        = machine.GPIO2
 
+	DATA_INT = machine.GPIO27
+	DATA_SDA = machine.GPIO28
+	DATA_SCL = machine.GPIO29
+
 	lcdDMAChannel = 0
 )
 
 var (
 	needleSenseADC = machine.ADC{Pin: NEEDLE_SENSE}
 	// needlePWM      = machine.PWM7
-	touchI2C   = machine.I2C1
+	touchI2C = machine.I2C1
+	// Data I2C bus for the USB PD and NFC peripherals.
+	dataI2C    = machine.I2C0
 	lcdPIO     = rp.PIO0
 	stepperPIO = rp.PIO1
 )
@@ -100,6 +106,71 @@ const (
 
 func Init() (*Platform, error) {
 	boot := time.Now()
+	if err := dataI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: DATA_SDA, SCL: DATA_SCL}); err != nil {
+		return nil, fmt.Errorf("data I2C: %w", err)
+	}
+	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
+		return nil, fmt.Errorf("touch I2C: %w", err)
+	}
+	// rd := make([]byte, 0xff)
+	// rd2 := make([]byte, 0xff)
+	// for {
+	// 	const husb2238aI2CAddr = 0x42
+	// 	if err := dataI2C.Tx(husb2238aI2CAddr, []byte{0x00}, rd); err != nil {
+	// 		return nil, fmt.Errorf("husb2238a: %w", err)
+	// 	}
+	// 	for i, b := range rd {
+	// 		if b != rd2[i] {
+	// 			fmt.Printf("USBPD: %#.2x: %.8b\n", i, b)
+	// 		}
+	// 	}
+	// 	rd, rd2 = rd2, rd
+	// 	time.Sleep(1 * time.Second)
+	// }
+	const (
+		husb2238aI2CAddr = 0x42
+		CONTRACT_STATUS0 = 0x67
+		SRC_PDO_5V       = 0x6A
+		CONTROL1         = 0x02
+		RESET            = 0x04
+
+		ENABLE = 0b1 << 3
+	)
+	// // Reset.
+	// if err := dataI2C.Tx(husb2238aI2CAddr, []byte{RESET, 0b1}, nil); err != nil {
+	// 	return nil, fmt.Errorf("husb2238a: %w", err)
+	// }
+	// time.Sleep(time.Second)
+	// Enable.
+	if err := dataI2C.Tx(husb2238aI2CAddr, []byte{CONTROL1, ENABLE}, nil); err != nil {
+		return nil, fmt.Errorf("husb2238a: %w", err)
+	}
+	// {
+	// 	rd := make([]byte, 6)
+	// 	for {
+	// 		if err := dataI2C.Tx(husb2238aI2CAddr, []byte{SRC_PDO_5V}, rd); err != nil {
+	// 			return nil, fmt.Errorf("husb2238a: %w", err)
+	// 		}
+	// 		fmt.Printf("USBPD: %.8b\n", rd)
+	// 		time.Sleep(1 * time.Second)
+	// 	}
+	// }
+	// rd := make([]byte, 6)
+	// for {
+	// 	if err := dataI2C.Tx(husb2238aI2CAddr, []byte{SRC_PDO_5V}, rd); err != nil {
+	// 		return nil, fmt.Errorf("husb2238a: %w", err)
+	// 	}
+	// 	fmt.Printf("USBPD: %.8b\n", rd)
+	// 	time.Sleep(1 * time.Second)
+	// }
+	// {
+	// 	const clrc663I2CAddr = 0b01010_00
+	// 	rd := make([]byte, 0x39)
+	// 	if err := dataI2C.Tx(clrc663I2CAddr, []byte{0x00}, rd); err != nil {
+	// 		return nil, fmt.Errorf("clrc663: %w", err)
+	// 	}
+	// 	fmt.Printf("NFC: %#x\n", rd)
+	// }
 	// err := needlePWM.Configure(machine.PWMConfig{
 	// 	Period: uint64(mjolnir2.NeedlePeriod),
 	// })
@@ -127,9 +198,6 @@ func Init() (*Platform, error) {
 	// The touch controller needs at least 300ms to initialize.
 	for time.Since(boot) < 310*time.Millisecond {
 		runtime.Gosched()
-	}
-	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
-		return nil, err
 	}
 	touch := ft6x36.New(touchI2C)
 	touch.Configure(ft6x36.Config{})
