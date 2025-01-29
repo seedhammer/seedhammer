@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"seedhammer.com/backup"
+	"seedhammer.com/driver/clrc663"
 	"seedhammer.com/driver/ft6x36"
 	"seedhammer.com/driver/ili9488"
 	"seedhammer.com/driver/mjolnir2"
@@ -163,14 +164,6 @@ func Init() (*Platform, error) {
 	// 	fmt.Printf("USBPD: %.8b\n", rd)
 	// 	time.Sleep(1 * time.Second)
 	// }
-	// {
-	// 	const clrc663I2CAddr = 0b01010_00
-	// 	rd := make([]byte, 0x39)
-	// 	if err := dataI2C.Tx(clrc663I2CAddr, []byte{0x00}, rd); err != nil {
-	// 		return nil, fmt.Errorf("clrc663: %w", err)
-	// 	}
-	// 	fmt.Printf("NFC: %#x\n", rd)
-	// }
 	// err := needlePWM.Configure(machine.PWMConfig{
 	// 	Period: uint64(mjolnir2.NeedlePeriod),
 	// })
@@ -183,6 +176,10 @@ func Init() (*Platform, error) {
 	// }
 	// needlePWM.Set(ch, 0)
 	// needlePWMThreshold := time.Duration(needlePWM.Top()) * needleActivation / mjolnir2.NeedlePeriod
+	nfc := clrc663.New(dataI2C)
+	if err := nfc.TestDump(); err != nil {
+		fmt.Printf("nfc: %v\n", err)
+	}
 
 	p := &Platform{
 		wakeups: make(chan struct{}, 1),
