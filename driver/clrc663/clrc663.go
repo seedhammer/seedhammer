@@ -1,3 +1,5 @@
+//go:build tinygo
+
 // Package clrc663 implements a TinyGo driver for the CLRC663 NFC writer.
 //
 // Datasheet: https://www.nxp.com/docs/en/data-sheet/CLRC663.pdf
@@ -13,7 +15,6 @@ import (
 
 type Device struct {
 	bus *machine.I2C
-	err error
 
 	scratch [2]byte
 }
@@ -119,248 +120,6 @@ func (d *Device) transceive(data ...uint8) error {
 	return nil
 }
 
-func (d *Device) reqa2() error {
-	if err := d.writeRegs(
-		//> =============================================
-		//>  I14443p3a_Sw_RequestA
-		//> =============================================
-		regTXWaitCtrl, 0xC0, //  TxWaitStart at the end of Rx data
-		regTxWaitLo, 0x0B, // Set min.time between Rx and Tx or between two Tx
-		regT0ReloadHi, 0x08, //> Set timeout for this command cmd. Init reload values for timers-0,1
-		regT0ReloadLo, 0x94,
-		regT1ReloadHi, 0x00,
-		regT1ReloadLo, 0x00,
-		regRxWait, 0x90, // bit9,If set to 1, the RxWait time is RxWait x(0.5/DBFreq).  bit0--bit6,Defines the time after sending, where every input is ignored
-		regTxDataNum, 0x0F,
-		regCommand, cmdIdle, // Terminate any running command.
-		regFIFOControl, 0xB0, // Flush_FiFo
-
-		regIRQ0, 0x7F, // Clear all IRQ 0,1 flags
-		regIRQ1, 0x7F, //
-	); err != nil {
-		return fmt.Errorf("clrc663: reqa: %w", err)
-	}
-
-	time.Sleep(10 * time.Millisecond)
-	//> ---------------------
-	//> Send the ReqA command
-	//> ---------------------
-	if err := d.writeRegs(
-		regFIFOData, 0x26, //Write ReqA=26(wake up all the idle card ,not sleeping，0x52) into FIFO
-		regCommand, cmdTransceive, // Start RC663 command "Transcieve"=0x07. Activate Rx after Tx finishes.
-	); err != nil {
-		return fmt.Errorf("clrc663: reqa: %w", err)
-	}
-	const timer_for_timeout = 1
-	irqs := make([]byte, 2)
-	for {
-		if err := d.readRegs(regIRQ0, irqs); err != nil {
-			return fmt.Errorf("clrc663: select: %w", err)
-		}
-		irq0, irq1 := irqs[0], irqs[1]
-		// either ERR_IRQ or RX_IRQ or Timer
-		if irq0&irqRx != 0 {
-			break // stop polling irq1 and quit the timeout loop.
-		}
-		if irq0&irqErr != 0 || irq1&(0b1<<timer_for_timeout) != 0 {
-			e, err := d.readReg(regError)
-			if err != nil {
-				panic(err)
-			}
-			fmt.Printf("error: %#.8b\n", e)
-			return fmt.Errorf("clrc663: reqa timeout or error: irq0 %#.8b irq1 %#.8b", irq0, irq1)
-		}
-	}
-	len, err := d.readReg(regFIFOLength) //read FIFO length
-	if err != nil {
-		return fmt.Errorf("clrc663: reqa: %w", err)
-	}
-	atqa := make([]byte, len)
-	if err := d.readRegs(regFIFOData, atqa); err != nil {
-		return fmt.Errorf("clrc663: reqa: %w", err)
-	}
-	fmt.Println("atqa", atqa)
-	return nil
-}
-
-func (d *Device) init2() error {
-	if err := d.writeRegs(
-		regT0Control, 0x98, //Starts at the end of Tx. Stops after Rx of first data. Auto-reloaded. 13.56 MHz input clock.
-		regT1Control, 0x92, //Starts at the end of Tx. Stops after Rx of first data. Input clock - cascaded with Timer-0.
-		regT2Control, 0x20, //Set Timer-2, T2Control_Reg:  Timer used for LFO trimming
-		regT2ReloadHi, 0x03, //Set Timer-2 reload value (T2ReloadHi_Reg and T2ReloadLo_Reg)
-		regT2ReloadLo, 0xFF, //
-		regT3Control, 0x00, // Not started automatically. Not reloaded. Input clock 13.56 MHz
-		regFIFOControl, 0x10,
-
-		regWaterLevel, 0xFE, //Set WaterLevel =(FIFO length -1),cause fifo length has been set to 255=0xff,so water level is oxfe
-		regRxBitCtrl, 0x80, //RxBitCtrl_Reg(0x0c)  Received bit after collision are replaced with 1.
-		regDrvMode, 0x80, //DrvMod reg(0x28), Tx2Inv=1,Inverts transmitter 1 at TX1 pin
-		regTxAmp, 0x00, // TxAmp_Reg(0x29),output amplitude  0: TVDD -100 mV(maxmum)
-		regDrvCon, 0x01, // TxCon register (address 2Ah),TxEnvelope
-		regTxl, 0x05, //
-		regRxSofD, 0x00, //
-		regRcv, 0x12, //
-		regCommand, cmdIdle, // Terminate any running command.
-		regFIFOControl, 0xB0, // Flush_FiFo,low alert
-		regIRQ0, 0x7F, // Clear all IRQ 0,1 flags
-		regIRQ1, 0x7F, //
-		//> =============================================
-		//>  LoadProtocol( bTxProtocol=0, bRxProtocol=0)
-		//> =============================================
-		//> Write in Fifo: Tx and Rx protocol numbers(0,0)
-		regFIFOData, 0x00, //
-		regFIFOData, 0x00, //
-		regCommand, cmdLoadProtocol, // Start RC663 command "Load Protocol"=0x0d
-	); err != nil {
-		return fmt.Errorf("clrc663: init: %w", err)
-	}
-
-	// Wait for idle interrupt meaning the command has finished.
-	for {
-		irq0, err := d.readReg(regIRQ0)
-		if err != nil {
-			return fmt.Errorf("clrc663: init: %w", err)
-		}
-		if irq0&irqIdle != 0 {
-			break // stop polling irq1 and quit the timeout loop.
-		}
-	}
-
-	if err := d.writeRegs(
-		regFIFOControl, 0xB0, // Flush_FiFo
-
-		// Apply RegisterSet
-		//
-		//> Configure CRC-16 calculation, preset value(0x6363) for Tx&Rx
-
-		regTxCrcPreset, 0x18, //means preset value is 6363,and uses CRC 16,but CRC is not automaticlly apended to the data
-		regRxCrcPreset, 0x18, //
-
-		regTxDataNum, 0x08, //
-		regTxModWidth, 0x20, // Length of the pulse modulation in carrier clks+1
-		regTxSym10BurstLen, 0x00, // Symbol 1 and 0 burst lengths = 8 bits.
-		regFrameCon, 0xCF, // Start symbol=Symbol2, Stop symbol=Symbol3
-		regRxCtrl, 0x04, // Set Rx Baudrate 106 kBaud
-
-		regRxThreshold, 0x32, // Set min-levels for Rx and phase shift
-		regRxAna, 0x00,
-		regRxWait, 0x90, // Set Rx waiting time
-		regTXWaitCtrl, 0xC0,
-		regTxWaitLo, 0x0B,
-		regT0ReloadHi, 0x08, // Set Timeout. Write T0,T1 reload values(hi,Low)
-		regT0ReloadLo, 0xD8,
-		regT1ReloadHi, 0x00,
-		regT1ReloadLo, 0x00,
-
-		regDrvMode, 0x81, // Write DrvMod register
-
-		//> MIFARE Crypto1 state is further disabled.
-		regStatus, 0x00,
-	); err != nil {
-		return fmt.Errorf("clrc663: init: %w", err)
-	}
-	return nil
-}
-
-func (d *Device) selectTag2() error {
-	// Get UID, Apply cascade level-1
-	if err := d.writeRegs(
-		regTxDataNum, 0x08, //BIT3 If cleared - it is possible to send a single symbol pattern.If set - data is sent.
-		regRxBitCtrl, 0x00, //
-	); err != nil {
-		return fmt.Errorf("clrc663: select: %w", err)
-	}
-
-	if err := d.writeFIFO(
-		0x93, //Write "Select" cmd into FIFO (SEL=93, NVB=20,cascade level-1)
-		0x20, //字节计数=2
-	); err != nil {
-		return fmt.Errorf("clrc663: select: %w", err)
-	}
-	const timer_for_timeout = 1
-	if err := d.writeRegs(regCommand, cmdTransceive); err != nil {
-		return fmt.Errorf("clrc663: select: %w", err)
-	}
-	irqs := make([]byte, 2)
-	for {
-		if err := d.readRegs(regIRQ0, irqs); err != nil {
-			return fmt.Errorf("clrc663: select: %w", err)
-		}
-		irq0, irq1 := irqs[0], irqs[1]
-		// either ERR_IRQ or RX_IRQ or Timer
-		if irq0&irqRx != 0 {
-			break // stop polling irq1 and quit the timeout loop.
-		}
-		if irq0&irqErr != 0 || irq1&(0b1<<timer_for_timeout) != 0 {
-			e, err := d.readReg(regError)
-			if err != nil {
-				panic(err)
-			}
-			fmt.Printf("error: %#.8b\n", e)
-			return fmt.Errorf("clrc663: select timeout or error: irq0 %#.8b irq1 %#.8b", irq0, irq1)
-		}
-	}
-
-	rx_len, err := d.readReg(regFIFOLength) //read FIFO length
-	if err != nil {
-		return fmt.Errorf("clrc663: select: %w", err)
-	}
-	uid := make([]byte, rx_len)
-	if err := d.readRegs(regFIFOData, uid); err != nil {
-		return fmt.Errorf("clrc663: select: %w", err)
-	}
-
-	//now we got UID ,we continue to use this UID to select the card
-	//this command needs CRC appended
-	if err := d.writeRegs(
-		regTxCrcPreset, 0x19, //preset value is6363,use crc16,crc is apended to the data stream
-		regRxCrcPreset, 0x19, //
-	); err != nil {
-		return fmt.Errorf("clrc663: select: %w", err)
-	}
-
-	if err := d.writeFIFO(
-		0x93, //select
-		0x70, //字节计数=7
-	); err != nil {
-		return fmt.Errorf("clrc663: select: %w", err)
-	}
-	if err := d.writeFIFO(uid...); err != nil {
-		return fmt.Errorf("clrc663: select: %w", err)
-	}
-	//Start tranceive command ,expecting to receive SAK ,select acknowlegement
-	if err := d.writeRegs(regCommand, cmdTransceive); err != nil {
-		return fmt.Errorf("clrc663: select: %w", err)
-	}
-	for {
-		if err := d.readRegs(regIRQ0, irqs); err != nil {
-			return fmt.Errorf("clrc663: select: %w", err)
-		}
-		irq0, irq1 := irqs[0], irqs[1]
-		// either ERR_IRQ or RX_IRQ or Timer
-		if irq0&irqRx != 0 {
-			break // stop polling irq1 and quit the timeout loop.
-		}
-		if irq0&irqErr != 0 || irq1&(0b1<<timer_for_timeout) != 0 {
-			e, err := d.readReg(regError)
-			if err != nil {
-				panic(err)
-			}
-			fmt.Printf("error2: %#.8b\n", e)
-			return fmt.Errorf("clrc663: select timeout or error")
-		}
-	}
-	sak, err := d.readReg(regFIFOData) // Read FIFO,Expecting SAK,here wo should next level of anti-collision
-	if err != nil {
-		return fmt.Errorf("clrc663: select: %w", err)
-	}
-	//if SAK's bit2=1,then UID is not finished yet
-	//结束防冲突环.Here we assuming the UID is 4 bytes ,so just finish the anti-collision loop
-	fmt.Println("done!", uid, sak)
-	return nil
-}
-
 func (d *Device) reqa() error {
 	// ready the request.
 	const ISO14443_CMD_REQA = 0x26
@@ -408,21 +167,20 @@ func (d *Device) reqa() error {
 	}
 	fmt.Println("Sending REQA\n")
 	// block until we are done
-	irq1_value := uint8(0)
+	irqs := make([]byte, 2)
 	for {
-		irq1, err := d.readReg(regIRQ1)
-		if err != nil {
+		if err := d.readRegs(regIRQ0, irqs); err != nil {
 			return fmt.Errorf("clrc663: reqa: %w", err)
 		}
+		irq0, irq1 := irqs[0], irqs[1]
 		// either ERR_IRQ or RX_IRQ or timeout
-		if irq1&(irqGlobal|1<<timer_for_timeout) != 0 {
+		if irq0&(irqRx|irqErr) != 0 || irq1&(1<<timer_for_timeout) != 0 {
 			break
 		}
 	}
 	if err := d.writeRegs(regCommand, cmdIdle); err != nil {
 		return fmt.Errorf("clrc663: reqa: %v", err)
 	}
-	irqs := make([]byte, 2)
 	if err := d.readRegs(regIRQ0, irqs); err != nil {
 		return fmt.Errorf("clrc663: reqa: %w", err)
 	}
@@ -430,8 +188,8 @@ func (d *Device) reqa() error {
 	fmt.Printf("After waiting for answer, IRQ1: %.8b\n", irq1)
 
 	// if no Rx IRQ, or if there's an error somehow, return 0
-	if ((irq0 & irqRx) == 0) || (irq0&irqErr) != 0 {
-		fmt.Printf("No RX, irq1: %.8b irq0: %.8b\n", irq1_value, irq0)
+	if irq0&irqRx == 0 || irq0&irqErr != 0 {
+		fmt.Printf("No RX, irq1: %.8b irq0: %.8b\n", irq1, irq0)
 	}
 
 	rx_len, err := d.readReg(regFIFOLength)
@@ -459,16 +217,14 @@ func (d *Device) readBlock(block_address uint8, blk []byte) (int, error) {
 		regFIFOControl, 1<<4, // Flush FIFO.
 		regTxCrcPreset, _RECOM_14443A_CRC|_CRC_ON,
 		regRxCrcPreset, _RECOM_14443A_CRC|_CRC_ON,
+		regIRQ0, 0x7F,
+		regIRQ1, 0x7F,
 	); err != nil {
 		return 0, fmt.Errorf("read block: %w", err)
 	}
 
 	// // configure a timeout timer.
 	// uint8_t timer_for_timeout = 0;  // should match the enabled interupt.
-
-	// // enable the global IRQ for idle, errors and timer.
-	// mfrc630_write_reg(MFRC630_REG_IRQ0EN, MFRC630_IRQ0EN_IDLE_IRQEN | MFRC630_IRQ0EN_ERR_IRQEN);
-	// mfrc630_write_reg(MFRC630_REG_IRQ1EN, MFRC630_IRQ1EN_TIMER0_IRQEN);
 
 	// Set timer to 221 kHz clock, start at the end of Tx.
 	// mfrc630_timer_set_control(timer_for_timeout, MFRC630_TCONTROL_CLK_211KHZ | MFRC630_TCONTROL_START_TX_END);
@@ -477,19 +233,17 @@ func (d *Device) readBlock(block_address uint8, blk []byte) (int, error) {
 	// mfrc630_timer_set_reload(timer_for_timeout, 2000);  // 2000 ticks of 5 usec is 10 ms.
 	// mfrc630_timer_set_value(timer_for_timeout, 2000);
 
-	// uint8_t irq1_value = 0;
-	// uint8_t irq0_value = 0;
-
-	// mfrc630_clear_irq0();  // clear irq0
-	// mfrc630_clear_irq1();  // clear irq1
-
 	if err := d.transceive(_MF_CMD_READ, block_address); err != nil {
 		return 0, fmt.Errorf("clrc663: read block: %w", err)
 	}
-	if err := d.waitForIRQ(irqRx, 0); err != nil {
+	if err := d.waitForIRQ(irqIdle, 0); err != nil {
 		return 0, fmt.Errorf("clrc663: read block: %w", err)
 	}
-	time.Sleep(200 * time.Millisecond)
+	irqs := d.scratch[:2]
+	if err := d.readRegs(regIRQ0, irqs); err != nil {
+		panic(err)
+	}
+	irq0, irq1 := irqs[0], irqs[1]
 	if err := d.writeRegs(regCommand, cmdIdle); err != nil {
 		return 0, fmt.Errorf("clrc663: read block: %w", err)
 	}
@@ -498,6 +252,7 @@ func (d *Device) readBlock(block_address uint8, blk []byte) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("clrc663: read block: %w", err)
 	}
+	fmt.Printf("irq0 %.8b irq1 %.8b\n", irq0, irq1)
 	return n, nil
 }
 
@@ -802,77 +557,84 @@ func (d *Device) selectTag() ([]byte, uint8, error) {
 	return nil, 0, errors.New("clrc663: uid select failed") // getting an UID failed.
 }
 
-func (d *Device) lpcd() error {
+func (d *Device) measureLPCD() error {
 	// Part-1, configurate LPCD Mode
 	// Please remove any PICC from the HF of the reader.
 	// "I" and the "Q" values read from reg 0x42 and 0x43
 	// shall be used in part-2 "Detect PICC"
 	d.writeRegs(
-		0, 0,
-		// disable IRQ0, IRQ1 interrupt sources
-		0x06, 0x7F,
-		0x07, 0x7F,
-		0x08, 0x00,
-		0x09, 0x00,
-		0x02, 0xB0, // Flush FIFO
+		regCommand, 0,
+		regFIFOControl, 0xB0, // Flush FIFO
 		// LPCD_config
-		0x3F, 0xC0, // Set Qmin register
-		0x40, 0xFF, // Set Qmax register
-		0x41, 0xC0, // Set Imin register
-		0x28, 0x89, // set DrvMode register
+		regLPCD_QMin, 0xC0, // Set Qmin register
+		regLPCD_QMax, 0xFF, // Set Qmax register
+		regLPCD_IMin, 0xC0, // Set Imin register
+		regDrvMode, 0x89, // set DrvMode register
+		regLPCD_Options, lpcdTxHigh|lpcdFilter, // Stronger detection field, filter measurements.
 		// Execute trimming procedure
-		0x1F, 0x00, // Write default. T3 reload value Hi
-		0x20, 0x10, // Write default. T3 reload value Lo
-		0x24, 0x00, // Write min. T4 reload value Hi
-		0x25, 0x05, // Write min. T4 reload value Lo
-		0x23, 0xF8, // Config T4 for AutoLPCD&AutoRestart.Set AutoTrimm bit.Start T4.
-		0x43, 0x40, // Clear LPCD result
-		0x38, 0x52, // Set Rx_ADCmode bit
-		0x39, 0x03, // Raise receiver gain to maximum
-		0x00, 0x01, // Execute Rc663 command "Auto_T4" (Low power card detection and/or Auto trimming)
+		regT3ReloadHi, 0x00, // Write default. T3 reload value Hi
+		regT3ReloadLo, 0x10, // Write default. T3 reload value Lo
+		regT4ReloadHi, 0x00, // Write min. T4 reload value Hi
+		regT4ReloadLo, 0x05, // Write min. T4 reload value Lo
+		regT4Control, 0b1111_1000, // Config T4 for AutoLPCD&AutoRestart.Set AutoTrimm bit.Start T4.
+		regRcv, 0x52, // Set Rx_ADCmode bit
+		regRxAna, 0x03, // Raise receiver gain to maximum
+		regCommand, cmdLPCD, // Execute Rc663 command "Auto_T4" (Low power card detection and/or Auto trimming)
 	)
-	time.Sleep(100 * time.Millisecond)
-	d.writeRegs(
-		0x00, 0x00,
-		0x02, 0xB0,
-		0x38, 0x12, // Clear Rx_ADCmode bit
-	)
+
 	//> ------------ I and Q Value for LPCD ----------------
 	I_Q := make([]byte, 2)
-	if err := d.readRegs(regLPCD_I_Result, I_Q); err != nil {
-		return fmt.Errorf("clrc663: lpcd calibration: %w", err)
+	for {
+		// Measure.
+		time.Sleep(100 * time.Millisecond)
+
+		if err := d.readRegs(regLPCD_I_Result, I_Q); err != nil {
+			return fmt.Errorf("clrc663: lpcd calibration: %w", err)
+		}
+		I := I_Q[0] & 0x3F
+		Q := I_Q[1] & 0x3F
+		fmt.Println(I, Q)
 	}
-	I := I_Q[0] & 0x3F
-	Q := I_Q[1] & 0x3F
-	fmt.Println(I, Q)
+	d.writeRegs(
+		regCommand, 0x00,
+		regRcv, 0x12, // Clear Rx_ADCmode bit
+	)
 	return nil
 }
 
 func (d *Device) TestDump() error {
-	// if err := d.init2(); err != nil {
-	// 	return err
-	// }
-	// if err := d.reqa2(); err != nil {
-	// 	return err
-	// }
-	// if err := d.selectTag2(); err != nil {
-	// 	return err
-	// }
 	if err := d.runCommand(cmdSoftReset); err != nil {
 		return fmt.Errorf("clrc663: soft reset: %w", err)
 	}
-	// Load recommended register values.
-	wr := append([]byte{regDrvMode}, recommendedRegs_14443A_ID1_106...)
-	if err := d.bus.Tx(i2cAddr, wr, nil); err != nil {
-		return fmt.Errorf("clrc663: protocol registers: %w", err)
-	}
-	// Load protocol.
+	// Load preset protocol registers.
 	if err := d.runCommand(
 		cmdLoadProtocol,
 		protocol_ISO14443A_106_MILLER_MANCHESTER, protocol_ISO14443A_106_MILLER_MANCHESTER,
+		// protocol_ISO15693_26_SSC, protocol_ISO15693_26_SSC,
 	); err != nil {
 		return fmt.Errorf("clrc663: LoadProtocol: %w", err)
 	}
+
+	// Load preset antenna registers.
+	const (
+		eepromAddr = eepromAddrISO14443A_106
+		// eepromAddr   = eepromAddrISO15693_SLI_1_4_SSC_26
+		eepromLength = regRxAna - regDrvMode + 1
+	)
+	if err := d.runCommand(
+		cmdLoadReg,
+		// Source EEPROM address.
+		uint8(eepromAddr>>8), uint8(eepromAddr&0xff),
+		// Destination register
+		regDrvMode,
+		// Length
+		eepromLength,
+	); err != nil {
+		return fmt.Errorf("clrc663: LoadReg: %w", err)
+	}
+	// if err := d.measureLPCD(); err != nil {
+	// 	return err
+	// }
 	if err := d.reqa(); err != nil {
 		return err
 	}
@@ -939,12 +701,6 @@ func (d *Device) TestDump() error {
 	}
 	return nil
 }
-
-// Recommended register settings for protocols,
-// from NXP's AN11022: CLRC663 Quickstart Guide.
-var (
-	recommendedRegs_14443A_ID1_106 = []uint8{0x8A, 0x08, 0x21, 0x1A, 0x18, 0x18, 0x0F, 0x27, 0x00, 0xC0, 0x12, 0xCF, 0x00, 0x04, 0x90, 0x32, 0x12, 0x0A}
-)
 
 const (
 	i2cAddr = 0b01010_00 // Last two bits depend on pin settings.
@@ -1056,6 +812,7 @@ const (
 	cmdLPCD         = 0x01
 	cmdReceive      = 0x05
 	cmdTransceive   = 0x07
+	cmdLoadReg      = 0x0c
 	cmdLoadProtocol = 0x0d
 	cmdSoftReset    = 0x1f
 
@@ -1067,10 +824,21 @@ const (
 	drvModeTx2Inv = 0b1 << 7
 	drvModeTxEn   = 0b1 << 3
 
-	error_CollDet = 1 << 2
+	lpcdFilter = 0b1 << 2
+	lpcdTxHigh = 0b1 << 3
 
-	// Protocol numbers for the LoadProtocol command.
-	protocol_ISO14443A_106_MILLER_MANCHESTER = 0x00
+	lpcdIRQClr = 0b1 << 6
+
+	irq0ErrEn     = 0b1 << 1
+	irq0RxEn      = 0b1 << 2
+	irq0IdleEn    = 0b1 << 4
+	irq0LoAlertEn = 0b1 << 5
+	irq0Inv       = 0b1 << 7
+
+	irq1LPCDEn = 0b1 << 5
+	irq1PinEn  = 0b1 << 6
+
+	error_CollDet = 1 << 2
 
 	_ISO14443_CAS_LEVEL_1 = 0x93
 	_ISO14443_CAS_LEVEL_2 = 0x95
@@ -1086,4 +854,16 @@ const (
 	type2BlkSize = 4
 
 	ndefType = 0x03
+)
+
+// Protocol numbers for the LoadProtocol command.
+const (
+	protocol_ISO14443A_106_MILLER_MANCHESTER = 0
+	protocol_ISO15693_26_SSC                 = 10
+)
+
+// Antenna configuration EEPROM addresses.
+const (
+	eepromAddrISO14443A_106           = 0xc0
+	eepromAddrISO15693_SLI_1_4_SSC_26 = 0x194
 )
