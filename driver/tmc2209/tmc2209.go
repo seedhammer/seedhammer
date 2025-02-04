@@ -125,7 +125,7 @@ func (d *Device) Configure() error {
 	d.dir.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	d.diag.Configure(machine.PinConfig{Mode: machine.PinInput})
 
-	// This is redundant with [Initialize], but do it anyway in case the settings
+	// This is redundant with [SetupSharedUART], but do it anyway in case the setting
 	// didn't stick.
 	if err := d.write(SLAVECONF, min_SENDDELAY<<8); err != nil {
 		return fmt.Errorf("tmc2209: set SLAVECONF: %w", err)
