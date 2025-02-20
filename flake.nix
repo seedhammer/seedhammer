@@ -659,10 +659,19 @@
               in
               with pkgs; stdenv.mkDerivation rec {
                 pname = "openocd";
-                version = "0.13.0-rpi";
+                version = "cf9c0b41cd5c45b2faf01b4fd1186f160342b7b7";
                 src = fetchgit {
                   url = "https://github.com/raspberrypi/openocd.git";
-                  sha256 = "sha256-jV5MZf4dLRRzLjVlpA//UNTOTvcenAZvvUHxfQJtzcs=";
+                  rev = version;
+                  fetchSubmodules = true;
+                  # Avoid a "Direct fetching of that commit failed." for the git2cl
+                  # git submodule.
+                  leaveDotGit = true;
+                  # Remove after use to maintain reproducibility.
+                  postFetch = ''
+                    rm -rf $out/.git
+                  '';
+                  sha256 = "sha256-tWdiuumClej0Ze1ZqeHkhzBmd9yVwrnKZyJCTJ7j9Kk=";
                 };
 
                 patches = [
