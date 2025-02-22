@@ -1568,11 +1568,25 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 	var page program
 	inp := new(InputTracker)
 	selectBtn := &Clickable{Button: Button3, AltButton: Center}
+	var quit chan struct{}
 	for {
 		dims := ctx.Platform.DisplaySize()
 	events:
 		for {
 			if selectBtn.Clicked(ctx) {
+				if quit != nil {
+					fmt.Println("quitting engraving")
+					close(quit)
+					quit = nil
+				} else {
+					quit = make(chan struct{})
+					go func() {
+						if err := DebugEngrave(ctx.Platform, quit); err != nil {
+							fmt.Println("engraver err:", err)
+						}
+					}()
+				}
+				continue
 				ws := &ConfirmWarningScreen{
 					Title: "Remove SD card",
 					Body:  "Remove SD card to continue.\n\nHold button to ignore this warning.",
@@ -2726,7 +2740,7 @@ type Engraver interface {
 	Close()
 }
 
-const idleTimeout = 3 * time.Minute
+const idleTimeout = 3 * time.Second
 
 func Run(pl Platform, version string) func(yield func() bool) {
 	return func(yield func() bool) {
@@ -2842,4 +2856,91 @@ func rgb(c uint32) color.NRGBA {
 
 func argb(c uint32) color.NRGBA {
 	return color.NRGBA{A: uint8(c >> 24), R: uint8(c >> 16), G: uint8(c >> 8), B: uint8(c)}
+}
+
+func DebugEngrave(p Platform, quit <-chan struct{}) error {
+	fmt.Println("***** test engrave ****")
+	defer fmt.Println("***** test engrave done ****")
+
+	const sz = backup.SquarePlate
+	desc := urtypes.OutputDescriptor{
+		Script: urtypes.P2WPKH, Threshold: 1, Keys: []urtypes.KeyDescriptor{
+			{
+				Network:           &chaincfg.MainNetParams,
+				MasterFingerprint: 0x9c43e6c2,
+				DerivationPath:    urtypes.Path{hdkeychain.HardenedKeyStart + 84, hdkeychain.HardenedKeyStart, hdkeychain.HardenedKeyStart},
+				KeyData:           []uint8{0x3, 0x3e, 0xd5, 0x1b, 0xcf, 0xf9, 0x30, 0xc6, 0x14, 0xe8, 0x61, 0xbf, 0xed, 0xff, 0x57, 0x69, 0x9b, 0x67, 0x8, 0x5a, 0x9f, 0x19, 0x77, 0x75, 0xbc, 0xc5, 0x41, 0xa9, 0xeb, 0xe8, 0x26, 0x8d, 0xe9},
+				ChainCode:         []uint8{0x21, 0x23, 0x99, 0xa8, 0xdb, 0x12, 0x5c, 0x85, 0xf9, 0x41, 0xea, 0x12, 0x23, 0x1d, 0x8b, 0x5c, 0x7a, 0x76, 0xb8, 0x3e, 0x1, 0xd0, 0x3d, 0x16, 0xc5, 0x39, 0x58, 0xc5, 0x18, 0x28, 0x4f, 0x45},
+				ParentFingerprint: 0xd1e5a62d,
+			},
+		},
+	}
+	params := p.EngraverParams()
+	m, err := bip39.ParseMnemonic("bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon bacon")
+	if err != nil {
+		return err
+	}
+	mfp, err := masterFingerprintFor(m, &chaincfg.MainNetParams)
+	if err != nil {
+		return err
+	}
+	keySide, err := backup.EngraveSeed(params, backup.Seed{
+		Title:             desc.Title,
+		KeyIdx:            0,
+		Mnemonic:          m,
+		Keys:              len(desc.Keys),
+		MasterFingerprint: mfp,
+		Font:              constant.Font,
+		Size:              sz,
+	})
+	if err != nil {
+		return err
+	}
+	plate := Plate{
+		Size:              sz,
+		MasterFingerprint: 0xcafebabe,
+	}
+	plate.Sides = append(plate.Sides, keySide)
+	if false { // Doesn't work with TinyGo yet.
+		descPlate := backup.Descriptor{
+			Descriptor: desc,
+			KeyIdx:     0,
+			Font:       constant.Font,
+			Size:       sz,
+		}
+		descSide, err := backup.EngraveDescriptor(params, descPlate)
+		if err != nil {
+			return err
+		}
+		plate.Sides = append(plate.Sides, descSide)
+	}
+	for _, side := range plate.Sides {
+		e, err := p.Engraver()
+		if err != nil {
+			return err
+		}
+		fmt.Println("opened engraver, engraving...")
+		if false {
+			margin := image.Pt(10, 10).Mul(params.Millimeter)
+			dims := sz.Dims().Mul(params.Millimeter)
+			side = func(yield func(engrave.Command) bool) {
+				yield(engrave.Move(margin))
+				// for {
+				yield(engrave.Line(margin))
+				yield(engrave.Line(image.Pt(dims.X-margin.X, margin.Y)))
+				yield(engrave.Line(dims.Sub(margin)))
+				yield(engrave.Line(image.Pt(margin.X, dims.Y-margin.Y)))
+				// }
+			}
+		}
+		before := time.Now()
+		err = e.Engrave(plate.Size, side, quit)
+		if err != nil {
+			return err
+		}
+		e.Close()
+		fmt.Println("done in", time.Since(before))
+		break
+	}
+	return nil
 }
