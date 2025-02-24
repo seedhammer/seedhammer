@@ -68,14 +68,6 @@ func (c *Context) WakeupAt(t time.Time) {
 const repeatStartDelay = 400 * time.Millisecond
 const repeatDelay = 100 * time.Millisecond
 
-func isRepeatButton(b Button) bool {
-	switch b {
-	case Up, Down, Right, Left:
-		return true
-	}
-	return false
-}
-
 func (c *Context) Reset() {
 	c.events = c.events[:0]
 	c.Wakeup = time.Time{}
@@ -85,30 +77,16 @@ func (c *Context) Events(evts ...Event) {
 	c.events = append(c.events, evts...)
 }
 
-func (c *Context) FrameEvent() (FrameEvent, bool) {
+func (c *Context) Next(filters ...Filter) (Event, bool) {
 	for i, e := range c.events {
-		if e, ok := e.AsFrame(); ok {
-			c.events = append(c.events[:i], c.events[i+1:]...)
-			return e, true
-		}
-	}
-	return FrameEvent{}, false
-}
-
-func (c *Context) Next(btns ...Button) (ButtonEvent, bool) {
-	for i, e := range c.events {
-		e, ok := e.AsButton()
-		if !ok {
-			continue
-		}
-		for _, btn := range btns {
-			if e.Button == btn {
+		for _, f := range filters {
+			if f.matches(e) {
 				c.events = append(c.events[:i], c.events[i+1:]...)
 				return e, true
 			}
 		}
 	}
-	return ButtonEvent{}, false
+	return Event{}, false
 }
 
 type InputTracker struct {
@@ -117,17 +95,14 @@ type InputTracker struct {
 	repeats [MaxButton]time.Time
 }
 
-func (t *InputTracker) Next(c *Context, btns ...Button) (ButtonEvent, bool) {
+func (t *InputTracker) Next(c *Context, filters ...Filter) (Event, bool) {
 	now := c.Platform.Now()
-	for _, b := range btns {
-		if !isRepeatButton(b) {
+	for _, btn := range []Button{Up, Down, Right, Left} {
+		if !t.Pressed[btn] {
+			t.repeats[btn] = time.Time{}
 			continue
 		}
-		if !t.Pressed[b] {
-			t.repeats[b] = time.Time{}
-			continue
-		}
-		wakeup := t.repeats[b]
+		wakeup := t.repeats[btn]
 		if wakeup.IsZero() {
 			wakeup = now.Add(repeatStartDelay)
 		}
@@ -135,20 +110,22 @@ func (t *InputTracker) Next(c *Context, btns ...Button) (ButtonEvent, bool) {
 		if repeat {
 			wakeup = now.Add(repeatDelay)
 		}
-		t.repeats[b] = wakeup
+		t.repeats[btn] = wakeup
 		c.WakeupAt(wakeup)
 		if repeat {
-			return ButtonEvent{Button: b, Pressed: true}, true
+			return ButtonEvent{Button: btn, Pressed: true}.Event(), true
 		}
 	}
 
-	e, ok := c.Next(btns...)
+	e, ok := c.Next(filters...)
 	if !ok {
-		return ButtonEvent{}, false
+		return Event{}, false
 	}
-	if int(e.Button) < len(t.clicked) {
-		t.clicked[e.Button] = !e.Pressed && t.Pressed[e.Button]
-		t.Pressed[e.Button] = e.Pressed
+	if e, ok := e.AsButton(); ok {
+		if int(e.Button) < len(t.clicked) {
+			t.clicked[e.Button] = !e.Pressed && t.Pressed[e.Button]
+			t.Pressed[e.Button] = e.Pressed
+		}
 	}
 	return e, true
 }
@@ -230,32 +207,34 @@ func ShowAddressesScreen(ctx *Context, ops op.Ctx, th *Colors, desc *bip380.Desc
 	for {
 		scrollDelta := 0
 		for {
-			e, ok := inp.Next(ctx, Button1, Left, Right, Up, Down)
+			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Left), ButtonFilter(Right), ButtonFilter(Up), ButtonFilter(Down))
 			if !ok {
 				break
 			}
-			switch e.Button {
-			case Button1:
-				if inp.Clicked(e.Button) {
-					return
-				}
-			case Left:
-				if e.Pressed {
-					s.page = (s.page - 1 + maxPage) % maxPage
-					s.scroll = 0
-				}
-			case Right:
-				if e.Pressed {
-					s.page = (s.page + 1) % maxPage
-					s.scroll = 0
-				}
-			case Up:
-				if e.Pressed {
-					scrollDelta--
-				}
-			case Down:
-				if e.Pressed {
-					scrollDelta++
+			if e, ok := e.AsButton(); ok {
+				switch e.Button {
+				case Button1:
+					if inp.Clicked(e.Button) {
+						return
+					}
+				case Left:
+					if e.Pressed {
+						s.page = (s.page - 1 + maxPage) % maxPage
+						s.scroll = 0
+					}
+				case Right:
+					if e.Pressed {
+						s.page = (s.page + 1) % maxPage
+						s.scroll = 0
+					}
+				case Up:
+					if e.Pressed {
+						scrollDelta--
+					}
+				case Down:
+					if e.Pressed {
+						scrollDelta++
+					}
 				}
 			}
 		}
@@ -366,18 +345,20 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 	for {
 		const cameraFrameScale = 3
 		for {
-			e, ok := inp.Next(ctx, Button1, Button2)
+			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button2))
 			if !ok {
 				break
 			}
-			if !inp.Clicked(e.Button) {
-				continue
-			}
-			switch e.Button {
-			case Button1:
-				return nil, false
-			case Button2:
-				ctx.RotateCamera = !ctx.RotateCamera
+			if e, ok := e.AsButton(); ok {
+				if !inp.Clicked(e.Button) {
+					continue
+				}
+				switch e.Button {
+				case Button1:
+					return nil, false
+				case Button2:
+					ctx.RotateCamera = !ctx.RotateCamera
+				}
 			}
 		}
 
@@ -390,23 +371,25 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 		}
 		ctx.Platform.CameraFrame(dims.Mul(cameraFrameScale))
 		for {
-			f, ok := ctx.FrameEvent()
+			f, ok := ctx.Next(FrameFilter())
 			if !ok {
 				break
 			}
-			cameraErr = f.Error
-			if cameraErr == nil {
-				ycbcr := f.Image.(*image.YCbCr)
-				*gray = image.Gray{Pix: ycbcr.Y, Stride: ycbcr.YStride, Rect: ycbcr.Bounds()}
+			if f, ok := f.AsFrame(); ok {
+				cameraErr = f.Error
+				if cameraErr == nil {
+					ycbcr := f.Image.(*image.YCbCr)
+					*gray = image.Gray{Pix: ycbcr.Y, Stride: ycbcr.YStride, Rect: ycbcr.Bounds()}
 
-				// Swap image (but not backing store) to ensure the graphics backend treats
-				// it as dirty.
-				feed, feed2 = feed2, feed
-				scaleRot(feed, gray, ctx.RotateCamera)
-				results, _ := ctx.Platform.ScanQR(gray)
-				for _, res := range results {
-					if v, ok := decoder.parseQR(res); ok {
-						return v, true
+					// Swap image (but not backing store) to ensure the graphics backend treats
+					// it as dirty.
+					feed, feed2 = feed2, feed
+					scaleRot(feed, gray, ctx.RotateCamera)
+					results, _ := ctx.Platform.ScanQR(gray)
+					for _, res := range results {
+						if v, ok := decoder.parseQR(res); ok {
+							return v, true
+						}
 					}
 				}
 			}
@@ -553,14 +536,16 @@ type ErrorScreen struct {
 
 func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) bool {
 	for {
-		e, ok := s.inp.Next(ctx, Button3)
+		e, ok := s.inp.Next(ctx, ButtonFilter(Button3))
 		if !ok {
 			break
 		}
-		switch e.Button {
-		case Button3:
-			if s.inp.Clicked(e.Button) {
-				return true
+		if e, ok := e.AsButton(); ok {
+			switch e.Button {
+			case Button3:
+				if s.inp.Clicked(e.Button) {
+					return true
+				}
 			}
 		}
 	}
@@ -618,18 +603,20 @@ const confirmDelay = 1 * time.Second
 
 func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, title, txt string) image.Point {
 	for {
-		e, ok := w.inp.Next(ctx, Up, Down)
+		e, ok := w.inp.Next(ctx, ButtonFilter(Up), ButtonFilter(Down))
 		if !ok {
 			break
 		}
-		switch e.Button {
-		case Up:
-			if e.Pressed {
-				w.scroll -= w.txtclip / 2
-			}
-		case Down:
-			if e.Pressed {
-				w.scroll += w.txtclip / 2
+		if e, ok := e.AsButton(); ok {
+			switch e.Button {
+			case Up:
+				if e.Pressed {
+					w.scroll -= w.txtclip / 2
+				}
+			case Down:
+				if e.Pressed {
+					w.scroll += w.txtclip / 2
+				}
 			}
 		}
 	}
@@ -683,20 +670,22 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 		if progress == 1 {
 			return ConfirmYes
 		}
-		e, ok := s.inp.Next(ctx, Button3, Button1)
+		e, ok := s.inp.Next(ctx, ButtonFilter(Button3), ButtonFilter(Button1))
 		if !ok {
 			break
 		}
-		switch e.Button {
-		case Button1:
-			if s.inp.Clicked(e.Button) {
-				return ConfirmNo
-			}
-		case Button3:
-			if e.Pressed {
-				s.confirm.Start(ctx, confirmDelay)
-			} else {
-				s.confirm = ConfirmDelay{}
+		if e, ok := e.AsButton(); ok {
+			switch e.Button {
+			case Button1:
+				if s.inp.Clicked(e.Button) {
+					return ConfirmNo
+				}
+			case Button3:
+				if e.Pressed {
+					s.confirm.Start(ctx, confirmDelay)
+				} else {
+					s.confirm = ConfirmDelay{}
+				}
 			}
 		}
 	}
@@ -1063,32 +1052,34 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 	for {
 		for {
 			kbd.Update(ctx)
-			e, ok := inp.Next(ctx, Button1, Button2)
+			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button2))
 			if !ok {
 				break
 			}
-			switch e.Button {
-			case Button1:
-				if inp.Clicked(e.Button) {
-					return
-				}
-			case Button2:
-				if !inp.Clicked(e.Button) {
-					break
-				}
-				w, complete := kbd.Complete()
-				if !complete {
-					break
-				}
-				kbd.Clear()
-				mnemonic[selected] = w
-				for {
-					selected++
-					if selected == len(mnemonic) {
+			if e, ok := e.AsButton(); ok {
+				switch e.Button {
+				case Button1:
+					if inp.Clicked(e.Button) {
 						return
 					}
-					if mnemonic[selected] == -1 {
+				case Button2:
+					if !inp.Clicked(e.Button) {
 						break
+					}
+					w, complete := kbd.Complete()
+					if !complete {
+						break
+					}
+					kbd.Clear()
+					mnemonic[selected] = w
+					for {
+						selected++
+						if selected == len(mnemonic) {
+							return
+						}
+						if mnemonic[selected] == -1 {
+							break
+						}
 					}
 				}
 			}
@@ -1257,67 +1248,70 @@ func (k *Keyboard) Valid(r rune) bool {
 
 func (k *Keyboard) Update(ctx *Context) {
 	for {
-		e, ok := k.inp.Next(ctx, Left, Right, Up, Down, Center, Rune, Button3)
+		e, ok := k.inp.Next(ctx, ButtonFilter(Left), ButtonFilter(Right), ButtonFilter(Up), ButtonFilter(Down), ButtonFilter(Center), RuneFilter(), ButtonFilter(Button3))
 		if !ok {
 			break
 		}
-		if !e.Pressed {
-			continue
+		if e, ok := e.AsButton(); ok {
+			if !e.Pressed {
+				continue
+			}
+			switch e.Button {
+			case Left:
+				next := k.col
+				for {
+					next--
+					if next == -1 {
+						next = len(kbdKeys[k.row]) - 1
+					}
+					if !k.Valid(kbdKeys[k.row][next]) {
+						continue
+					}
+					k.col = next
+					k.adjust(true)
+					break
+				}
+			case Right:
+				next := k.col
+				for {
+					next++
+					if next == len(kbdKeys[k.row]) {
+						next = 0
+					}
+					if !k.Valid(kbdKeys[k.row][next]) {
+						continue
+					}
+					k.col = next
+					k.adjust(true)
+					break
+				}
+			case Up:
+				n := len(kbdKeys)
+				next := k.row
+				for {
+					next = (next - 1 + n) % n
+					if k.adjustCol(next) {
+						k.adjust(true)
+						break
+					}
+				}
+			case Down:
+				n := len(kbdKeys)
+				next := k.row
+				for {
+					next = (next + 1) % n
+					if k.adjustCol(next) {
+						k.adjust(true)
+						break
+					}
+				}
+			case Center, Button3:
+				r := kbdKeys[k.row][k.col]
+				k.rune(r)
+			}
 		}
-		switch e.Button {
-		case Left:
-			next := k.col
-			for {
-				next--
-				if next == -1 {
-					next = len(kbdKeys[k.row]) - 1
-				}
-				if !k.Valid(kbdKeys[k.row][next]) {
-					continue
-				}
-				k.col = next
-				k.adjust(true)
-				break
-			}
-		case Right:
-			next := k.col
-			for {
-				next++
-				if next == len(kbdKeys[k.row]) {
-					next = 0
-				}
-				if !k.Valid(kbdKeys[k.row][next]) {
-					continue
-				}
-				k.col = next
-				k.adjust(true)
-				break
-			}
-		case Up:
-			n := len(kbdKeys)
-			next := k.row
-			for {
-				next = (next - 1 + n) % n
-				if k.adjustCol(next) {
-					k.adjust(true)
-					break
-				}
-			}
-		case Down:
-			n := len(kbdKeys)
-			next := k.row
-			for {
-				next = (next + 1) % n
-				if k.adjustCol(next) {
-					k.adjust(true)
-					break
-				}
-			}
-		case Rune:
+		if e, ok := e.AsRune(); ok {
 			k.rune(e.Rune)
-		case Center, Button3:
-			r := kbdKeys[k.row][k.col]
-			k.rune(r)
 		}
 	}
 }
@@ -1440,29 +1434,31 @@ func (s *ChoiceScreen) Choose(ctx *Context, ops op.Ctx, th *Colors) (int, bool) 
 	inp := new(InputTracker)
 	for {
 		for {
-			e, ok := inp.Next(ctx, Button1, Button3, Center, Up, Down)
+			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button3), ButtonFilter(Center), ButtonFilter(Up), ButtonFilter(Down))
 			if !ok {
 				break
 			}
-			switch e.Button {
-			case Button1:
-				if inp.Clicked(e.Button) {
-					return 0, false
-				}
-			case Button3, Center:
-				if inp.Clicked(e.Button) {
-					return s.choice, true
-				}
-			case Up:
-				if e.Pressed {
-					if s.choice > 0 {
-						s.choice--
+			if e, ok := e.AsButton(); ok {
+				switch e.Button {
+				case Button1:
+					if inp.Clicked(e.Button) {
+						return 0, false
 					}
-				}
-			case Down:
-				if e.Pressed {
-					if s.choice < len(s.Choices)-1 {
-						s.choice++
+				case Button3, Center:
+					if inp.Clicked(e.Button) {
+						return s.choice, true
+					}
+				case Up:
+					if e.Pressed {
+						if s.choice > 0 {
+							s.choice--
+						}
+					}
+				case Down:
+					if e.Pressed {
+						if s.choice < len(s.Choices)-1 {
+							s.choice++
+						}
 					}
 				}
 			}
@@ -1540,55 +1536,57 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 		dims := ctx.Platform.DisplaySize()
 	events:
 		for {
-			e, ok := inp.Next(ctx, Button3, Center, Left, Right)
+			e, ok := inp.Next(ctx, ButtonFilter(Button3), ButtonFilter(Center), ButtonFilter(Left), ButtonFilter(Right))
 			if !ok {
 				break
 			}
-			switch e.Button {
-			case Button3, Center:
-				if !inp.Clicked(e.Button) {
-					break
-				}
-				ws := &ConfirmWarningScreen{
-					Title: "Remove SD card",
-					Body:  "Remove SD card to continue.\n\nHold button to ignore this warning.",
-					Icon:  assets.IconRight,
-				}
-				th := mainScreenTheme(page)
-			loop:
-				for !ctx.EmptySDSlot {
-					res := ws.Layout(ctx, ops.Begin(), th, dims)
-					dialog := ops.End()
-					switch res {
-					case ConfirmYes:
-						break loop
-					case ConfirmNo:
-						continue events
+			if e, ok := e.AsButton(); ok {
+				switch e.Button {
+				case Button3, Center:
+					if !inp.Clicked(e.Button) {
+						break
 					}
-					drawMainScreen(ctx, ops, dims, page)
-					dialog.Add(ops)
-					ctx.Frame()
-				}
-				ctx.EmptySDSlot = true
-				switch page {
-				case backupWallet:
-					backupWalletFlow(ctx, ops, th)
-				}
-			case Left:
-				if !e.Pressed {
-					break
-				}
-				page--
-				if page < 0 {
-					page = backupWallet
-				}
-			case Right:
-				if !e.Pressed {
-					break
-				}
-				page++
-				if page > backupWallet {
-					page = 0
+					ws := &ConfirmWarningScreen{
+						Title: "Remove SD card",
+						Body:  "Remove SD card to continue.\n\nHold button to ignore this warning.",
+						Icon:  assets.IconRight,
+					}
+					th := mainScreenTheme(page)
+				loop:
+					for !ctx.EmptySDSlot {
+						res := ws.Layout(ctx, ops.Begin(), th, dims)
+						dialog := ops.End()
+						switch res {
+						case ConfirmYes:
+							break loop
+						case ConfirmNo:
+							continue events
+						}
+						drawMainScreen(ctx, ops, dims, page)
+						dialog.Add(ops)
+						ctx.Frame()
+					}
+					ctx.EmptySDSlot = true
+					switch page {
+					case backupWallet:
+						backupWalletFlow(ctx, ops, th)
+					}
+				case Left:
+					if !e.Pressed {
+						break
+					}
+					page--
+					if page < 0 {
+						page = backupWallet
+					}
+				case Right:
+					if !e.Pressed {
+						break
+					}
+					page++
+					if page > backupWallet {
+						page = 0
+					}
 				}
 			}
 		}
@@ -1925,92 +1923,94 @@ func (s *SeedScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip3
 	for {
 	events:
 		for {
-			e, ok := inp.Next(ctx, Button1, Button2, Center, Button3, Up, Down)
+			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button2), ButtonFilter(Center), ButtonFilter(Button3), ButtonFilter(Up), ButtonFilter(Down))
 			if !ok {
 				break
 			}
-			switch e.Button {
-			case Button1:
-				if !inp.Clicked(e.Button) {
-					break
-				}
-				if isEmptyMnemonic(mnemonic) {
-					return false
-				}
-				confirm := &ConfirmWarningScreen{
-					Title: "Discard Seed?",
-					Body:  "Going back will discard the seed.\n\nHold button to confirm.",
-					Icon:  assets.IconDiscard,
-				}
-				for {
-					dims := ctx.Platform.DisplaySize()
-					res := confirm.Layout(ctx, ops.Begin(), th, dims)
-					d := ops.End()
-					switch res {
-					case ConfirmNo:
-						continue events
-					case ConfirmYes:
+			if e, ok := e.AsButton(); ok {
+				switch e.Button {
+				case Button1:
+					if !inp.Clicked(e.Button) {
+						break
+					}
+					if isEmptyMnemonic(mnemonic) {
 						return false
 					}
-					s.Draw(ctx, ops, th, dims, mnemonic)
-					d.Add(ops)
-					ctx.Frame()
-				}
-			case Button2, Center:
-				if !inp.Clicked(e.Button) {
-					break
-				}
-				inputWordsFlow(ctx, ops, th, mnemonic, s.selected)
-				continue
-			case Button3:
-				if !inp.Clicked(e.Button) || !isMnemonicComplete(mnemonic) {
-					break
-				}
-				showErr := func(scr *ErrorScreen) {
+					confirm := &ConfirmWarningScreen{
+						Title: "Discard Seed?",
+						Body:  "Going back will discard the seed.\n\nHold button to confirm.",
+						Icon:  assets.IconDiscard,
+					}
 					for {
 						dims := ctx.Platform.DisplaySize()
-						dismissed := scr.Layout(ctx, ops.Begin(), th, dims)
+						res := confirm.Layout(ctx, ops.Begin(), th, dims)
 						d := ops.End()
-						if dismissed {
-							break
+						switch res {
+						case ConfirmNo:
+							continue events
+						case ConfirmYes:
+							return false
 						}
 						s.Draw(ctx, ops, th, dims, mnemonic)
 						d.Add(ops)
 						ctx.Frame()
 					}
-				}
-				if !mnemonic.Valid() {
-					scr := &ErrorScreen{
-						Title: "Invalid Seed",
+				case Button2, Center:
+					if !inp.Clicked(e.Button) {
+						break
 					}
-					var words []string
-					for _, w := range mnemonic {
-						words = append(words, bip39.LabelFor(w))
+					inputWordsFlow(ctx, ops, th, mnemonic, s.selected)
+					continue
+				case Button3:
+					if !inp.Clicked(e.Button) || !isMnemonicComplete(mnemonic) {
+						break
 					}
-					if nonstandard.ElectrumSeed(strings.Join(words, " ")) {
-						scr.Body = "Electrum seeds are not supported."
-					} else {
-						scr.Body = "The seed phrase is invalid.\n\nCheck the words and try again."
+					showErr := func(scr *ErrorScreen) {
+						for {
+							dims := ctx.Platform.DisplaySize()
+							dismissed := scr.Layout(ctx, ops.Begin(), th, dims)
+							d := ops.End()
+							if dismissed {
+								break
+							}
+							s.Draw(ctx, ops, th, dims, mnemonic)
+							d.Add(ops)
+							ctx.Frame()
+						}
 					}
-					showErr(scr)
-					break
-				}
-				_, ok = deriveMasterKey(mnemonic, &chaincfg.MainNetParams)
-				if !ok {
-					showErr(&ErrorScreen{
-						Title: "Invalid Seed",
-						Body:  "The seed is invalid.",
-					})
-					break
-				}
-				return true
-			case Down:
-				if e.Pressed && s.selected < len(mnemonic)-1 {
-					s.selected++
-				}
-			case Up:
-				if e.Pressed && s.selected > 0 {
-					s.selected--
+					if !mnemonic.Valid() {
+						scr := &ErrorScreen{
+							Title: "Invalid Seed",
+						}
+						var words []string
+						for _, w := range mnemonic {
+							words = append(words, bip39.LabelFor(w))
+						}
+						if nonstandard.ElectrumSeed(strings.Join(words, " ")) {
+							scr.Body = "Electrum seeds are not supported."
+						} else {
+							scr.Body = "The seed phrase is invalid.\n\nCheck the words and try again."
+						}
+						showErr(scr)
+						break
+					}
+					_, ok = deriveMasterKey(mnemonic, &chaincfg.MainNetParams)
+					if !ok {
+						showErr(&ErrorScreen{
+							Title: "Invalid Seed",
+							Body:  "The seed is invalid.",
+						})
+						break
+					}
+					return true
+				case Down:
+					if e.Pressed && s.selected < len(mnemonic)-1 {
+						s.selected++
+					}
+				case Up:
+					if e.Pressed && s.selected > 0 {
+						s.selected--
+					}
 				}
 			}
 		}
@@ -2189,64 +2189,66 @@ func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (int, b
 	inp := new(InputTracker)
 	for {
 		for {
-			e, ok := inp.Next(ctx, Button1, Button2, Button3)
+			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button2), ButtonFilter(Button3))
 			if !ok {
 				break
 			}
-			switch e.Button {
-			case Button1:
-				if inp.Clicked(e.Button) {
-					return 0, false
-				}
-			case Button2:
-				if !inp.Clicked(e.Button) {
-					break
-				}
-				ShowAddressesScreen(ctx, ops, th, s.Descriptor)
-			case Button3:
-				if !inp.Clicked(e.Button) {
-					break
-				}
-				if err := validateDescriptor(ctx.Platform.EngraverParams(), s.Descriptor); err != nil {
-					showErr(NewErrorScreen(err))
-					continue
-				}
-				keyIdx, ok := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
-				if !ok {
-					// Passphrase protected seeds don't match the descriptor, so
-					// allow the user to ignore the mismatch. Don't allow this for
-					// multisig descriptors where we can't know which key the seed
-					// belongs to.
-					if len(s.Descriptor.Keys) == 1 {
-						confirm := &ConfirmWarningScreen{
-							Title: "Unknown Wallet",
-							Body:  "The wallet does not match the seed.\n\nIf it is passphrase protected, long press to confirm.",
-							Icon:  assets.IconCheckmark,
-						}
-					loop:
-						for {
-							dims := ctx.Platform.DisplaySize()
-							res := confirm.Layout(ctx, ops.Begin(), th, dims)
-							d := ops.End()
-							switch res {
-							case ConfirmYes:
-								return 0, true
-							case ConfirmNo:
-								break loop
-							}
-							s.Draw(ctx, ops, th, dims)
-							d.Add(ops)
-							ctx.Frame()
-						}
-					} else {
-						showErr(&ErrorScreen{
-							Title: "Unknown Wallet",
-							Body:  "The wallet does not match the seed or is passphrase protected.",
-						})
+			if e, ok := e.AsButton(); ok {
+				switch e.Button {
+				case Button1:
+					if inp.Clicked(e.Button) {
+						return 0, false
 					}
-					continue
+				case Button2:
+					if !inp.Clicked(e.Button) {
+						break
+					}
+					ShowAddressesScreen(ctx, ops, th, s.Descriptor)
+				case Button3:
+					if !inp.Clicked(e.Button) {
+						break
+					}
+					if err := validateDescriptor(ctx.Platform.EngraverParams(), s.Descriptor); err != nil {
+						showErr(NewErrorScreen(err))
+						continue
+					}
+					keyIdx, ok := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
+					if !ok {
+						// Passphrase protected seeds don't match the descriptor, so
+						// allow the user to ignore the mismatch. Don't allow this for
+						// multisig descriptors where we can't know which key the seed
+						// belongs to.
+						if len(s.Descriptor.Keys) == 1 {
+							confirm := &ConfirmWarningScreen{
+								Title: "Unknown Wallet",
+								Body:  "The wallet does not match the seed.\n\nIf it is passphrase protected, long press to confirm.",
+								Icon:  assets.IconCheckmark,
+							}
+						loop:
+							for {
+								dims := ctx.Platform.DisplaySize()
+								res := confirm.Layout(ctx, ops.Begin(), th, dims)
+								d := ops.End()
+								switch res {
+								case ConfirmYes:
+									return 0, true
+								case ConfirmNo:
+									break loop
+								}
+								s.Draw(ctx, ops, th, dims)
+								d.Add(ops)
+								ctx.Frame()
+							}
+						} else {
+							showErr(&ErrorScreen{
+								Title: "Unknown Wallet",
+								Body:  "The wallet does not match the seed or is passphrase protected.",
+							})
+						}
+						continue
+					}
+					return keyIdx, true
 				}
-				return keyIdx, true
 			}
 		}
 
@@ -2491,84 +2493,88 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 					s.dryRun.enabled = !s.dryRun.enabled
 				}
 			}
-			e, ok := inp.Next(ctx, Button1, Button2, Button3)
+			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button2), ButtonFilter(Button3))
 			if !ok {
 				break
 			}
-			switch e.Button {
-			case Button1:
-				if !inp.Clicked(e.Button) {
-					break
-				}
-				if s.canPrev() {
-					s.step--
-				} else {
-					confirm := &ConfirmWarningScreen{
-						Title: "Cancel?",
-						Body:  "This will cancel the engraving process.\n\nHold button to confirm.",
-						Icon:  assets.IconDiscard,
+			if e, ok := e.AsButton(); ok {
+				switch e.Button {
+				case Button1:
+					if !inp.Clicked(e.Button) {
+						break
 					}
-				loop2:
-					for {
-						dims := ctx.Platform.DisplaySize()
-						res := confirm.Layout(ctx, ops.Begin(), th, dims)
-						d := ops.End()
-						switch res {
-						case ConfirmNo:
-							break loop2
-						case ConfirmYes:
-							return false
+					if s.canPrev() {
+						s.step--
+					} else {
+						confirm := &ConfirmWarningScreen{
+							Title: "Cancel?",
+							Body:  "This will cancel the engraving process.\n\nHold button to confirm.",
+							Icon:  assets.IconDiscard,
 						}
-						s.draw(ctx, ops, th, dims)
-						d.Add(ops)
-						ctx.Frame()
-					}
-				}
-			case Button2:
-				if e.Pressed {
-					t := ctx.Platform.Now().Add(confirmDelay)
-					s.dryRun.timeout = t
-					ctx.WakeupAt(t)
-				} else {
-					s.dryRun.timeout = time.Time{}
-				}
-			case Button3:
-				switch ins.Type {
-				case ConnectInstruction:
-					if !e.Pressed {
-						continue
-					}
-					confirm := new(ConfirmDelay)
-					confirm.Start(ctx, confirmDelay)
-					inp.Pressed[e.Button] = false
-					for {
-						p := confirm.Progress(ctx)
-						if p == 1. {
-							break
-						}
+					loop2:
 						for {
-							e, ok := inp.Next(ctx, Button3)
-							if !ok {
+							dims := ctx.Platform.DisplaySize()
+							res := confirm.Layout(ctx, ops.Begin(), th, dims)
+							d := ops.End()
+							switch res {
+							case ConfirmNo:
+								break loop2
+							case ConfirmYes:
+								return false
+							}
+							s.draw(ctx, ops, th, dims)
+							d.Add(ops)
+							ctx.Frame()
+						}
+					}
+				case Button2:
+					if e.Pressed {
+						t := ctx.Platform.Now().Add(confirmDelay)
+						s.dryRun.timeout = t
+						ctx.WakeupAt(t)
+					} else {
+						s.dryRun.timeout = time.Time{}
+					}
+				case Button3:
+					switch ins.Type {
+					case ConnectInstruction:
+						if !e.Pressed {
+							continue
+						}
+						confirm := new(ConfirmDelay)
+						confirm.Start(ctx, confirmDelay)
+						inp.Pressed[e.Button] = false
+						for {
+							p := confirm.Progress(ctx)
+							if p == 1. {
 								break
 							}
-							if e.Button == Button3 && !e.Pressed {
-								continue outer
+							for {
+								e, ok := inp.Next(ctx, ButtonFilter(Button3))
+								if !ok {
+									break
+								}
+								if e, ok := e.AsButton(); ok {
+									if e.Button == Button3 && !e.Pressed {
+										continue outer
+									}
+								}
 							}
+							dims := ctx.Platform.DisplaySize()
+							s.draw(ctx, ops, th, dims)
+							s.drawNav(inp, ops, th, dims, p)
+							ctx.Frame()
 						}
-						dims := ctx.Platform.DisplaySize()
-						s.draw(ctx, ops, th, dims)
-						s.drawNav(inp, ops, th, dims, p)
-						ctx.Frame()
-					}
-				case EngraveInstruction:
-					continue
-				default:
-					if !inp.Clicked(e.Button) {
+					case EngraveInstruction:
 						continue
+					default:
+						if !inp.Clicked(e.Button) {
+							continue
+						}
 					}
-				}
-				if s.moveStep(ctx, ops, th) {
-					return true
+					if s.moveStep(ctx, ops, th) {
+						return true
+					}
 				}
 			}
 		}
@@ -2740,16 +2746,21 @@ func Run(pl Platform, version string) func(yield func() bool) {
 					return
 				}
 				wakeup := a.ctx.Wakeup
-				a.ctx.Reset()
 				evts = a.ctx.Platform.AppendEvents(wakeup, evts[:0])
-				for _, e := range evts {
+				if len(evts) > 0 {
 					a.idle.start = a.ctx.Platform.Now()
+					wakeup = time.Time{}
+				}
+				a.ctx.Reset()
+				a.ctx.Events(evts...)
+				for {
+					e, ok := ctx.Next(SDCardFilter())
+					if !ok {
+						break
+					}
 					if se, ok := e.AsSDCard(); ok {
 						a.ctx.EmptySDSlot = !se.Inserted
-					} else {
-						a.ctx.Events(e)
 					}
-					wakeup = time.Time{}
 				}
 				idleWakeup := a.idle.start.Add(idleTimeout)
 				now := a.ctx.Platform.Now()

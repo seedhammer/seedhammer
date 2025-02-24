@@ -13,8 +13,6 @@ const (
 	Button1
 	Button2
 	Button3
-	// Synthetic keys only generated in debug mode.
-	Rune // Enter rune.
 	MaxButton
 )
 
@@ -36,10 +34,33 @@ func (b Button) String() string {
 		return "b2"
 	case Button3:
 		return "b3"
-	case Rune:
-		return "rune"
 	default:
 		panic("invalid button")
+	}
+}
+
+func FrameFilter() Filter {
+	return Filter{
+		typ: frameEvent,
+	}
+}
+
+func RuneFilter() Filter {
+	return Filter{
+		typ: runeEvent,
+	}
+}
+
+func ButtonFilter(b Button) Filter {
+	return Filter{
+		typ: buttonEvent,
+		btn: b,
+	}
+}
+
+func SDCardFilter() Filter {
+	return Filter{
+		typ: sdcardEvent,
 	}
 }
 
@@ -49,26 +70,56 @@ type FrameEvent struct {
 }
 
 type Event struct {
-	typ  int
-	data [4]uint32
+	typ  eventKind
+	data [2]uint32
 	refs [2]any
 }
 
+type Filter struct {
+	typ eventKind
+	btn Button
+}
+
+type filterKind int
+
+type eventKind int
+
 const (
-	buttonEvent = 1 + iota
+	buttonEvent eventKind = 1 + iota
 	sdcardEvent
 	frameEvent
+	runeEvent
 )
 
 type ButtonEvent struct {
 	Button  Button
 	Pressed bool
-	// Rune is only valid if Button is Rune.
+}
+
+type RuneEvent struct {
 	Rune rune
 }
 
 type SDCardEvent struct {
 	Inserted bool
+}
+
+func (f Filter) matches(e Event) bool {
+	if f.typ != e.typ {
+		return false
+	}
+	switch f.typ {
+	case buttonEvent:
+		e, _ := e.AsButton()
+		return e.Button == f.btn
+	}
+	return true
+}
+
+func (r RuneEvent) Event() Event {
+	e := Event{typ: runeEvent}
+	e.data[0] = uint32(r.Rune)
+	return e
 }
 
 func (f FrameEvent) Event() Event {
@@ -86,7 +137,6 @@ func (b ButtonEvent) Event() Event {
 	e := Event{typ: buttonEvent}
 	e.data[0] = uint32(b.Button)
 	e.data[1] = pressed
-	e.data[2] = uint32(b.Rune)
 	return e
 }
 
@@ -119,7 +169,6 @@ func (e Event) AsButton() (ButtonEvent, bool) {
 	return ButtonEvent{
 		Button:  Button(e.data[0]),
 		Pressed: e.data[1] != 0,
-		Rune:    rune(e.data[2]),
 	}, true
 }
 
@@ -129,5 +178,14 @@ func (e Event) AsSDCard() (SDCardEvent, bool) {
 	}
 	return SDCardEvent{
 		Inserted: e.data[0] != 0,
+	}, true
+}
+
+func (e Event) AsRune() (RuneEvent, bool) {
+	if e.typ != runeEvent {
+		return RuneEvent{}, false
+	}
+	return RuneEvent{
+		Rune: rune(e.data[0]),
 	}, true
 }
