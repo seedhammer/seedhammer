@@ -602,6 +602,7 @@
               PROG=outputs/out/bin/controller
               echo "reload $(wc -c < "$PROG")" > "$USBDEV"
               cat "$PROG" > "$USBDEV"
+              rm controller
               exec cat "$USBDEV"
             '';
             mkrelease = let pkgs = localpkgs; in pkgs.writeShellScriptBin "mkrelease" ''
@@ -689,7 +690,7 @@
                     +rp2350.dap.core1 cortex_m reset_config sysresetreq
                   '')
                 ];
-                
+
                 nativeBuildInputs = [
                   autoreconfHook
                   pkg-config
