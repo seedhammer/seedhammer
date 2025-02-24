@@ -2751,7 +2751,8 @@ func Run(pl Platform, version string) func(yield func() bool) {
 				}
 				wakeup := a.ctx.Wakeup
 				a.ctx.Reset()
-				for _, e := range a.ctx.Platform.AppendEvents(wakeup, evts[:0]) {
+				evts = a.ctx.Platform.AppendEvents(wakeup, evts[:0])
+				for _, e := range evts {
 					a.idle.start = a.ctx.Platform.Now()
 					if se, ok := e.AsSDCard(); ok {
 						a.ctx.EmptySDSlot = !se.Inserted
