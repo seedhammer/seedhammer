@@ -13,10 +13,9 @@ const (
 	Button1
 	Button2
 	Button3
-	CCW
-	CW
 	// Synthetic keys only generated in debug mode.
 	Rune // Enter rune.
+	MaxButton
 )
 
 func (b Button) String() string {
@@ -37,10 +36,6 @@ func (b Button) String() string {
 		return "b2"
 	case Button3:
 		return "b3"
-	case CCW:
-		return "ccw"
-	case CW:
-		return "cw"
 	case Rune:
 		return "rune"
 	default:

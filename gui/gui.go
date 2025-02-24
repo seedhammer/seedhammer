@@ -35,8 +35,6 @@ import (
 	"seedhammer.com/seedqr"
 )
 
-const nbuttons = 8
-
 type Context struct {
 	Platform Platform
 	Styles   Styles
@@ -114,9 +112,9 @@ func (c *Context) Next(btns ...Button) (ButtonEvent, bool) {
 }
 
 type InputTracker struct {
-	Pressed [nbuttons]bool
-	clicked [nbuttons]bool
-	repeats [nbuttons]time.Time
+	Pressed [MaxButton]bool
+	clicked [MaxButton]bool
+	repeats [MaxButton]time.Time
 }
 
 func (t *InputTracker) Next(c *Context, btns ...Button) (ButtonEvent, bool) {
@@ -1259,7 +1257,7 @@ func (k *Keyboard) Valid(r rune) bool {
 
 func (k *Keyboard) Update(ctx *Context) {
 	for {
-		e, ok := k.inp.Next(ctx, Left, Right, Up, Down, CCW, CW, Center, Rune, Button3)
+		e, ok := k.inp.Next(ctx, Left, Right, Up, Down, Center, Rune, Button3)
 		if !ok {
 			break
 		}
@@ -1267,15 +1265,11 @@ func (k *Keyboard) Update(ctx *Context) {
 			continue
 		}
 		switch e.Button {
-		case Left, CCW:
+		case Left:
 			next := k.col
 			for {
 				next--
 				if next == -1 {
-					if e.Button == CCW {
-						nrows := len(kbdKeys)
-						k.row = (k.row - 1 + nrows) % nrows
-					}
 					next = len(kbdKeys[k.row]) - 1
 				}
 				if !k.Valid(kbdKeys[k.row][next]) {
@@ -1285,15 +1279,11 @@ func (k *Keyboard) Update(ctx *Context) {
 				k.adjust(true)
 				break
 			}
-		case Right, CW:
+		case Right:
 			next := k.col
 			for {
 				next++
 				if next == len(kbdKeys[k.row]) {
-					if e.Button == CW {
-						nrows := len(kbdKeys)
-						k.row = (k.row + 1 + nrows) % nrows
-					}
 					next = 0
 				}
 				if !k.Valid(kbdKeys[k.row][next]) {
@@ -1450,7 +1440,7 @@ func (s *ChoiceScreen) Choose(ctx *Context, ops op.Ctx, th *Colors) (int, bool) 
 	inp := new(InputTracker)
 	for {
 		for {
-			e, ok := inp.Next(ctx, Button1, Button3, Center, Up, Down, CCW, CW)
+			e, ok := inp.Next(ctx, Button1, Button3, Center, Up, Down)
 			if !ok {
 				break
 			}
@@ -1463,13 +1453,13 @@ func (s *ChoiceScreen) Choose(ctx *Context, ops op.Ctx, th *Colors) (int, bool) 
 				if inp.Clicked(e.Button) {
 					return s.choice, true
 				}
-			case Up, CCW:
+			case Up:
 				if e.Pressed {
 					if s.choice > 0 {
 						s.choice--
 					}
 				}
-			case Down, CW:
+			case Down:
 				if e.Pressed {
 					if s.choice < len(s.Choices)-1 {
 						s.choice++
