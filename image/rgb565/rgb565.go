@@ -15,7 +15,7 @@ type Image struct {
 }
 
 type Color struct {
-	B1, B0 byte
+	B0, B1 byte
 }
 
 func New(r image.Rectangle) *Image {
