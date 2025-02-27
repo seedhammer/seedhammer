@@ -452,8 +452,8 @@ func TestScanScreenConnectError(t *testing.T) {
 	ctx := NewContext(p)
 	scr := &ScanScreen{}
 	camErr := errors.New("failed to open camera")
-	ctx.Events(FrameEvent{Error: camErr}.Event())
 	ops := new(op.Ops)
+	ctx.Events(ops, FrameEvent{Error: camErr}.Event())
 	frame, quit := iter.Pull(runUI(ctx, func() {
 		scr.Scan(ctx, ops.Context())
 	}))
@@ -472,8 +472,8 @@ func TestScanScreenStreamError(t *testing.T) {
 	scr := &ScanScreen{}
 	// Connect.
 	camErr := errors.New("error during streaming")
-	ctx.Events(FrameEvent{Error: camErr}.Event())
 	ops := new(op.Ops)
+	ctx.Events(ops, FrameEvent{Error: camErr}.Event())
 	frame, quit := iter.Pull(runUI(ctx, func() {
 		scr.Scan(ctx, ops.Context())
 	}))
@@ -508,7 +508,7 @@ func ctxMnemonic(ctx *Context, m bip39.Mnemonic) {
 func ctxQR(t *testing.T, ctx *Context, p *testPlatform, qrs ...string) {
 	t.Helper()
 	for _, qr := range qrs {
-		ctx.Events(qrFrame(t, p, qr).Event())
+		ctx.Events(nil, qrFrame(t, p, qr).Event())
 	}
 }
 
@@ -818,7 +818,7 @@ func (*testPlatform) Debug() bool {
 
 func ctxString(ctx *Context, str string) {
 	for _, r := range str {
-		ctx.Events(
+		ctx.Events(nil,
 			RuneEvent{
 				Rune: r,
 			}.Event(),
@@ -828,7 +828,7 @@ func ctxString(ctx *Context, str string) {
 
 func ctxPress(ctx *Context, bs ...Button) {
 	for _, b := range bs {
-		ctx.Events(
+		ctx.Events(nil,
 			ButtonEvent{
 				Button:  b,
 				Pressed: true,
@@ -839,7 +839,7 @@ func ctxPress(ctx *Context, bs ...Button) {
 
 func ctxButton(ctx *Context, bs ...Button) {
 	for _, b := range bs {
-		ctx.Events(
+		ctx.Events(nil,
 			ButtonEvent{
 				Button:  b,
 				Pressed: true,

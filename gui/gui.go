@@ -48,7 +48,12 @@ type Context struct {
 	RotateCamera   bool
 	LastDescriptor *bip380.Descriptor
 
-	events []Event
+	events  []Event
+	pointer struct {
+		hits       []BoundedTag
+		pressedTag op.Tag
+		pressed    bool
+	}
 }
 
 func NewContext(pl Platform) *Context {
@@ -65,23 +70,53 @@ func (c *Context) WakeupAt(t time.Time) {
 	}
 }
 
-const repeatStartDelay = 400 * time.Millisecond
-const repeatDelay = 100 * time.Millisecond
-
 func (c *Context) Reset() {
 	c.events = c.events[:0]
 	c.Wakeup = time.Time{}
+	c.pointer.hits = c.pointer.hits[:0]
 }
 
-func (c *Context) Events(evts ...Event) {
+func (c *Context) Events(o *op.Ops, evts ...Event) {
 	c.events = append(c.events, evts...)
+	pctx := &c.pointer
+	var pressedBounds image.Rectangle
+	if o != nil {
+		b, ok := o.TagBounds(pctx.pressedTag)
+		if !ok {
+			pctx.pressedTag = nil
+		}
+		pressedBounds = b
+	}
+	for _, e := range evts {
+		var pt BoundedTag
+		e, ok := e.AsPointer()
+		if !ok {
+			c.pointer.hits = append(c.pointer.hits, pt)
+			continue
+		}
+		if pctx.pressed {
+			pt = BoundedTag{
+				Tag:    pctx.pressedTag,
+				Bounds: pressedBounds,
+			}
+		} else {
+			pt.Tag, pt.Bounds, _ = o.Hit(e.Pos)
+			pctx.pressedTag = pt.Tag
+		}
+		pctx.pressed = e.Pressed
+		if !pctx.pressed {
+			pctx.pressedTag = nil
+		}
+		pctx.hits = append(pctx.hits, pt)
+	}
 }
 
 func (c *Context) Next(filters ...Filter) (Event, bool) {
 	for i, e := range c.events {
 		for _, f := range filters {
-			if f.matches(e) {
+			if e, ok := f.Matches(c.pointer.hits[i], e); ok {
 				c.events = append(c.events[:i], c.events[i+1:]...)
+				c.pointer.hits = append(c.pointer.hits[:i], c.pointer.hits[i+1:]...)
 				return e, true
 			}
 		}
@@ -1532,45 +1567,48 @@ func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 func mainFlow(ctx *Context, ops op.Ctx) {
 	var page program
 	inp := new(InputTracker)
+	selectBtn := &Clickable{Button: Button3, AltButton: Center}
 	for {
 		dims := ctx.Platform.DisplaySize()
 	events:
 		for {
-			e, ok := inp.Next(ctx, ButtonFilter(Button3), ButtonFilter(Center), ButtonFilter(Left), ButtonFilter(Right))
+			if selectBtn.Clicked(ctx) {
+				ws := &ConfirmWarningScreen{
+					Title: "Remove SD card",
+					Body:  "Remove SD card to continue.\n\nHold button to ignore this warning.",
+					Icon:  assets.IconRight,
+				}
+				th := mainScreenTheme(page)
+			loop:
+				for !ctx.EmptySDSlot {
+					res := ws.Layout(ctx, ops.Begin(), th, dims)
+					dialog := ops.End()
+					switch res {
+					case ConfirmYes:
+						break loop
+					case ConfirmNo:
+						continue events
+					}
+					drawMainScreen(ctx, ops, dims, page)
+					dialog.Add(ops)
+					ctx.Frame()
+				}
+				ctx.EmptySDSlot = true
+				switch page {
+				case backupWallet:
+					backupWalletFlow(ctx, ops, th)
+				}
+				continue
+			}
+			e, ok := inp.Next(ctx,
+				ButtonFilter(Left),
+				ButtonFilter(Right),
+			)
 			if !ok {
 				break
 			}
 			if e, ok := e.AsButton(); ok {
 				switch e.Button {
-				case Button3, Center:
-					if !inp.Clicked(e.Button) {
-						break
-					}
-					ws := &ConfirmWarningScreen{
-						Title: "Remove SD card",
-						Body:  "Remove SD card to continue.\n\nHold button to ignore this warning.",
-						Icon:  assets.IconRight,
-					}
-					th := mainScreenTheme(page)
-				loop:
-					for !ctx.EmptySDSlot {
-						res := ws.Layout(ctx, ops.Begin(), th, dims)
-						dialog := ops.End()
-						switch res {
-						case ConfirmYes:
-							break loop
-						case ConfirmNo:
-							continue events
-						}
-						drawMainScreen(ctx, ops, dims, page)
-						dialog.Add(ops)
-						ctx.Frame()
-					}
-					ctx.EmptySDSlot = true
-					switch page {
-					case backupWallet:
-						backupWalletFlow(ctx, ops, th)
-					}
 				case Left:
 					if !e.Pressed {
 						break
@@ -1591,9 +1629,9 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 			}
 		}
 		drawMainScreen(ctx, ops, dims, page)
-		layoutNavigation(inp, ops, mainScreenTheme(page), dims, []NavButton{
-			{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
-		}...)
+		layoutNavigation(inp, ops, mainScreenTheme(page), dims,
+			NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark, Tag: selectBtn},
+		)
 		ctx.Frame()
 	}
 }
@@ -1656,15 +1694,22 @@ type NavButton struct {
 	Button   Button
 	Style    ButtonStyle
 	Icon     image.Image
+	Tag      op.Tag
 	Progress float32
+}
+
+func navButtonTag(inp *InputTracker, b Button) op.Tag {
+	return &inp.clicked[b]
 }
 
 func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Point, btns ...NavButton) image.Rectangle {
 	navsz := assets.NavBtnPrimary.Bounds().Size()
-	button := func(ops op.Ctx, b NavButton, pressed bool) {
+	button := func(ops op.Ctx, b NavButton, t op.Tag, pressed bool) {
 		if b.Style == StyleNone {
 			return
 		}
+		op.ClipOp(assets.NavBtnPrimary.Bounds()).Add(ops)
+		op.InputOp(ops, t)
 		switch b.Style {
 		case StyleSecondary:
 			op.ImageOp(ops, assets.NavBtnPrimary, true)
@@ -1703,7 +1748,7 @@ func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Poin
 	var r image.Rectangle
 	for _, b := range btns {
 		idx := int(b.Button - Button1)
-		button(ops.Begin(), b, inp.Pressed[b.Button])
+		button(ops.Begin(), b, b.Tag, inp.Pressed[b.Button])
 		y := ys[idx]
 		pos := image.Pt(dims.X-btnsz.X, y)
 		op.Position(ops, ops.End(), pos)
@@ -2752,7 +2797,7 @@ func Run(pl Platform, version string) func(yield func() bool) {
 					wakeup = time.Time{}
 				}
 				a.ctx.Reset()
-				a.ctx.Events(evts...)
+				a.ctx.Events(&a.root, evts...)
 				for {
 					e, ok := ctx.Next(SDCardFilter())
 					if !ok {

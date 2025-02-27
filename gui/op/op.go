@@ -43,6 +43,8 @@ type Image struct {
 	gen any
 }
 
+type Tag any
+
 var globalID = 0
 
 func RegisterParameterizedImage(gen ImageGenerator) Image {
@@ -60,8 +62,14 @@ type genImage struct {
 type frame struct {
 	ops     []frameOp
 	drawOps []drawOp
+	inputs  []inputOp
 	args    []uint32
 	refs    []any
+}
+
+type inputOp struct {
+	bounds image.Rectangle
+	tag    Tag
 }
 
 type opCursor struct {
@@ -78,6 +86,7 @@ const (
 	opImage
 	opClip
 	opCall
+	opInput
 )
 
 type frameOp struct {
@@ -94,8 +103,12 @@ func (o *Ctx) add(cmd opType, op ...uint32) {
 	if o.ops == nil {
 		return
 	}
-	o.ops.frame.args = append(o.ops.frame.args, (uint32(len(op))<<16)|uint32(cmd))
+	o.ops.frame.args = append(o.ops.frame.args, encodeCmdHeader(cmd, len(op), 0))
 	o.ops.frame.args = append(o.ops.frame.args, op...)
+}
+
+func encodeCmdHeader(cmd opType, nargs, nrefs int) uint32 {
+	return (uint32(nargs) << 16) | (uint32(nrefs))<<8 | uint32(cmd)
 }
 
 func (o *Ctx) Begin() Ctx {
@@ -144,6 +157,7 @@ func (f *frame) Reset() {
 	clear(f.ops)
 	f.ops = f.ops[:0]
 	f.drawOps = f.drawOps[:0]
+	f.inputs = f.inputs[:0]
 }
 
 func (o *Ops) ExtractText(dst image.Rectangle) string {
@@ -159,6 +173,24 @@ func (o *Ops) ExtractText(dst image.Rectangle) string {
 		}
 	}
 	return b.String()
+}
+
+func (o *Ops) TagBounds(t Tag) (image.Rectangle, bool) {
+	for _, inp := range o.frame.inputs {
+		if t == inp.tag {
+			return inp.bounds, true
+		}
+	}
+	return image.Rectangle{}, false
+}
+
+func (o *Ops) Hit(p image.Point) (Tag, image.Rectangle, bool) {
+	for _, inp := range o.frame.inputs {
+		if p.In(inp.bounds) {
+			return inp.tag, inp.bounds, true
+		}
+	}
+	return nil, image.Rectangle{}, false
 }
 
 func (o *Ops) Clip(dst image.Rectangle) image.Rectangle {
@@ -367,6 +399,11 @@ func (o *Ops) serialize(state drawState, from opCursor) {
 				ref: int(int32(args[1])),
 			}
 			o.serialize(state, start)
+		case opInput:
+			o.frame.inputs = append(o.frame.inputs, inputOp{
+				tag:    rargs[0],
+				bounds: state.clip,
+			})
 		case opImage:
 			op := imageOp{
 				mask: maskType(args[0]),
@@ -475,6 +512,15 @@ func ColorOp(ops Ctx, col color.NRGBA) {
 	addImageOp(ops, nil, uniformImage, imageMask, image.Rect(-1e9, -1e9, 1e9, 1e9), nil, []uint32{nrgba})
 }
 
+func InputOp(ops Ctx, tag Tag) {
+	if ops.ops == nil {
+		return
+	}
+	ops.ops.frame.args = append(ops.ops.frame.args,
+		encodeCmdHeader(opInput, 0, 1))
+	ops.ops.frame.refs = append(ops.ops.frame.refs, tag)
+}
+
 func ImageOp(ops Ctx, img image.Image, mask bool) {
 	m := imageMask
 	if mask {
@@ -548,10 +594,9 @@ func addImageOp(ops Ctx, src image.Image, img Image, mask maskType, bounds image
 	}
 	nargs := len(args) + 1 + 1 + 4
 	nrefs := len(refs) + 1 + 1
-	cmdArgs := (uint32(nargs) << 16) | (uint32(nrefs))<<8 | uint32(opImage)
 	b := bounds
 	ops.ops.frame.args = append(ops.ops.frame.args,
-		cmdArgs,
+		encodeCmdHeader(opImage, nargs, nrefs),
 		uint32(mask),
 		uint32(img.id),
 		uint32(int32(b.Min.X)), uint32(int32(b.Min.Y)),

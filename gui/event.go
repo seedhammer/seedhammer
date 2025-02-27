@@ -1,11 +1,16 @@
 package gui
 
-import "image"
+import (
+	"image"
+
+	"seedhammer.com/gui/op"
+)
 
 type Button int
 
 const (
-	Up Button = iota
+	None Button = iota
+	Up
 	Down
 	Left
 	Right
@@ -64,20 +69,34 @@ func SDCardFilter() Filter {
 	}
 }
 
+func PointerFilter(t op.Tag) Filter {
+	return Filter{
+		typ: pointerEvent,
+		tag: t,
+	}
+}
+
 type FrameEvent struct {
 	Error error
 	Image image.Image
 }
 
+type PointerEvent struct {
+	Pressed bool
+	Entered bool
+	Pos     image.Point
+}
+
 type Event struct {
 	typ  eventKind
-	data [2]uint32
+	data [3]uint32
 	refs [2]any
 }
 
 type Filter struct {
 	typ eventKind
 	btn Button
+	tag any
 }
 
 type filterKind int
@@ -89,6 +108,7 @@ const (
 	sdcardEvent
 	frameEvent
 	runeEvent
+	pointerEvent
 )
 
 type ButtonEvent struct {
@@ -104,16 +124,33 @@ type SDCardEvent struct {
 	Inserted bool
 }
 
-func (f Filter) matches(e Event) bool {
+type BoundedTag struct {
+	Tag    op.Tag
+	Bounds image.Rectangle
+}
+
+func (f Filter) Matches(t BoundedTag, e Event) (Event, bool) {
 	if f.typ != e.typ {
-		return false
+		return Event{}, false
 	}
 	switch f.typ {
+	case pointerEvent:
+		if t.Tag == nil || t.Tag != f.tag {
+			return Event{}, false
+		}
+		e, _ := e.AsPointer()
+		e.Entered = e.Pos.In(t.Bounds)
+		if e.Pressed {
+			e.Pos = e.Pos.Sub(t.Bounds.Min)
+		}
+		return e.Event(), true
 	case buttonEvent:
 		e, _ := e.AsButton()
-		return e.Button == f.btn
+		if e.Button != f.btn {
+			return Event{}, false
+		}
 	}
-	return true
+	return e, true
 }
 
 func (r RuneEvent) Event() Event {
@@ -148,6 +185,24 @@ func (s SDCardEvent) Event() Event {
 	return e
 }
 
+const (
+	pressedBit = 0b1 << iota
+	enteredBit
+)
+
+func (p PointerEvent) Event() Event {
+	e := Event{typ: pointerEvent}
+	if p.Pressed {
+		e.data[0] |= pressedBit
+	}
+	if p.Entered {
+		e.data[0] |= enteredBit
+	}
+	e.data[1] = uint32(int32(p.Pos.X))
+	e.data[2] = uint32(int32(p.Pos.Y))
+	return e
+}
+
 func (e Event) AsFrame() (FrameEvent, bool) {
 	if e.typ != frameEvent {
 		return FrameEvent{}, false
@@ -169,6 +224,17 @@ func (e Event) AsButton() (ButtonEvent, bool) {
 	return ButtonEvent{
 		Button:  Button(e.data[0]),
 		Pressed: e.data[1] != 0,
+	}, true
+}
+
+func (e Event) AsPointer() (PointerEvent, bool) {
+	if e.typ != pointerEvent {
+		return PointerEvent{}, false
+	}
+	return PointerEvent{
+		Pressed: e.data[0]&(pressedBit) != 0,
+		Entered: e.data[0]&(enteredBit) != 0,
+		Pos:     image.Point{X: int(int32(e.data[1])), Y: int(int32(e.data[2]))},
 	}, true
 }
 

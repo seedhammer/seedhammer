@@ -271,8 +271,11 @@ func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Even
 					Y: lcdHeight - tp.X,
 				}
 			}
-			fmt.Println("touch", pt, inp.last)
-			evts = append(evts, gui.ButtonEvent{Button: gui.Button3, Pressed: inp.last}.Event())
+			evts = append(evts, gui.PointerEvent{
+				Pressed: inp.last,
+				Entered: true,
+				Pos:     pt,
+			}.Event())
 			return evts
 		}
 		if !time.Now().Before(deadline) {
