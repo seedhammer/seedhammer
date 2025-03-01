@@ -654,68 +654,38 @@
             default = self.packages.${system}.image;
 
             # Raspberry Pi openocd fork with rp2350 support.
-            openocd =
-              let
-                pkgs = localpkgs-unstable;
-              in
-              with pkgs; stdenv.mkDerivation rec {
-                pname = "openocd";
-                version = "cf9c0b41cd5c45b2faf01b4fd1186f160342b7b7";
-                src = fetchgit {
-                  url = "https://github.com/raspberrypi/openocd.git";
-                  rev = version;
-                  fetchSubmodules = true;
-                  # Avoid a "Direct fetching of that commit failed." for the git2cl
-                  # git submodule.
-                  leaveDotGit = true;
-                  # Remove after use to maintain reproducibility.
-                  postFetch = ''
-                    rm -rf $out/.git
-                  '';
-                  sha256 = "sha256-tWdiuumClej0Ze1ZqeHkhzBmd9yVwrnKZyJCTJ7j9Kk=";
-                };
-
-                patches = [
-                  # https://github.com/raspberrypi/openocd/issues/120
-                  (writeText "sysresetreq-core1.patch" ''
-                    diff --git a/tcl/target/rp2350.cfg b/tcl/target/rp2350.cfg
-                    index 104e8ecc4..7dbcb759e 100644
-                    --- a/tcl/target/rp2350.cfg
-                    +++ b/tcl/target/rp2350.cfg
-                    @@ -77,3 +77,5 @@ if { $_BOTH_CORES } {
- 
-                     # srst does not exist; use SYSRESETREQ to perform a soft reset
-                     cortex_m reset_config sysresetreq
-                    +# same for the second core, to avoid a warning.
-                    +rp2350.dap.core1 cortex_m reset_config sysresetreq
-                  '')
-                ];
-
-                nativeBuildInputs = [
-                  autoreconfHook
-                  pkg-config
-                  tcl
-                ];
-
-                buildInputs = [
-                  libusb1
-                ];
-
-                configureFlags = [
-                  "--disable-werror"
-                  "--enable-jtag_vpi"
-                  "--enable-remote-bitbang"
-                ];
-
-                enableParallelBuilding = true;
-
-                env.NIX_CFLAGS_COMPILE = toString (
-                  lib.optionals stdenv.cc.isGNU [
-                    "-Wno-error=cpp"
-                    "-Wno-error=strict-prototypes" # fixes build failure with hidapi 0.10.0
-                  ]
-                );
+            openocd = let
+              pkgs = localpkgs-unstable;
+            in with pkgs; openocd.overrideAttrs (old: {
+              pname = "openocd-rpi";
+              src = fetchFromGitHub {
+                owner = "raspberrypi";
+                repo = "openocd";
+                rev = "cf9c0b41cd5c45b2faf01b4fd1186f160342b7b7";
+                hash = "sha256-Wqv9zGwyYgSk/5WqPYXnVWM+TQDJa9iqBQ3ev+o8aiA=";
+                # openocd disables the vendored libraries that use submodules and replaces them with nix versions.
+                # this works out as one of the submodule sources seems to be flakey.
+                fetchSubmodules = false;
               };
+              nativeBuildInputs = old.nativeBuildInputs ++ [
+                autoreconfHook
+              ];
+              patches = [
+                # https://github.com/raspberrypi/openocd/issues/120
+                (writeText "sysresetreq-core1.patch" ''
+                  diff --git a/tcl/target/rp2350.cfg b/tcl/target/rp2350.cfg
+                  index 104e8ecc4..7dbcb759e 100644
+                  --- a/tcl/target/rp2350.cfg
+                  +++ b/tcl/target/rp2350.cfg
+                  @@ -77,3 +77,5 @@ if { $_BOTH_CORES } {
+
+                   # srst does not exist; use SYSRESETREQ to perform a soft reset
+                   cortex_m reset_config sysresetreq
+                  +# same for the second core, to avoid a warning.
+                  +rp2350.dap.core1 cortex_m reset_config sysresetreq
+                '')
+              ];
+            });
           };
         devShells = {
           # shell for running .#reload-fast.
@@ -728,7 +698,37 @@
             in
             with pkgs; mkShell {
               packages = [
-                (tinygo.override { openocd = openocd; })
+                # (tinygo.override { openocd = openocd; })
+                ((tinygo.override { openocd = openocd; }).overrideAttrs (prev:{
+                  doCheck = false; #TinyGo tests are slow.
+                  src = fetchFromGitHub {
+                      owner = "tinygo-org";
+                      repo = "tinygo";
+
+                      rev = "f8242c7ffe2114e52328ef96f0ef7a24735355d6";
+                      hash = "sha256-G+YNZQNjwE2Ps2TD3mLGlM+FbrBfY83O7dsI/xawDZ0=";
+
+                      fetchSubmodules = true;
+                      postFetch = ''
+                        rm -r $out/lib/cmsis-svd/data/{SiliconLabs,Freescale}
+                      '';
+                    };
+                    vendorHash = "sha256-Vae7IFACioxH4E61GX/X7G19/ITbajp96VNUhliV8ls=";
+                    patches = [ ./tinygo.patch ];
+                    postBuild = ''
+                      # Move binary
+                      mkdir -p build
+                      mv $GOPATH/bin/tinygo build/tinygo
+
+                      # Build our own custom wasi-libc.
+                      # This is necessary because we modify the build a bit for our needs (disable
+                      # heap, enable debug symbols, etc).
+
+                      make gen-device -j $NIX_BUILD_CORES
+
+                      export TINYGOROOT=$(pwd)
+                    '';
+                }))
                 gcc-arm-embedded
                 go
                 openocd
