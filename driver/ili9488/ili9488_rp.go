@@ -210,7 +210,7 @@ func (d *Device) Draw(buf [][2]byte) {
 	dma.CH0_CTRL_TRIG.Set(
 		// Increment read address on each transfer.
 		rp.DMA_CH0_CTRL_TRIG_INCR_READ |
-			// Transfer size is big endian 16 bits.
+			// Pixels are big endian, 16 bits.
 			rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_SIZE_HALFWORD<<rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_Pos |
 			0b1<<rp.DMA_CH0_CTRL_TRIG_BSWAP_Pos |
 			// Pace transfers by the PIO TX FIFO.
@@ -228,13 +228,11 @@ func (d *Device) waitDMA() {
 }
 
 func (d *Device) setWindow(r image.Rectangle) {
-	if d.window == r {
-		return
+	if d.window != r {
+		d.window = r
+		d.sendCommand(CASET, byte(r.Min.X>>8), byte(r.Min.X), byte((r.Max.X-1)>>8), byte(r.Max.X-1))
+		d.sendCommand(PASET, byte(r.Min.Y>>8), byte(r.Min.Y), byte((r.Max.Y-1)>>8), byte(r.Max.Y-1))
 	}
-	d.window = r
-
-	d.sendCommand(CASET, byte(r.Min.X>>8), byte(r.Min.X), byte((r.Max.X-1)>>8), byte(r.Max.X-1))
-	d.sendCommand(PASET, byte(r.Min.Y>>8), byte(r.Min.Y), byte((r.Max.Y-1)>>8), byte(r.Max.Y-1))
 	d.sendCommand(RAMWR)
 }
 
