@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"seedhammer.com/backup"
+	"seedhammer.com/driver/ap33772s"
 	"seedhammer.com/driver/clrc663"
 	"seedhammer.com/driver/ft6x36"
 	"seedhammer.com/driver/ili9488"
@@ -61,6 +62,7 @@ type Platform struct {
 const (
 	TOUCH_SDA = machine.GPIO14
 	TOUCH_SCL = machine.GPIO15
+	TOUCH_INT = machine.GPIO12
 
 	LCD_RS  = machine.NoPin
 	LCD_CS  = machine.NoPin
@@ -69,19 +71,19 @@ const (
 	LCD_WRX = machine.GPIO17
 	LCD_DB0 = machine.GPIO18
 
-	DRV_ENABLE = machine.GPIO10
+	DRV_ENABLE = machine.GPIO11
 
-	NEEDLE       = machine.GPIO8
+	NEEDLE       = machine.GPIO4
 	NEEDLE_SENSE = machine.GPIO26
 
-	STEPPER_UART = machine.GPIO9
+	STEPPER_UART = machine.GPIO10
 	X_ADDR       = 0b00
-	X_DIAG       = machine.GPIO7
+	X_DIAG       = machine.GPIO8
 	X_STEP       = machine.GPIO6
-	X_DIR        = machine.GPIO5
+	X_DIR        = machine.GPIO3
 	Y_ADDR       = 0b01
-	Y_DIAG       = machine.GPIO4
-	Y_STEP       = machine.GPIO3
+	Y_DIAG       = machine.GPIO7
+	Y_STEP       = machine.GPIO5
 	Y_DIR        = machine.GPIO2
 
 	DATA_INT = machine.GPIO27
@@ -93,7 +95,7 @@ const (
 
 var (
 	needleSenseADC = machine.ADC{Pin: NEEDLE_SENSE}
-	needlePWM      = machine.PWM4
+	needlePWM      = machine.PWM2
 	touchI2C       = machine.I2C1
 	// Data I2C bus for the USB PD and NFC peripherals.
 	dataI2C    = machine.I2C0
@@ -103,6 +105,7 @@ var (
 
 const (
 	needleActivation = 45 * time.Millisecond / 10
+	maxVoltagemV     = 28_000
 )
 
 func Init() (*Platform, error) {
@@ -113,60 +116,14 @@ func Init() (*Platform, error) {
 	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
 		return nil, fmt.Errorf("touch I2C: %w", err)
 	}
-	// rd := make([]byte, 0xff)
-	// rd2 := make([]byte, 0xff)
-	// for {
-	// 	const husb2238aI2CAddr = 0x42
-	// 	if err := dataI2C.Tx(husb2238aI2CAddr, []byte{0x00}, rd); err != nil {
-	// 		return nil, fmt.Errorf("husb2238a: %w", err)
-	// 	}
-	// 	for i, b := range rd {
-	// 		if b != rd2[i] {
-	// 			fmt.Printf("USBPD: %#.2x: %.8b\n", i, b)
-	// 		}
-	// 	}
-	// 	rd, rd2 = rd2, rd
-	// 	time.Sleep(1 * time.Second)
-	// }
-	const (
-		husb2238aI2CAddr = 0x42
-		CONTRACT_STATUS0 = 0x67
-		SRC_PDO_5V       = 0x6A
-		CONTROL1         = 0x02
-		RESET            = 0x04
-
-		ENABLE = 0b1 << 3
-	)
-	// // Reset.
-	// if err := dataI2C.Tx(husb2238aI2CAddr, []byte{RESET, 0b1}, nil); err != nil {
-	// 	return nil, fmt.Errorf("husb2238a: %w", err)
-	// }
-	// time.Sleep(time.Second)
-	// Enable.
-	if err := dataI2C.Tx(husb2238aI2CAddr, []byte{CONTROL1, ENABLE}, nil); err != nil {
-		return nil, fmt.Errorf("husb2238a: %w", err)
+	usbpd := ap33772s.New(dataI2C)
+	if err := usbpd.AdjustVoltage(maxVoltagemV); err != nil {
+		log.Printf("error: %v", err)
 	}
-	// {
-	// 	rd := make([]byte, 6)
-	// 	for {
-	// 		if err := dataI2C.Tx(husb2238aI2CAddr, []byte{SRC_PDO_5V}, rd); err != nil {
-	// 			return nil, fmt.Errorf("husb2238a: %w", err)
-	// 		}
-	// 		fmt.Printf("USBPD: %.8b\n", rd)
-	// 		time.Sleep(1 * time.Second)
-	// 	}
-	// }
-	// rd := make([]byte, 6)
-	// for {
-	// 	if err := dataI2C.Tx(husb2238aI2CAddr, []byte{SRC_PDO_5V}, rd); err != nil {
-	// 		return nil, fmt.Errorf("husb2238a: %w", err)
-	// 	}
-	// 	fmt.Printf("USBPD: %.8b\n", rd)
-	// 	time.Sleep(1 * time.Second)
-	// }
+
 	nfc := clrc663.New(dataI2C)
 	if err := nfc.TestDump(); err != nil {
-		fmt.Printf("nfc: %v\n", err)
+		log.Printf("error: %v\n", err)
 	}
 
 	p := &Platform{

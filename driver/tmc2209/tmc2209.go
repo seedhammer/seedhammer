@@ -17,7 +17,7 @@ const (
 	// currentRMS is the motor current in amperes (A).
 	currentRMS = 0.9
 	// rsense is the sense resistor in ohms (Ω).
-	rsense = 0.120
+	rsense = 0.150
 	// vfs is the sense voltage, in volts (V).
 	vfs = 0.325
 )
@@ -138,7 +138,7 @@ func (d *Device) Configure() error {
 	gconf |= pdn_disable
 	// Enable step resolution setting through MRES.
 	gconf |= mstep_reg_select
-	// Use IRUN/IHOLD for current setting.
+	// Don't scale IRUN/IHOLD by Vref.
 	gconf &^= I_scale_analog
 	if err := d.write(GCONF, gconf); err != nil {
 		return fmt.Errorf("tmc2209: set GCONF: %w", err)
