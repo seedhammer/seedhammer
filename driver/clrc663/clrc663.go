@@ -25,16 +25,31 @@ func New(bus *machine.I2C) *Device {
 	}
 }
 
+func (d *Device) Configure() error {
+	if err := d.runCommand(cmdSoftReset); err != nil {
+		return fmt.Errorf("clrc663: soft reset: %w", err)
+	}
+	return nil
+}
+
+func (d *Device) SetPadEnable(padEn uint8) error {
+	return d.writeRegs(regPadEn, padEn)
+}
+
+func (d *Device) SetPadOutput(padOut uint8) error {
+	return d.writeRegs(regPadOut, padOut)
+}
+
 func (d *Device) readReg(reg uint8) (uint8, error) {
 	if err := d.bus.Tx(i2cAddr, []byte{reg}, d.scratch[:1]); err != nil {
-		return 0, fmt.Errorf("read register %#x: %w", reg, err)
+		return 0, fmt.Errorf("clrc663: read register %#x: %w", reg, err)
 	}
 	return d.scratch[0], nil
 }
 
 func (d *Device) readRegs(reg uint8, val []uint8) error {
 	if err := d.bus.Tx(i2cAddr, []byte{reg}, val); err != nil {
-		return fmt.Errorf("read registers %#x (%d): %w", reg, len(val), err)
+		return fmt.Errorf("clrc663:read registers %#x (%d): %w", reg, len(val), err)
 	}
 	return nil
 }
@@ -42,12 +57,12 @@ func (d *Device) readRegs(reg uint8, val []uint8) error {
 func (d *Device) readFIFO(data []byte) (int, error) {
 	rx_len, err := d.readReg(regFIFOLength)
 	if err != nil {
-		return 0, fmt.Errorf("read FIFOLength: %w", err)
+		return 0, fmt.Errorf("clrc663:read FIFOLength: %w", err)
 	}
 
 	n := min(int(rx_len), len(data))
 	if err := d.readRegs(regFIFOData, data[:n]); err != nil {
-		return 0, fmt.Errorf("read FIFOData: %w", err)
+		return 0, fmt.Errorf("clrc663:read FIFOData: %w", err)
 	}
 	return n, nil
 }
@@ -603,9 +618,6 @@ func (d *Device) measureLPCD() error {
 }
 
 func (d *Device) TestDump() error {
-	if err := d.runCommand(cmdSoftReset); err != nil {
-		return fmt.Errorf("clrc663: soft reset: %w", err)
-	}
 	// Load preset protocol registers.
 	if err := d.runCommand(
 		cmdLoadProtocol,
