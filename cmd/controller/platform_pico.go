@@ -10,7 +10,6 @@ import (
 	"image/draw"
 	"log"
 	"machine"
-	"runtime"
 	"time"
 	"unsafe"
 
@@ -38,13 +37,17 @@ type button struct {
 
 type Platform struct {
 	wakeups chan struct{}
+	timer   *time.Timer
 
-	lcdDev      *ili9488.Device
-	touchDev    *ft6x36.Device
-	engraver    gui.Engraver
-	engraverErr error
+	lcdDev   *ili9488.Device
+	engraver struct {
+		dev gui.Engraver
+		err error
+	}
 
 	touch struct {
+		dev     *ft6x36.Device
+		ints    chan struct{}
 		last    bool
 		lastPos image.Point
 	}
@@ -109,7 +112,6 @@ const (
 )
 
 func Init() (*Platform, error) {
-	boot := time.Now()
 	if err := dataI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: DATA_SDA, SCL: DATA_SCL}); err != nil {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
@@ -151,6 +153,7 @@ func Init() (*Platform, error) {
 
 	p := &Platform{
 		wakeups: make(chan struct{}, 1),
+		timer:   time.NewTimer(0),
 	}
 	for i := range p.display.buffers {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
@@ -160,20 +163,18 @@ func Init() (*Platform, error) {
 	if err := p.lcdDev.Configure(ili9488.Config{}); err != nil {
 		return nil, err
 	}
-	// The touch controller needs at least 300ms to initialize.
-	for time.Since(boot) < 310*time.Millisecond {
-		runtime.Gosched()
-	}
 	touch := ft6x36.New(touchI2C)
-	touch.Configure(ft6x36.Config{})
-	p.touchDev = touch
+	TOUCH_INT.Configure(machine.PinConfig{Mode: machine.PinInput})
+	TOUCH_INT.SetInterrupt(machine.PinFalling, p.touchInterrupt)
+	p.touch.ints = make(chan struct{}, 1)
+	p.touch.dev = touch
 	// Setup both drivers for sharing their UART pin.
 	e, err := configEngraver()
 	if err == nil {
-		p.engraver = engraver{e}
+		p.engraver.dev = engraver{e}
 	} else {
 		log.Printf("pico: %v", err)
-		p.engraverErr = err
+		p.engraver.err = err
 	}
 	// {
 	// 	machine.InitADC()
@@ -237,37 +238,60 @@ func configEngraver() (*mjolnir2.Device, error) {
 	return mjolnir2.New(DRV_ENABLE, X, Y, needle)
 }
 
+func (p *Platform) touchInterrupt(machine.Pin) {
+	select {
+	case p.touch.ints <- struct{}{}:
+	default:
+	}
+}
+
 func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Event {
-	inp := &p.touch
+	// Don't starve touch input.
+	select {
+	case <-p.touch.ints:
+		e, ok := p.processTouch()
+		if ok {
+			return append(evts, e.Event())
+		}
+	default:
+	}
+	p.timer.Reset(time.Until(deadline))
 	for {
-		tp, touching := p.touchDev.ReadTouchPoint()
-		if touching != inp.last || tp != inp.lastPos {
-			inp.last = touching
-			inp.lastPos = tp
-			var pt image.Point
-			if touching {
-				pt = image.Point{
-					X: tp.Y,
-					Y: lcdHeight - tp.X,
-				}
-			}
-			evts = append(evts, gui.PointerEvent{
-				Pressed: inp.last,
-				Entered: true,
-				Pos:     pt,
-			}.Event())
-			return evts
-		}
-		if !time.Now().Before(deadline) {
-			return evts
-		}
 		select {
+		case <-p.timer.C:
+			return evts
 		case <-p.wakeups:
 			return evts
-		default:
+		case <-p.touch.ints:
+			e, ok := p.processTouch()
+			if !ok {
+				break
+			}
+			return append(evts, e.Event())
 		}
-		runtime.Gosched()
 	}
+}
+
+func (p *Platform) processTouch() (gui.PointerEvent, bool) {
+	inp := &p.touch
+	tp, touching := p.touch.dev.ReadTouchPoint()
+	if touching == inp.last && tp == inp.lastPos {
+		return gui.PointerEvent{}, false
+	}
+	inp.last = touching
+	inp.lastPos = tp
+	var pt image.Point
+	if touching {
+		pt = image.Point{
+			X: tp.Y,
+			Y: lcdHeight - tp.X,
+		}
+	}
+	return gui.PointerEvent{
+		Pressed: inp.last,
+		Entered: true,
+		Pos:     pt,
+	}, true
 }
 
 func (p *Platform) Wakeup() {
@@ -294,7 +318,7 @@ func (e engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan str
 }
 
 func (p *Platform) Engraver() (gui.Engraver, error) {
-	return p.engraver, p.engraverErr
+	return p.engraver.dev, p.engraver.err
 }
 
 func (p *Platform) ScanQR(img *image.Gray) ([][]byte, error) {
