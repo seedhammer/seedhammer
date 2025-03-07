@@ -36,6 +36,16 @@ func New(bus *machine.I2C) *Device {
 	}
 }
 
+// ReadTemperature reads the temperature in degrees celcius
+// off the connected thermistor.
+func (d *Device) ReadTemperature() (int, error) {
+	temp := make([]byte, 1)
+	if err := d.bus.Tx(ap3372sAddr, []byte{regTEMP}, temp); err != nil {
+		return 0, fmt.Errorf("ap3372s: %w", err)
+	}
+	return int(temp[0]), nil
+}
+
 // AdjustVoltage negotiates the highest voltage that doesn't
 // exceed the maximum. It returns the voltage negotiated.
 func (d *Device) AdjustVoltage(maxVoltagemV int) error {

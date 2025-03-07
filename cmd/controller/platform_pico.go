@@ -146,6 +146,14 @@ func Init() (*Platform, error) {
 	if err := usbpd.AdjustVoltage(maxVoltagemV); err != nil {
 		log.Printf("error: %v", err)
 	}
+	// for {
+	// 	temp, err := usbpd.ReadTemperature()
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+	// 	fmt.Println("temp", temp)
+	// 	time.Sleep(200 * time.Millisecond)
+	// }
 
 	// if err := nfc.TestDump(); err != nil {
 	// 	log.Printf("error: %v\n", err)
