@@ -93,8 +93,8 @@ const (
 
 var (
 	needleSenseADC = machine.ADC{Pin: NEEDLE_SENSE}
-	// needlePWM      = machine.PWM7
-	touchI2C = machine.I2C1
+	needlePWM      = machine.PWM4
+	touchI2C       = machine.I2C1
 	// Data I2C bus for the USB PD and NFC peripherals.
 	dataI2C    = machine.I2C0
 	lcdPIO     = rp.PIO0
@@ -164,18 +164,6 @@ func Init() (*Platform, error) {
 	// 	fmt.Printf("USBPD: %.8b\n", rd)
 	// 	time.Sleep(1 * time.Second)
 	// }
-	// err := needlePWM.Configure(machine.PWMConfig{
-	// 	Period: uint64(mjolnir2.NeedlePeriod),
-	// })
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// ch, err := needlePWM.Channel(NEEDLE)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// needlePWM.Set(ch, 0)
-	// needlePWMThreshold := time.Duration(needlePWM.Top()) * needleActivation / mjolnir2.NeedlePeriod
 	nfc := clrc663.New(dataI2C)
 	if err := nfc.TestDump(); err != nil {
 		fmt.Printf("nfc: %v\n", err)
@@ -233,6 +221,18 @@ func Init() (*Platform, error) {
 }
 
 func configEngraver() (*mjolnir2.Device, error) {
+	err := needlePWM.Configure(machine.PWMConfig{
+		Period: uint64(mjolnir2.NeedlePeriod),
+	})
+	if err != nil {
+		return nil, err
+	}
+	ch, err := needlePWM.Channel(NEEDLE)
+	if err != nil {
+		return nil, err
+	}
+	needlePWM.Set(ch, 0)
+	needlePWMThreshold := time.Duration(needlePWM.Top()) * needleActivation / mjolnir2.NeedlePeriod
 	uart, err := tmc2209.NewUART(stepperPIO, STEPPER_UART)
 	if err != nil {
 		return nil, err
@@ -248,11 +248,11 @@ func configEngraver() (*mjolnir2.Device, error) {
 		return nil, fmt.Errorf("y-axis stepper: %w", err)
 	}
 	needle := func(enable bool) {
-		// t := needlePWMThreshold
-		// if !enable {
-		// 	t = 0
-		// }
-		// needlePWM.Set(ch, uint32(t))
+		t := needlePWMThreshold
+		if !enable {
+			t = 0
+		}
+		needlePWM.Set(ch, uint32(t))
 	}
 	return mjolnir2.New(DRV_ENABLE, X, Y, needle)
 }
