@@ -146,6 +146,22 @@ func Init() (*Platform, error) {
 	if err := usbpd.AdjustVoltage(maxVoltagemV); err != nil {
 		log.Printf("error: %v", err)
 	}
+	// DATA_INT.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
+	// for {
+	// 	time.Sleep(100 * time.Millisecond)
+	// 	fmt.Println("DATA_INT:", DATA_INT.Get())
+	// }
+	// vol, err := usbpd.ReadVoltage()
+	// fmt.Println(vol, err)
+	// NEEDLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	// NEEDLE.High()
+	// time.Sleep(100 * time.Millisecond)
+	// cur, err := usbpd.ReadCurrent()
+	// NEEDLE.Low()
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// fmt.Println("current", cur)
 	// for {
 	// 	temp, err := usbpd.ReadTemperature()
 	// 	if err != nil {
