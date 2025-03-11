@@ -1,7 +1,7 @@
-//go:build tinygo && rp
+//go:build tinygo
 
-// package mjolnir2 implements a driver for the particular hardware
-// in the Seedhammer v2.
+// package mjolnir2 implements a driver for the particular
+// engraving hardware in the Seedhammer II.
 package mjolnir2
 
 import (
