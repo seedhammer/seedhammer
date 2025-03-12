@@ -158,6 +158,7 @@ func (d *Device) engrave(speed int, plan engrave.Plan) error {
 	moveDelay := int(NeedlePeriod / period)
 	done := make(chan struct{})
 	defer close(done)
+	plan = engrave.Scale(tmc2209.Microsteps, plan)
 	go func() {
 		defer close(commands)
 		needleOn := false
@@ -168,7 +169,7 @@ func (d *Device) engrave(speed int, plan engrave.Plan) error {
 			}
 			dist := cmd.Coord.Sub(d.pen)
 			d.pen = cmd.Coord
-			c.DirX, c.DirY = c.Line.Reset(dist.Mul(tmc2209.Microsteps))
+			c.DirX, c.DirY = c.Line.Reset(dist)
 			c.DirX = c.DirX != invertX
 			c.DirY = c.DirY != invertY
 			if needleOn != c.Engrave {
