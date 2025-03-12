@@ -83,6 +83,13 @@ func offsetting(x, y int) transform {
 	}
 }
 
+func scaling(sx, sy int) transform {
+	return transform{
+		sx, 0, 0,
+		0, sy, 0,
+	}
+}
+
 func transformPlan(t transform, p Plan) Plan {
 	return func(yield func(Command) bool) {
 		for c := range p {
@@ -92,6 +99,10 @@ func transformPlan(t transform, p Plan) Plan {
 			}
 		}
 	}
+}
+
+func Scale(sx, sy int, cmd Plan) Plan {
+	return transformPlan(scaling(sx, sy), cmd)
 }
 
 func Offset(x, y int, cmd Plan) Plan {
