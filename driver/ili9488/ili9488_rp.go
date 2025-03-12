@@ -57,7 +57,6 @@ func (d *Device) Configure(c Config) error {
 	const minWriteCycle = 30 * time.Nanosecond
 
 	const maxWriteSpeed = uint32(time.Second / minWriteCycle)
-	const pioCyclesPerWrite = 2
 	const pioFreq = maxWriteSpeed * pioCyclesPerWrite
 
 	progOff := uint8(0)
@@ -172,10 +171,7 @@ func (d *Device) setPullThreshold(thres int) {
 }
 
 func (d *Device) flushFIFO() {
-	// Clear stall flag.
-	d.pio.SetFDEBUG_TXSTALL(0b1 << pioStateMachine)
-	for d.pio.GetFDEBUG_TXSTALL()&(0b1<<pioStateMachine) == 0 {
-	}
+	pio.WaitTXStall(d.pio, 0b1<<pioStateMachine)
 }
 
 func (d *Device) EndFrame() {

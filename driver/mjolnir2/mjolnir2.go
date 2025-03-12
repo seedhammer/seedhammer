@@ -5,20 +5,22 @@
 package mjolnir2
 
 import (
+	"device/rp"
 	"errors"
 	"image"
 	"machine"
 	"time"
 
+	"seedhammer.com/driver/pio"
 	"seedhammer.com/driver/tmc2209"
 	"seedhammer.com/engrave"
 )
 
-// Speeds, in mm/min.
+// Speeds, in mm/s.
 const (
-	homingSpeed  = 900
-	engraveSpeed = 500
-	travelSpeed  = 1200
+	engraveSpeed = 500 / 60
+	homingSpeed  = 900 / 60
+	travelSpeed  = 1200 / 60
 )
 
 const NeedlePeriod = 20 * time.Millisecond
@@ -37,13 +39,10 @@ const (
 const (
 	// stallThreshold is the TMC2209 SGTHRS for triggering a
 	// stall.
-	stallThreshold = 120
+	stallThreshold = 110
 	// Maximum distance to travel before giving up homing.
 	maxHomingMM = 250
 )
-
-// stepsPerMM in fullsteps.
-const stepsPerMM = 200 / 8
 
 var Params = engrave.Params{
 	StrokeWidth: stepsPerMM * 3 / 10,
@@ -51,215 +50,203 @@ var Params = engrave.Params{
 }
 
 type Device struct {
-	enable       machine.Pin
-	xaxis, yaxis *tmc2209.Device
-	needle       struct {
-		enable func(bool)
-	}
+	Pio          *rp.PIO0_Type
+	XAxis, YAxis *tmc2209.Device
+	EnablePin    machine.Pin
+	BasePin      machine.Pin
+	XDiag        machine.Pin
+	YDiag        machine.Pin
 
-	// Engraving state.
-	delay        int
-	quit         <-chan struct{}
-	commands     <-chan command
-	pen          image.Point
-	line         bresenham
-	phase        bool
-	homing       bool
-	xdiag, ydiag bool
+	xnotify, ynotify chan struct{}
 }
 
-type command struct {
-	Delay      int
-	Line       bresenham
-	DirX, DirY bool
-	Engrave    bool
+const (
+	// Pin offsets from base pin.
+	pinDirY = iota
+	pinDirX
+	pinNeedle
+	pinStepY
+	pinStepX
+	pinCount
+)
+
+const pioSM = 0
+
+func (d *Device) Configure() error {
+	if d.xnotify == nil {
+		d.xnotify = make(chan struct{}, 1)
+	}
+	if d.ynotify == nil {
+		d.ynotify = make(chan struct{}, 1)
+	}
+	progOff := uint8(0)
+	conf := mjolnir2ProgramDefaultConfig(progOff)
+	conf.SidesetBase = pinStepY + d.BasePin
+	conf.OutBase = pinDirY + d.BasePin
+	conf.OutCount = pinCount
+	conf.FIFOMode = pio.FIFOJoinTX
+	conf.PullThreshold = pinCount + delayBits
+	conf.Autopull = true
+	const (
+		microstepsPerSecond = topSpeed * stepsPerMM * tmc2209.Microsteps
+		pioFreq             = uint32(microstepsPerSecond * pioCyclesPerStep)
+	)
+	conf.Freq = pioFreq
+	pio.Configure(d.Pio, pioSM, conf.Build())
+	pio.Program(d.Pio, progOff, mjolnir2Instructions)
+
+	// Set up pins.
+	d.EnablePin.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	d.EnablePin.Set(true)
+	d.XDiag.Configure(machine.PinConfig{Mode: machine.PinInput})
+	d.XDiag.SetInterrupt(machine.PinRising, d.diagInterrupt)
+	d.YDiag.Configure(machine.PinConfig{Mode: machine.PinInput})
+	d.YDiag.SetInterrupt(machine.PinRising, d.diagInterrupt)
+	return nil
 }
 
-func New(enable machine.Pin, X, Y *tmc2209.Device, needle func(enable bool)) (*Device, error) {
-	enable.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	enable.Set(true)
-	d := &Device{
-		enable: enable,
-		xaxis:  X, yaxis: Y,
+func (d *Device) diagInterrupt(pin machine.Pin) {
+	var stepPin machine.Pin
+	var notify chan struct{}
+	switch pin {
+	case d.XDiag:
+		stepPin = pinStepX + d.BasePin
+		notify = d.xnotify
+	case d.YDiag:
+		stepPin = pinStepY + d.BasePin
+		notify = d.ynotify
+	default:
+		return
 	}
-	d.needle.enable = needle
-	return d, nil
+	// Disconnect the step pin from the PIO program and set it low.
+	stepPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	stepPin.Low()
+	select {
+	case notify <- struct{}{}:
+	default:
+	}
 }
 
 func (d *Device) Close() {
 }
 
 func (d *Device) stallThreshold(threshold uint8) error {
-	if err := d.xaxis.StallThreshold(threshold); err != nil {
+	if err := d.XAxis.StallThreshold(threshold); err != nil {
 		return err
 	}
-	return d.yaxis.StallThreshold(threshold)
+	return d.YAxis.StallThreshold(threshold)
 }
 
 func (d *Device) Engrave(plan engrave.Plan, quit <-chan struct{}) error {
-	d.enable.Set(false)
-	defer d.enable.Set(true)
-	d.quit = quit
-	d.xaxis.Reset()
-	d.yaxis.Reset()
-	if err := d.home(); err != nil {
+	d.EnablePin.Set(false)
+	defer d.EnablePin.Set(true)
+	if err := d.home(quit); err != nil {
 		return err
 	}
 	plan = engrave.Offset(originX, originY, plan)
-	if err := d.engrave(engraveSpeed, plan); err != nil {
+	if err := d.engrave(engraveSpeed, quit, false, plan); err != nil {
 		return err
 	}
 	// Return to "eject" position.
-	return d.engrave(travelSpeed, func(yield func(engrave.Command) bool) {
-		yield(engrave.Move(image.Pt(d.pen.X, ejectY)))
+	return d.engrave(travelSpeed, quit, false, func(yield func(engrave.Command) bool) {
+		yield(engrave.Move(image.Pt(0, ejectY)))
 	})
 }
 
-func (d *Device) home() error {
-	d.pen = image.Point{}
-	d.homing = true
+func (d *Device) home(quit <-chan struct{}) error {
+	{
+		d.engrave(homingSpeed, quit, false, func(yield func(engrave.Command) bool) {
+			const dist = 10 * stepsPerMM
+			home := image.Pt(dist, dist)
+			yield(engrave.Move(home))
+		})
+	}
 	if err := d.stallThreshold(stallThreshold); err != nil {
 		return err
 	}
-	err := d.engrave(homingSpeed, func(yield func(engrave.Command) bool) {
-		dist := maxHomingMM * stepsPerMM
+	engErr := d.engrave(homingSpeed, quit, true, func(yield func(engrave.Command) bool) {
+		const dist = maxHomingMM * stepsPerMM
 		home := image.Pt(-dist, -dist)
 		yield(engrave.Move(home))
 	})
-	d.homing = false
-	if err != nil {
-		return err
-	}
 	if err := d.stallThreshold(0); err != nil {
 		return err
 	}
-	if !d.xdiag || !d.ydiag {
-		select {
-		case <-d.quit:
-		default:
-			return errors.New("mjolnir2: homing timed out")
-		}
-	}
-	d.pen = image.Point{}
-	return nil
+	return engErr
 }
 
-func (d *Device) engrave(speed int, plan engrave.Plan) error {
-	d.delay = 0
-	d.line = bresenham{}
-	d.phase = false
-	d.xdiag = false
-	d.ydiag = false
-	const buffer = 50
-	commands := make(chan command, buffer)
-	d.commands = commands
-	microstepsPerMinute := speed * stepsPerMM * tmc2209.Microsteps
-	period := time.Minute / time.Duration(microstepsPerMinute)
-	moveDelay := int(NeedlePeriod / period)
-	done := make(chan struct{})
-	defer close(done)
+func (d *Device) engrave(speed int, quit <-chan struct{}, homing bool, plan engrave.Plan) error {
+	pio.ConfigurePins(d.Pio, pioSM, d.BasePin, pinCount)
+	pio.Pindirs(d.Pio, pioSM, d.BasePin, pinCount, machine.PinOutput)
+	// Reset and start state machine.
+	pio.Restart(d.Pio, 0b1<<pioSM)
+	pio.Enable(d.Pio, 0b1<<pioSM)
+	defer pio.Disable(d.Pio, 0b1<<pioSM)
+
+	// Scale plan coordinates from steps to microsteps.
 	plan = engrave.Scale(tmc2209.Microsteps, plan)
-	go func() {
-		defer close(commands)
-		needleOn := false
-	loop:
-		for cmd := range plan {
-			c := command{
-				Engrave: cmd.Line,
-			}
-			dist := cmd.Coord.Sub(d.pen)
-			d.pen = cmd.Coord
-			c.DirX, c.DirY = c.Line.Reset(dist)
-			c.DirX = c.DirX != invertX
-			c.DirY = c.DirY != invertY
-			if needleOn != c.Engrave {
-				needleOn = c.Engrave
-				// Delay movement until needle has completed its cycle.
-				c.Delay += moveDelay
-			}
-			select {
-			case <-done:
-				break loop
-			case commands <- c:
-			}
-		}
-	}()
-	for {
-		if d.tick() {
-			break
-		}
-		// Callback twice per microstep.
-		time.Sleep(period / 2)
+	txReg := pio.Tx(d.Pio, pioSM)
+	xdiag, ydiag := false, false
+	// Clear notifications.
+	select {
+	case <-d.xnotify:
+	default:
 	}
-	if d.xdiag {
-		if err := d.xaxis.Error(); err != nil {
-			return err
-		}
-		if !d.homing {
-			return errors.New("mjolnir2: x-axis stepper driver failed")
-		}
+	select {
+	case <-d.ynotify:
+	default:
 	}
-	if d.ydiag {
-		if err := d.yaxis.Error(); err != nil {
-			return err
-		}
-		if !d.homing {
-			return errors.New("mjolnir2: y-axis stepper driver failed")
-		}
-	}
-	return nil
-}
-
-// tick drives the engraving hardware. It is called twice for each (micro-)step.
-func (d *Device) tick() bool {
-	if !d.phase {
-		// The first phase sets up the next step and drives the (low frequency) needle. It
-		// is not timing sensitive as long as it completes before the next callback.
-		d.xaxis.Step(false)
-		d.yaxis.Step(false)
+	for step := range engravePlan(plan) {
 		select {
-		case <-d.quit:
-			return true
+		case <-quit:
+			return nil
+		case <-d.xnotify:
+			if err := d.XAxis.Error(); err != nil {
+				return err
+			}
+			if !homing {
+				return errors.New("mjolnir2: x-axis stepper driver failed")
+			}
+			xdiag = true
+		case <-d.ynotify:
+			if err := d.YAxis.Error(); err != nil {
+				return err
+			}
+			if !homing {
+				return errors.New("mjolnir2: y-axis stepper driver failed")
+			}
+			ydiag = true
 		default:
 		}
-		d.xdiag = d.xdiag || d.xaxis.Diag()
-		d.ydiag = d.ydiag || d.yaxis.Diag()
-		// Stop when any axis report a fault, except when homing where
-		// the fault indicators must both indicate stalls.
-		if ((d.xdiag || d.ydiag) && !d.homing) || d.xdiag && d.ydiag {
-			return true
+		if homing && ydiag && xdiag {
+			return nil
 		}
-	loop:
-		for d.line.Done() && d.delay == 0 {
-			select {
-			case cmd, ok := <-d.commands:
-				d.line = cmd.Line
-				d.xaxis.Dir(!cmd.DirX)
-				d.yaxis.Dir(!cmd.DirY)
-				d.needle.enable(cmd.Engrave)
-				d.delay += cmd.Delay
-				if !ok && d.delay == 0 {
-					return true
-				}
-			default:
-				// Buffer under-run; disable needle.
-				d.needle.enable(false)
-				break loop
-			}
+		dirx := step.DirX
+		if !invertX {
+			dirx = 1 - dirx
 		}
-		if d.delay > 0 {
-			d.delay--
+		diry := step.DirY
+		if !invertY {
+			diry = 1 - diry
 		}
-	} else {
-		// The second callback only sets the step pins. The short code
-		// reduces jitter.
-		x, y := false, false
-		if d.delay == 0 && !d.line.Done() {
-			x, y = d.line.Step()
+		pins := uint32(
+			dirx<<pinDirX |
+				diry<<pinDirY |
+				0b0<<pinNeedle |
+				step.StepX<<pinStepX |
+				step.StepY<<pinStepY,
+		)
+
+		delay := pioCyclesPerStep*topSpeed/speed - pioCyclesPerStep
+		// delay := max(0, pioCyclesPerStep*(topSpeed+step.Speed-1)/step.Speed-pioCyclesPerStep)
+		cmd := pins<<delayBits | uint32(delay)
+		// Wait for FIFO.
+		for d.Pio.GetFSTAT_TXFULL()&(0b1<<pioSM) != 0 {
 		}
-		d.xaxis.Step(x && !d.xdiag)
-		d.yaxis.Step(y && !d.ydiag)
+		txReg.Set(cmd)
 	}
-	d.phase = !d.phase
-	return false
+	if homing {
+		return errors.New("mjolnir2: homing timed out")
+	}
+	return nil
 }

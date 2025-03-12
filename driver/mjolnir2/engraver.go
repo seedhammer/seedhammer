@@ -1,6 +1,66 @@
 package mjolnir2
 
-import "image"
+import (
+	"image"
+	"iter"
+
+	"seedhammer.com/engrave"
+)
+
+const (
+	// stepsPerMM in fullsteps.
+	stepsPerMM = 200 / 8
+
+	// topSpeed in mm/s.
+	topSpeed = 20
+	// acceleration in mm/s².
+	acceleration = 5
+)
+
+type step struct {
+	Speed        int
+	DirX, DirY   int
+	StepX, StepY int
+	Line         bool
+}
+
+func engravePlan(plan engrave.Plan) iter.Seq[step] {
+	return func(yield func(step) bool) {
+		pen := image.Point{}
+		for cmd := range plan {
+			var l bresenham
+			dist := cmd.Coord.Sub(pen)
+			pen = cmd.Coord
+			dirx, diry := l.Reset(dist)
+			s := step{
+				Line: cmd.Line,
+			}
+			if dirx {
+				s.DirX = 1
+			}
+			if diry {
+				s.DirY = 1
+			}
+			t := 0
+			for !l.Done() {
+				s := s
+				t++
+				speed := t * acceleration
+				s.Speed = min(topSpeed, speed)
+				stepx, stepy := l.Step()
+				if stepx {
+					s.StepX = 1
+				}
+				if stepy {
+					s.StepY = 1
+				}
+				if !yield(s) {
+					return
+				}
+			}
+		}
+	}
+}
 
 // bresenham implements a line stepper with the Bresenham
 // algorithm.

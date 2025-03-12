@@ -79,15 +79,16 @@ const (
 	NEEDLE       = machine.GPIO4
 	NEEDLE_SENSE = machine.GPIO26
 
-	STEPPER_UART = machine.GPIO10
-	X_ADDR       = 0b00
-	X_DIAG       = machine.GPIO8
-	X_STEP       = machine.GPIO6
-	X_DIR        = machine.GPIO3
-	Y_ADDR       = 0b01
-	Y_DIAG       = machine.GPIO7
-	Y_STEP       = machine.GPIO5
-	Y_DIR        = machine.GPIO2
+	STEPPER_UART    = machine.GPIO10
+	X_ADDR          = 0b00
+	X_DIAG          = machine.GPIO8
+	X_STEP          = machine.GPIO6
+	X_DIR           = machine.GPIO3
+	Y_ADDR          = 0b01
+	Y_DIAG          = machine.GPIO7
+	Y_STEP          = machine.GPIO5
+	Y_DIR           = machine.GPIO2
+	engraverBasePin = Y_DIR
 
 	DATA_INT = machine.GPIO27
 	DATA_SDA = machine.GPIO28
@@ -98,12 +99,12 @@ const (
 
 var (
 	needleSenseADC = machine.ADC{Pin: NEEDLE_SENSE}
-	needlePWM      = machine.PWM2
 	touchI2C       = machine.I2C1
 	// Data I2C bus for the USB PD and NFC peripherals.
-	dataI2C    = machine.I2C0
-	lcdPIO     = rp.PIO0
-	stepperPIO = rp.PIO1
+	dataI2C     = machine.I2C0
+	lcdPIO      = rp.PIO0
+	stepperPIO  = rp.PIO1
+	engraverPIO = rp.PIO2
 )
 
 const (
@@ -226,24 +227,12 @@ func Init() (*Platform, error) {
 }
 
 func configEngraver() (*mjolnir2.Device, error) {
-	err := needlePWM.Configure(machine.PWMConfig{
-		Period: uint64(mjolnir2.NeedlePeriod),
-	})
-	if err != nil {
-		return nil, err
-	}
-	ch, err := needlePWM.Channel(NEEDLE)
-	if err != nil {
-		return nil, err
-	}
-	needlePWM.Set(ch, 0)
-	needlePWMThreshold := time.Duration(needlePWM.Top()) * needleActivation / mjolnir2.NeedlePeriod
 	uart, err := tmc2209.NewUART(stepperPIO, STEPPER_UART)
 	if err != nil {
 		return nil, err
 	}
-	X := tmc2209.New(uart, X_ADDR, X_DIAG, X_DIR, X_STEP)
-	Y := tmc2209.New(uart, Y_ADDR, Y_DIAG, Y_DIR, Y_STEP)
+	X := tmc2209.New(uart, X_ADDR)
+	Y := tmc2209.New(uart, Y_ADDR)
 	X.SetupSharedUART()
 	Y.SetupSharedUART()
 	if err := X.Configure(); err != nil {
@@ -252,14 +241,16 @@ func configEngraver() (*mjolnir2.Device, error) {
 	if err := Y.Configure(); err != nil {
 		return nil, fmt.Errorf("y-axis stepper: %w", err)
 	}
-	needle := func(enable bool) {
-		t := needlePWMThreshold
-		if !enable {
-			t = 0
-		}
-		needlePWM.Set(ch, uint32(t))
+	d := &mjolnir2.Device{
+		Pio:       engraverPIO,
+		BasePin:   engraverBasePin,
+		EnablePin: DRV_ENABLE,
+		XDiag:     X_DIAG,
+		YDiag:     Y_DIAG,
+		XAxis:     X,
+		YAxis:     Y,
 	}
-	return mjolnir2.New(DRV_ENABLE, X, Y, needle)
+	return d, d.Configure()
 }
 
 func (p *Platform) touchInterrupt(machine.Pin) {

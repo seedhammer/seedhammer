@@ -30,6 +30,8 @@ type StateMachineConfig struct {
 	FIFOMode        FIFOMode
 	PullThreshold   int
 	PushThreshold   int
+	Autopull        bool
+	Autopush        bool
 	Freq            uint32
 	Wrap            uint8
 	WrapTarget      uint8
@@ -107,12 +109,8 @@ func (c *StateMachineConfig) Build() ConfigRegs {
 	if c.SetCount < 0 || 5 < c.SetCount {
 		panic("invalid set count")
 	}
-	pullThres := validatePullThreshold(c.PullThreshold)
-	if c.PushThreshold < 0 || 32 < c.PushThreshold {
-		panic("invalid push threshold")
-	}
-	// Pull threshold 32 is encoded as 0.
-	pushThres := c.PushThreshold & 0b11111
+	pullThres := validatePushPullThreshold(c.PullThreshold)
+	pushThres := validatePushPullThreshold(c.PushThreshold)
 	// Compute fractional clock divisor, rounded up.
 	const fracBits = 8
 	clkDiv64 := (uint64(machine.CPUFrequency())*(1<<fracBits) + uint64(c.Freq) - 1) / uint64(c.Freq)
@@ -147,7 +145,9 @@ func (c *StateMachineConfig) Build() ConfigRegs {
 			uint32(pushThres)<<rp.PIO0_SM0_SHIFTCTRL_PUSH_THRESH_Pos |
 			0b1<<rp.PIO0_SM0_SHIFTCTRL_OUT_SHIFTDIR_Pos | // Shift right.
 			0b1<<rp.PIO0_SM0_SHIFTCTRL_IN_SHIFTDIR_Pos | // Shift right.
-			uint32(inCount)<<rp.PIO0_SM0_SHIFTCTRL_IN_COUNT_Pos,
+			uint32(inCount)<<rp.PIO0_SM0_SHIFTCTRL_IN_COUNT_Pos |
+			boolToUint32(c.Autopush)<<rp.PIO0_SM0_SHIFTCTRL_AUTOPUSH_Pos |
+			boolToUint32(c.Autopull)<<rp.PIO0_SM0_SHIFTCTRL_AUTOPULL_Pos,
 
 		execctrl: uint32(c.WrapTarget)<<rp.PIO0_SM0_EXECCTRL_WRAP_BOTTOM_Pos |
 			uint32(c.Wrap)<<rp.PIO0_SM0_EXECCTRL_WRAP_TOP_Pos |
@@ -259,7 +259,7 @@ func Disable(p *rp.PIO0_Type, machines uint8) {
 
 func PullThreshold(p *rp.PIO0_Type, sm uint8, thresh int) {
 	conf := confFor(p, sm)
-	conf.SHIFTCTRL.Set(conf.SHIFTCTRL.Get()&^rp.PIO0_SM0_SHIFTCTRL_PULL_THRESH_Msk | validatePullThreshold(thresh)<<rp.PIO0_SM0_SHIFTCTRL_PULL_THRESH_Pos)
+	conf.SHIFTCTRL.Set(conf.SHIFTCTRL.Get()&^rp.PIO0_SM0_SHIFTCTRL_PULL_THRESH_Msk | validatePushPullThreshold(thresh)<<rp.PIO0_SM0_SHIFTCTRL_PULL_THRESH_Pos)
 }
 
 func Tx(p *rp.PIO0_Type, sm uint8) *volatile.Register32 {
@@ -289,7 +289,16 @@ func Instr(p *rp.PIO0_Type, sm uint8) *volatile.Register32 {
 	return &conf.INSTR
 }
 
-func validatePullThreshold(t int) uint32 {
+func WaitTXStall(p *rp.PIO0_Type, machinesMask int) {
+	m := uint32(machinesMask)
+	// Clear stall flag(s).
+	p.SetFDEBUG_TXSTALL(m)
+	// Wait.
+	for p.GetFDEBUG_TXSTALL()&m != m {
+	}
+}
+
+func validatePushPullThreshold(t int) uint32 {
 	if t < 0 || 32 < t {
 		panic("invalid pull threshold")
 	}

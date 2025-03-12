@@ -1,3 +1,5 @@
+//go:build tinygo && rp
+
 package tmc2209
 
 import (
@@ -36,8 +38,6 @@ func NewUART(p *rp.PIO0_Type, pin machine.Pin) (*UART, error) {
 		pio: p,
 		pin: pin,
 	}
-	// The number of PIO cycles per bit.
-	const cyclesPerBit = 8
 	// The target PIO clock speed.
 	const pioClock = baud * cyclesPerBit
 
@@ -88,9 +88,7 @@ func (d *UART) tx(tx []byte) {
 	}
 
 	// Wait for completion.
-	d.pio.SetFDEBUG_TXSTALL(0b1 << pioSM)
-	for d.pio.GetFDEBUG_TXSTALL()&(0b1<<pioSM) == 0 {
-	}
+	pio.WaitTXStall(d.pio, 0b1<<pioSM)
 }
 
 func (d *UART) rx(rx []byte) error {

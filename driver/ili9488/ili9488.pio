@@ -17,9 +17,13 @@ out  pins 8  side 0
 wait 1 pin 0
 
 % go {
+//go:build tinygo && rp
+
 package ili9488
 
 import "seedhammer.com/driver/pio"
+
+const pioCyclesPerWrite = 2
 
 var waitForVSYNCInst = uint32(ili9488_utilInstructions[0])
 %}

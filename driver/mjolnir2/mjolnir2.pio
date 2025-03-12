@@ -1,0 +1,57 @@
+; A driver for running two stepper motor drivers
+; and a solenoid.
+;
+; Input format is 16 bit values, the most significant
+; 5 bits are the pin settings (including the step pins),
+; the least significant 11 bits are the cycles of delay
+; for the step pulses.
+;
+; When the delay is 1 cycle, the step pins will change
+; at most once per 3 cycles.
+;
+; Out pins mapping:
+;
+; pin 0: dir y
+; pin 1: dir x
+; pin 2: solenoid
+; pin 3: step y
+; pin 4: step x
+;
+; Side set pins mapping:
+;
+; pin 0: step y
+; pin 1: step x
+;
+; Note that the side set mapping overlaps the out pins.
+;
+.program mjolnir2
+
+.side_set 2 opt
+
+	; Fetch next delay.
+	out y, 11
+	; Reset step pins, keeping the pin settings
+	; from the previous step.
+	mov pins, x side 0b00
+	; Fetch the next pin settings.
+	out x, 5
+	; Set pins, keeping step pins low.
+	mov pins, x side 0b00
+	; Delay.
+loop:
+	jmp y-- loop
+	; Set step pins.
+	mov pins, x
+
+% go {
+//go:build tinygo && rp
+
+package mjolnir2
+
+import "seedhammer.com/driver/pio"
+
+const (
+	pioCyclesPerStep = 6
+	delayBits = 11
+)
+%}

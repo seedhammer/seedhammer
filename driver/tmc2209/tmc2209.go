@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-
-	"machine"
 )
 
 // Motor configuration.
@@ -34,7 +32,7 @@ const (
 	// baud detection.
 	txWaitCycles = max(4, 63) + 1
 	// 2^stepExp is the number of microsteps to a full step.
-	stepExp = 2
+	stepExp = 8
 	// Microsteps to a full step.
 	Microsteps = 1 << stepExp
 
@@ -56,15 +54,6 @@ const (
 type Device struct {
 	uart *UART
 	port uint8
-	step machine.Pin
-	dir  machine.Pin
-	diag machine.Pin
-	// diag is for applying hysteresis to the
-	// diag pin.
-	hysteresis struct {
-		step  bool
-		steps int
-	}
 }
 
 const (
@@ -96,13 +85,10 @@ const (
 	min_SENDDELAY = 2
 )
 
-func New(uart *UART, port uint8, diag, dir, step machine.Pin) *Device {
+func New(uart *UART, port uint8) *Device {
 	d := &Device{
 		uart: uart,
 		port: port,
-		step: step,
-		dir:  dir,
-		diag: diag,
 	}
 	return d
 }
@@ -121,10 +107,6 @@ func (d *Device) SetupSharedUART() error {
 }
 
 func (d *Device) Configure() error {
-	d.step.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	d.dir.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	d.diag.Configure(machine.PinConfig{Mode: machine.PinInput})
-
 	// This is redundant with [SetupSharedUART], but do it anyway in case the setting
 	// didn't stick.
 	if err := d.write(SLAVECONF, min_SENDDELAY<<8); err != nil {
@@ -194,11 +176,6 @@ func (d *Device) StallThreshold(threshold uint8) error {
 	return nil
 }
 
-func (d *Device) Reset() {
-	d.hysteresis.steps = 0
-	d.hysteresis.step = false
-}
-
 func (d *Device) Error() error {
 	stat, err := d.read(GSTAT)
 	if err != nil {
@@ -208,33 +185,6 @@ func (d *Device) Error() error {
 		return fmt.Errorf("tmc2209: error status: %.3b", stat)
 	}
 	return nil
-}
-
-func (d *Device) Diag() bool {
-	if d.diag.Get() {
-		// The DIAG pin is reset once per fullstep.
-		const steps = 2
-		if d.hysteresis.steps > Microsteps*steps {
-			d.hysteresis.steps = 0
-			return true
-		}
-	}
-	return false
-}
-
-func (d *Device) Step(step bool) {
-	d.step.Set(step)
-	if step {
-		d.hysteresis.steps++
-	} else if !d.hysteresis.step {
-		// Reset hysteresis when stopped.
-		d.hysteresis.steps = 0
-	}
-	d.hysteresis.step = step
-}
-
-func (d *Device) Dir(dir bool) {
-	d.dir.Set(dir)
 }
 
 func crc8(data []byte) byte {

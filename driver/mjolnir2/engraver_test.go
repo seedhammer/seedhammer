@@ -2,8 +2,36 @@ package mjolnir2
 
 import (
 	"image"
+	"slices"
 	"testing"
+
+	"seedhammer.com/engrave"
 )
+
+func TestEngraver(t *testing.T) {
+	cmds := []engrave.Command{
+		engrave.Move(image.Pt(0, 0)),
+		engrave.Move(image.Pt(50, 10)),
+		engrave.Line(image.Pt(10, 30)),
+		engrave.Line(image.Pt(60, 30)),
+		engrave.Line(image.Pt(50, 10)),
+	}
+	plan := engrave.Plan(slices.Values(cmds))
+	pen := image.Point{}
+	for pen == cmds[0].Coord {
+		cmds = cmds[1:]
+	}
+	for step := range engravePlan(plan) {
+		pen.X += step.StepX * (step.DirX*2 - 1)
+		pen.Y += step.StepY * (step.DirY*2 - 1)
+		for len(cmds) > 0 && pen == cmds[0].Coord {
+			cmds = cmds[1:]
+		}
+	}
+	if len(cmds) > 0 {
+		t.Errorf("engraving didn't visit the points %v", cmds)
+	}
+}
 
 func TestBresenham(t *testing.T) {
 	tests := []image.Point{
