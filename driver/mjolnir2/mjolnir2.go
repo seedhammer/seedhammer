@@ -88,7 +88,7 @@ func (d *Device) Configure() error {
 	conf.PullThreshold = pinCount + delayBits
 	conf.Autopull = true
 	const (
-		microstepsPerSecond = topSpeed * stepsPerMM * tmc2209.Microsteps
+		microstepsPerSecond = topSpeed * stepsPerMM
 		pioFreq             = uint32(microstepsPerSecond * pioCyclesPerStep)
 	)
 	conf.Freq = pioFreq
@@ -187,8 +187,6 @@ func (d *Device) engrave(speed int, quit <-chan struct{}, homing bool, plan engr
 	pio.Enable(d.Pio, 0b1<<pioSM)
 	defer pio.Disable(d.Pio, 0b1<<pioSM)
 
-	// Scale plan coordinates from steps to microsteps.
-	plan = engrave.Scale(tmc2209.Microsteps, plan)
 	txReg := pio.Tx(d.Pio, pioSM)
 	xdiag, ydiag := false, false
 	// Clear notifications.

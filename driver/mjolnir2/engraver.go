@@ -4,12 +4,13 @@ import (
 	"image"
 	"iter"
 
+	"seedhammer.com/driver/tmc2209"
 	"seedhammer.com/engrave"
 )
 
 const (
-	// stepsPerMM in fullsteps.
-	stepsPerMM = 200 / 8
+	fullstepsPerMM = 200 / 8
+	stepsPerMM     = fullstepsPerMM * tmc2209.Microsteps
 
 	// topSpeed in mm/s.
 	topSpeed = 20
