@@ -25,11 +25,8 @@ const syncNibble = 0b0101
 const (
 	pioSM = 0
 
-	// attempts is the number of attempts for a read or a write
-	// before giving up.
-	attempts = 5
-	baud     = 57600
-	period   = time.Second / baud
+	baud   = 57600
+	period = time.Second / baud
 )
 
 func NewUART(p *rp.PIO0_Type, pin machine.Pin) (*UART, error) {
@@ -66,7 +63,7 @@ func NewUART(p *rp.PIO0_Type, pin machine.Pin) (*UART, error) {
 	return d, nil
 }
 
-func (d *UART) tx(tx []byte) {
+func (d *UART) Write(tx []byte) (int, error) {
 	// Add sync nibble and checksum.
 	buf := make([]byte, 8)
 	buf = buf[:len(tx)+2]
@@ -89,9 +86,10 @@ func (d *UART) tx(tx []byte) {
 
 	// Wait for completion.
 	pio.WaitTXStall(d.pio, 0b1<<pioSM)
+	return len(tx), nil
 }
 
-func (d *UART) rx(rx []byte) error {
+func (d *UART) Read(rx []byte) (int, error) {
 	irq := &d.pio.IRQ
 	irq.ClearBits(0b1 << uart_rxErrIRQ)
 	pio.Configure(d.pio, pioSM, d.rxConf)
@@ -108,10 +106,10 @@ func (d *UART) rx(rx []byte) error {
 	now := time.Now()
 	for len(rem) > 0 {
 		if time.Since(now) > deadline {
-			return errors.New("rx: receive timeout")
+			return 0, errors.New("rx: receive timeout")
 		}
 		if irq.HasBits(0b1 << uart_rxErrIRQ) {
-			return errors.New("rx: read error")
+			return 0, errors.New("rx: read error")
 		}
 		rxempty := fstatReg.Get() & rp.PIO0_FSTAT_RXEMPTY_Msk >> rp.PIO0_FSTAT_RXEMPTY_Pos
 		if rxempty&(0b1<<pioSM) == 0 {
@@ -120,14 +118,14 @@ func (d *UART) rx(rx []byte) error {
 		}
 	}
 	if crc8(buf[:len(buf)-1]) != buf[len(buf)-1] {
-		return errors.New("rx: invalid CRC for receive datagram")
+		return 0, errors.New("rx: invalid CRC for receive datagram")
 	}
 	if (buf[0] & 0b1111) != syncNibble {
-		return errors.New("rx: invalid sync nibble")
+		return 0, errors.New("rx: invalid sync nibble")
 	}
 	if buf[1] != 0xff {
-		return errors.New("rx: invalid node address")
+		return 0, errors.New("rx: invalid node address")
 	}
 	copy(rx, buf[2:])
-	return nil
+	return len(rx), nil
 }

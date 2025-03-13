@@ -1,5 +1,3 @@
-//go:build tinygo
-
 // Package tmc2209 is a TinyGo implementation for the TMC2209
 // stepper motor driver.
 package tmc2209
@@ -7,6 +5,7 @@ package tmc2209
 import (
 	"errors"
 	"fmt"
+	"io"
 	"math"
 )
 
@@ -52,7 +51,7 @@ const (
 )
 
 type Device struct {
-	uart *UART
+	uart io.ReadWriter
 	port uint8
 }
 
@@ -83,9 +82,13 @@ const (
 	intpol     = 1 << 28
 
 	min_SENDDELAY = 2
+
+	// attempts is the number of attempts for a read or a write
+	// before giving up.
+	attempts = 5
 )
 
-func New(uart *UART, port uint8) *Device {
+func New(uart io.ReadWriter, port uint8) *Device {
 	d := &Device{
 		uart: uart,
 		port: port,
@@ -101,7 +104,7 @@ func (d *Device) SetupSharedUART() error {
 	// then.
 	dg := writeDatagram(d.port, SLAVECONF, min_SENDDELAY<<8)
 	for i := 0; i < attempts; i++ {
-		d.uart.tx(dg[:])
+		d.uart.Write(dg[:])
 	}
 	return nil
 }
@@ -210,8 +213,11 @@ func (d *Device) read(addr byte) (uint32, error) {
 	rx := make([]byte, 5)
 	var lerr error
 	for i := 0; i < attempts; i++ {
-		d.uart.tx(dg)
-		if err := d.uart.rx(rx); err != nil {
+		if _, err := d.uart.Write(dg); err != nil {
+			lerr = err
+			continue
+		}
+		if _, err := d.uart.Read(rx); err != nil {
 			lerr = err
 			continue
 		}
@@ -232,7 +238,10 @@ func (d *Device) write(addr uint8, val uint32) error {
 	dg := writeDatagram(d.port, addr, val)
 	var lerr error
 	for i := 0; i < attempts; i++ {
-		d.uart.tx(dg[:])
+		if _, err := d.uart.Write(dg[:]); err != nil {
+			lerr = err
+			continue
+		}
 		ifcnt2, err := d.read(IFCNT)
 		if err != nil {
 			lerr = err
