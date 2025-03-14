@@ -17,8 +17,6 @@ out  pins 8  side 0
 wait 1 pin 0
 
 % go {
-//go:build tinygo && rp
-
 package ili9488
 
 import "seedhammer.com/driver/pio"

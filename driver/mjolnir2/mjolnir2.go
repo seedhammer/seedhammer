@@ -81,8 +81,8 @@ func (d *Device) Configure() error {
 	}
 	progOff := uint8(0)
 	conf := mjolnir2ProgramDefaultConfig(progOff)
-	conf.SidesetBase = pinStepY + d.BasePin
-	conf.OutBase = pinDirY + d.BasePin
+	conf.SidesetBase = uint8(pinStepY + d.BasePin)
+	conf.OutBase = uint8(pinDirY + d.BasePin)
 	conf.OutCount = pinCount
 	conf.FIFOMode = pio.FIFOJoinTX
 	conf.PullThreshold = pinCount + delayBits

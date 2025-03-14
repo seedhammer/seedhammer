@@ -11,40 +11,6 @@ import (
 	"unsafe"
 )
 
-// StateMachineConfig represents a configuration
-// of a PIO state machine.
-// Note that the pioasm tool expects this particular
-// type name.
-type StateMachineConfig struct {
-	SidesetBase     machine.Pin
-	SidesetCount    int
-	SidesetOptional bool
-	SidesetDirs     bool
-	OutBase         machine.Pin
-	OutCount        int
-	InBase          machine.Pin
-	InCount         int
-	SetBase         machine.Pin
-	SetCount        int
-	JumpPin         machine.Pin
-	FIFOMode        FIFOMode
-	PullThreshold   int
-	PushThreshold   int
-	Autopull        bool
-	Autopush        bool
-	Freq            uint32
-	Wrap            uint8
-	WrapTarget      uint8
-}
-
-type FIFOMode uint8
-
-const (
-	FIFOJoinNone FIFOMode = iota
-	FIFOJoinTX
-	FIFOJoinRX
-)
-
 // ConfigRegs is a [StateMachineConfig] represented
 // in a form suitable for efficient programming of
 // a state machine.
@@ -311,21 +277,4 @@ func boolToUint32(b bool) uint32 {
 		return 1
 	}
 	return 0
-}
-
-// Below is the API to please pioasm -o go.
-
-func DefaultStateMachineConfig() StateMachineConfig {
-	return StateMachineConfig{}
-}
-
-func (s *StateMachineConfig) SetWrap(target, wrap uint8) {
-	s.WrapTarget = target
-	s.Wrap = wrap
-}
-
-func (s *StateMachineConfig) SetSidesetParams(sidecount int, optional, pindirs bool) {
-	s.SidesetCount = sidecount
-	s.SidesetOptional = optional
-	s.SidesetDirs = pindirs
 }

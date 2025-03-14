@@ -44,8 +44,6 @@ loop:
 	mov pins, x
 
 % go {
-//go:build tinygo && rp
-
 package mjolnir2
 
 import "seedhammer.com/driver/pio"

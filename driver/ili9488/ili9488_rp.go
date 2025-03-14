@@ -61,10 +61,10 @@ func (d *Device) Configure(c Config) error {
 
 	progOff := uint8(0)
 	conf := ili9488ProgramDefaultConfig(progOff)
-	conf.SidesetBase = d.wrx
-	conf.OutBase = d.db0
+	conf.SidesetBase = uint8(d.wrx)
+	conf.OutBase = uint8(d.db0)
 	conf.OutCount = 8
-	conf.InBase = d.te
+	conf.InBase = uint8(d.te)
 	conf.InCount = 1
 	conf.FIFOMode = pio.FIFOJoinTX
 	conf.PullThreshold = 8

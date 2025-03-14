@@ -32,9 +32,6 @@ bitloop:                   ; This loop will run 8 times (8n1 UART)
     jmp x-- bitloop   [6]  ; Each loop iteration is 8 cycles.
 
 % go {
-
-//go:build tinygo && rp
-
 package tmc2209
 
 import "seedhammer.com/driver/pio"

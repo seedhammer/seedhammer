@@ -41,9 +41,9 @@ func NewUART(p *rp.PIO0_Type, pin machine.Pin) (*UART, error) {
 	progOff := uint8(0)
 	// Set up RX machine.
 	rxConf := uart_rxProgramDefaultConfig(progOff)
-	rxConf.InBase = pin
+	rxConf.InBase = uint8(pin)
 	rxConf.InCount = 1
-	rxConf.JumpPin = pin
+	rxConf.JumpPin = uint8(pin)
 	rxConf.FIFOMode = pio.FIFOJoinRX
 	rxConf.Freq = pioClock
 	d.rxConf = rxConf.Build()
@@ -52,9 +52,9 @@ func NewUART(p *rp.PIO0_Type, pin machine.Pin) (*UART, error) {
 
 	// Set up TX machine.
 	txConf := uart_txProgramDefaultConfig(progOff)
-	txConf.OutBase = pin
+	txConf.OutBase = uint8(pin)
 	txConf.OutCount = 1
-	txConf.SidesetBase = pin
+	txConf.SidesetBase = uint8(pin)
 	txConf.FIFOMode = pio.FIFOJoinTX
 	txConf.Freq = pioClock
 	d.txConf = txConf.Build()
