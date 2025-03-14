@@ -633,12 +633,12 @@ func (b bitmap) Get(p image.Point) bool {
 
 type Rect image.Rectangle
 
-func (r Rect) Engrave(yield func(Command)) {
-	yield(Move(r.Min))
-	yield(Line(image.Pt(r.Max.X, r.Min.Y)))
-	yield(Line(r.Max))
-	yield(Line(image.Pt(r.Min.X, r.Max.Y)))
-	yield(Line(r.Min))
+func (r Rect) Engrave(yield func(Command) bool) {
+	_ = yield(Move(r.Min)) &&
+		yield(Line(image.Pt(r.Max.X, r.Min.Y))) &&
+		yield(Line(r.Max)) &&
+		yield(Line(image.Pt(r.Min.X, r.Max.Y))) &&
+		yield(Line(r.Min))
 }
 
 const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
