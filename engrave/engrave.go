@@ -541,7 +541,7 @@ func (q constantQRCmd) engrave() Plan {
 		}
 		sw := q.strokeWidth
 		prev := q.centerOf(q.start)
-		yield(Move(prev))
+		cont = cont && yield(Move(prev))
 		moveDist := qrMoves * sw * q.scale
 		for _, m := range q.plan {
 			center := q.centerOf(m)
@@ -1056,6 +1056,7 @@ func (s *StringCmd) engrave(yield func(Command) bool) image.Point {
 		}
 	}
 	height := s.em * s.LineHeight
+	cont := true
 	for _, r := range s.txt {
 		if r == '\n' {
 			pos.X = 0
@@ -1067,7 +1068,6 @@ func (s *StringCmd) engrave(yield func(Command) bool) image.Point {
 			panic(fmt.Errorf("unsupported rune: %s", string(r)))
 		}
 		if yield != nil {
-			cont := true
 			for {
 				seg, ok := segs.Next()
 				if !ok {
