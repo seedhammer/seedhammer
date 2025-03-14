@@ -6,7 +6,6 @@ import "seedhammer.com/driver/pio"
 
 const (
 	pioCyclesPerStep = 6
-	delayBits        = 11
 )
 
 // mjolnir2
@@ -14,9 +13,12 @@ const (
 const mjolnir2WrapTarget = 0
 const mjolnir2Wrap = 5
 
+const mjolnir2pinBits = 5
+const mjolnir2delayBits = 27
+
 var mjolnir2Instructions = []uint16{
 	//     .wrap_target
-	0x604b, //  0: out    y, 11
+	0x605b, //  0: out    y, 27
 	0xb001, //  1: mov    pins, x         side 0
 	0x6025, //  2: out    x, 5
 	0xb001, //  3: mov    pins, x         side 0

@@ -56,10 +56,6 @@ const (
 
 	// fclk is the clock frequency in Hz.
 	fclk = 12e6
-
-	// stallDGuardVelocity is the speed in full-steps/second for
-	// StallGuard to be enabled.
-	stallGuardVelocity = 250
 )
 
 type Device struct {
@@ -169,18 +165,6 @@ func (d *Device) Configure() error {
 		return fmt.Errorf("tmc2209: set GSTAT: %w", err)
 	}
 
-	// tcoolThrs is the TCOOLTHRS value for the stall guard velocity.
-	// It is represented in time in clock cycles between each microstep
-	// at maximum resolution (256).
-	const tcoolThrs = fclk / (stallGuardVelocity * 256)
-	tcoolThrsRound := uint32(math.Round(tcoolThrs + .5))
-	if err := d.write(TCOOLTHRS, tcoolThrsRound); err != nil {
-		return fmt.Errorf("tmc2209: set TCOOLHRS: %w", err)
-	}
-	if err := d.StallThreshold(0); err != nil {
-		return fmt.Errorf("tmc2209: %w", err)
-	}
-
 	return nil
 }
 
@@ -199,7 +183,22 @@ func (d *Device) StallResult() (int, error) {
 	return int(res) / 2, err
 }
 
-func (d *Device) StallThreshold(threshold uint8) error {
+// SetStallMinimumVelocity sets the minimum velocity in
+// full-steps/second for detecting stalls.
+func (d *Device) SetMinimumStallVelocity(stepsPerSecond int) error {
+	// tcoolThrs is the TCOOLTHRS value for the stall guard velocity.
+	// It is represented in time in clock cycles between each microstep
+	// at maximum resolution (256).
+	tcoolThrs := fclk / (stepsPerSecond * 256)
+	if err := d.write(TCOOLTHRS, uint32(tcoolThrs)); err != nil {
+		return fmt.Errorf("tmc2209: set TCOOLHRS: %w", err)
+	}
+	return nil
+}
+
+// SetStallThreshold sets the SGTHRS threshold that triggers
+// the StallGuard stall detection and raises the DIAG pin.
+func (d *Device) SetStallThreshold(threshold int) error {
 	if err := d.write(SGTHRS, uint32(threshold)); err != nil {
 		return fmt.Errorf("set threshold: set SGTHRS: %w", err)
 	}

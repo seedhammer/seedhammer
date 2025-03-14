@@ -10,6 +10,7 @@ import (
 	"image/draw"
 	"log"
 	"machine"
+	"slices"
 	"time"
 	"unsafe"
 
@@ -108,8 +109,37 @@ var (
 )
 
 const (
+	// The period of a needle cycle.
+	needlePeriod = 20 * time.Millisecond
+	// The duration of a needle cycle turned on.
 	needleActivation = 45 * time.Millisecond / 10
-	maxVoltagemV     = 28_000
+
+	// Maximum supply voltage in volts.
+	maxVoltage = 28
+
+	// stallThreshold is the TMC2209 SGTHRS for triggering a
+	// stall.
+	stallThreshold = 110
+	// minimumStallVelocity is the speed in full-steps/second for
+	// StallGuard to be enabled.
+	minimumStallVelocity = 250
+	fullstepsPerMM       = 200 / 8
+	stepsPerMM           = fullstepsPerMM * tmc2209.Microsteps
+	// The coordinates of the top-left plate corner relative to the
+	// homing zero.
+	originX, originY = 2.1 * stepsPerMM, 2.1 * stepsPerMM
+	// Maximum distance to travel before giving up homing.
+	homingDist = 250 * stepsPerMM
+	// strokeWidth of engravings.
+	strokeWidth = 3 * stepsPerMM / 10
+	// Speeds in steps/second.
+	topSpeed       = 40 * stepsPerMM
+	engravingSpeed = 8 * stepsPerMM
+	homingSpeed    = 15 * stepsPerMM
+	// acceleration in steps/s².
+	acceleration = 100 * stepsPerMM
+	invertX      = true
+	invertY      = false
 )
 
 func Init() (*Platform, error) {
@@ -144,9 +174,28 @@ func Init() (*Platform, error) {
 		return nil, fmt.Errorf("touch I2C: %w", err)
 	}
 	usbpd := ap33772s.New(dataI2C)
-	if err := usbpd.AdjustVoltage(maxVoltagemV); err != nil {
+	if err := usbpd.AdjustVoltage(maxVoltage * 1000); err != nil {
 		log.Printf("error: %v", err)
 	}
+	// time.Sleep(1 * time.Second)
+	// {
+	// 	needlePWM := machine.PWM2
+	// 	period := 20 * time.Millisecond
+	// 	err := needlePWM.Configure(machine.PWMConfig{
+	// 		Period: uint64(period),
+	// 	})
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	ch, err := needlePWM.Channel(NEEDLE)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	needlePWMThreshold := time.Duration(needlePWM.Top()) * 5 * time.Millisecond / period
+	// 	needlePWM.Set(ch, uint32(needlePWMThreshold))
+	// 	time.Sleep(1 * time.Second)
+	// 	needlePWM.Set(ch, 0)
+	// }
 	// DATA_INT.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
 	// for {
 	// 	time.Sleep(100 * time.Millisecond)
@@ -196,7 +245,7 @@ func Init() (*Platform, error) {
 	// Setup both drivers for sharing their UART pin.
 	e, err := configEngraver()
 	if err == nil {
-		p.engraver.dev = engraver{e}
+		p.engraver.dev = e
 	} else {
 		log.Printf("pico: %v", err)
 		p.engraver.err = err
@@ -226,31 +275,58 @@ func Init() (*Platform, error) {
 	return p, nil
 }
 
-func configEngraver() (*mjolnir2.Device, error) {
+func configEngraver() (gui.Engraver, error) {
 	uart, err := tmc2209.NewUART(stepperPIO, STEPPER_UART)
 	if err != nil {
 		return nil, err
 	}
 	X := tmc2209.New(uart, X_ADDR)
 	Y := tmc2209.New(uart, Y_ADDR)
-	X.SetupSharedUART()
-	Y.SetupSharedUART()
-	if err := X.Configure(); err != nil {
-		return nil, fmt.Errorf("x-axis stepper: %w", err)
+	for i, axis := range []*tmc2209.Device{X, Y} {
+		axis.SetupSharedUART()
+		if err := axis.Configure(); err != nil {
+			return nil, fmt.Errorf("configuring stepper %d: %w", i, err)
+		}
+		if err := axis.SetStallThreshold(stallThreshold); err != nil {
+			return nil, fmt.Errorf("configuring stepper stall threshold %d: %w", i, err)
+		}
+		if err := axis.SetMinimumStallVelocity(minimumStallVelocity); err != nil {
+			return nil, fmt.Errorf("configuring stepper stall threshold %d: %w", i, err)
+		}
 	}
-	if err := Y.Configure(); err != nil {
-		return nil, fmt.Errorf("y-axis stepper: %w", err)
+	DRV_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	DRV_ENABLE.Set(true)
+	home := image.Point{
+		X: -homingDist,
+		Y: -homingDist,
+	}
+	if invertX {
+		home.X *= -1
+	}
+	if invertY {
+		home.Y *= -1
 	}
 	d := &mjolnir2.Device{
-		Pio:       engraverPIO,
-		BasePin:   engraverBasePin,
-		EnablePin: DRV_ENABLE,
-		XDiag:     X_DIAG,
-		YDiag:     Y_DIAG,
-		XAxis:     X,
-		YAxis:     Y,
+		Pio:              engraverPIO,
+		BasePin:          engraverBasePin,
+		XDiag:            X_DIAG,
+		YDiag:            Y_DIAG,
+		Home:             home,
+		TopSpeed:         topSpeed,
+		EngravingSpeed:   engravingSpeed,
+		HomingSpeed:      homingSpeed,
+		Acceleration:     acceleration,
+		NeedlePeriod:     needlePeriod,
+		NeedleActivation: needleActivation,
 	}
-	return d, d.Configure()
+	if err := d.Configure(); err != nil {
+		return nil, err
+	}
+	return &engraver{
+		Device: d,
+		XAxis:  X,
+		YAxis:  Y,
+	}, nil
 }
 
 func (p *Platform) touchInterrupt(machine.Pin) {
@@ -321,15 +397,51 @@ func (p *Platform) PlateSizes() []backup.PlateSize {
 }
 
 func (p *Platform) EngraverParams() engrave.Params {
-	return mjolnir2.Params
+	return engrave.Params{
+		StrokeWidth: strokeWidth,
+		Millimeter:  stepsPerMM,
+	}
 }
 
 type engraver struct {
+	XAxis, YAxis *tmc2209.Device
 	*mjolnir2.Device
 }
 
-func (e engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan struct{}) error {
-	return e.Device.Engrave(plan, quit)
+func (e *engraver) Close() {}
+
+func (e *engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan struct{}) error {
+	// Set up pins.
+	DRV_ENABLE.Set(false)
+	defer DRV_ENABLE.Set(true)
+	// Wait for standstill tuning of the drivers.
+	time.Sleep(tmc2209.StandstillTuningPeriod)
+
+	ejectPos := image.Point{}
+	plan = engrave.Commands(
+		plan,
+		// Return to "eject" position.
+		engrave.Plan(slices.Values([]engrave.Command{engrave.Move(ejectPos)})),
+	)
+	plan = engrave.Offset(originX, originY, plan)
+	invX, invY := 1, 1
+	if invertX {
+		invX *= -1
+	}
+	if invertY {
+		invY *= -1
+	}
+	plan = engrave.Scale(invX, invY, plan)
+	if err := e.Device.Engrave(plan, quit); err != nil {
+		if err := e.XAxis.Error(); err != nil {
+			return fmt.Errorf("X axis: %w", err)
+		}
+		if err := e.YAxis.Error(); err != nil {
+			return fmt.Errorf("Y axis: %w", err)
+		}
+		return err
+	}
+	return nil
 }
 
 func (p *Platform) Engraver() (gui.Engraver, error) {

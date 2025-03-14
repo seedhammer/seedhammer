@@ -28,13 +28,16 @@
 
 .side_set 2 opt
 
+.define PUBLIC pinBits 5
+.define PUBLIC delayBits (32 - pinBits)
+
 	; Fetch next delay.
-	out y, 11
+	out y, delayBits
 	; Reset step pins, keeping the pin settings
 	; from the previous step.
 	mov pins, x side 0b00
 	; Fetch the next pin settings.
-	out x, 5
+	out x, pinBits
 	; Set pins, keeping step pins low.
 	mov pins, x side 0b00
 	; Delay.
@@ -50,6 +53,5 @@ import "seedhammer.com/driver/pio"
 
 const (
 	pioCyclesPerStep = 6
-	delayBits = 11
 )
 %}
