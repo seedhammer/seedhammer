@@ -19,7 +19,6 @@ type ConfigRegs struct {
 	execctrl  uint32
 	shiftctrl uint32
 	pinctrl   uint32
-	jmp       uint32
 }
 
 type confMemType struct {
@@ -120,8 +119,6 @@ func (c *StateMachineConfig) Build() ConfigRegs {
 			uint32(c.JumpPin)<<rp.PIO0_SM0_EXECCTRL_JMP_PIN_Pos |
 			boolToUint32(c.SidesetOptional)<<rp.PIO0_SM0_EXECCTRL_SIDE_EN_Pos |
 			boolToUint32(c.SidesetDirs)<<rp.PIO0_SM0_EXECCTRL_SIDE_PINDIR_Pos,
-		// JMP to wrap target.
-		jmp: JMP | uint32(c.WrapTarget),
 	}
 }
 
@@ -131,8 +128,14 @@ func Configure(p *rp.PIO0_Type, sm uint8, c ConfigRegs) {
 	confMem.SHIFTCTRL.Set(c.shiftctrl)
 	confMem.EXECCTRL.Set(c.execctrl)
 	confMem.CLKDIV.Set(c.clkdiv)
-	// Jump to start of program.
-	confMem.INSTR.Set(c.jmp)
+	// Jump to start of program (wrap target).
+	wrapTarget := uint8(c.execctrl & rp.PIO0_SM0_EXECCTRL_WRAP_BOTTOM_Msk >> rp.PIO0_SM0_EXECCTRL_WRAP_BOTTOM_Pos)
+	Jump(p, sm, wrapTarget)
+}
+
+func Jump(p *rp.PIO0_Type, sm, target uint8) {
+	confMem := confFor(p, sm)
+	confMem.INSTR.Set(uint32(JMP | target))
 }
 
 func confFor(p *rp.PIO0_Type, sm uint8) *confMemType {
