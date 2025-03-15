@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"time"
 )
 
 // Motor configuration.
@@ -34,6 +35,10 @@ const (
 	stepExp = 8
 	// Microsteps to a full step.
 	Microsteps = 1 << stepExp
+	// StandstillTuningPeriod is the minimum duration
+	// the driver should be kept at full power in standstill
+	// after enabling the motor.
+	StandstillTuningPeriod = 130 * time.Millisecond
 
 	// Compute IRUN from motor current and sense resistor.
 	// The formula from the reference manual is
@@ -70,6 +75,7 @@ const (
 	COOLCONF   = 0x42
 	CHOPCONF   = 0x6c
 	DRV_STATUS = 0x6f
+	PWM_AUTO   = 0x72
 
 	// GCONF settings.
 	I_scale_analog   = 1 << 0
@@ -165,6 +171,11 @@ func (d *Device) Configure() error {
 	}
 
 	return nil
+}
+
+func (d *Device) PWMAuto() (int, error) {
+	res, err := d.read(PWM_AUTO)
+	return int(res), err
 }
 
 func (d *Device) StallResult() (int, error) {

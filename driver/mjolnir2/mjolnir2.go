@@ -140,6 +140,10 @@ func (d *Device) stallThreshold(threshold uint8) error {
 func (d *Device) Engrave(plan engrave.Plan, quit <-chan struct{}) error {
 	d.EnablePin.Set(false)
 	defer d.EnablePin.Set(true)
+
+	// Standstill tuning of the drivers.
+	time.Sleep(tmc2209.StandstillTuningPeriod)
+
 	if err := d.home(quit); err != nil {
 		return err
 	}
