@@ -53,6 +53,13 @@ const (
 	// IHOLDDELAY is the number of clock cycles to delay
 	// current switch from IRUN to IHOLD on standstill.
 	iholdDelay = 0
+
+	// fclk is the clock frequency in Hz.
+	fclk = 12e6
+
+	// stallDGuardVelocity is the speed in full-steps/second for
+	// StallGuard to be enabled.
+	stallGuardVelocity = 250
 )
 
 type Device struct {
@@ -68,6 +75,7 @@ const (
 	OTP_READ   = 0x05
 	IOIN       = 0x06
 	IHOLD_IRUN = 0x10
+	TSTEP      = 0x12
 	TCOOLTHRS  = 0x14
 	VACTUAL    = 0x22
 	SGTHRS     = 0x40
@@ -161,9 +169,12 @@ func (d *Device) Configure() error {
 		return fmt.Errorf("tmc2209: set GSTAT: %w", err)
 	}
 
-	// Coolstep interferes with sensorless homing (SGTHRS)
-	// and requires tuning. Disable for now.
-	if err := d.write(TCOOLTHRS, 0xfffff); err != nil {
+	// tcoolThrs is the TCOOLTHRS value for the stall guard velocity.
+	// It is represented in time in clock cycles between each microstep
+	// at maximum resolution (256).
+	const tcoolThrs = fclk / (stallGuardVelocity * 256)
+	tcoolThrsRound := uint32(math.Round(tcoolThrs + .5))
+	if err := d.write(TCOOLTHRS, tcoolThrsRound); err != nil {
 		return fmt.Errorf("tmc2209: set TCOOLHRS: %w", err)
 	}
 	if err := d.StallThreshold(0); err != nil {
@@ -175,6 +186,11 @@ func (d *Device) Configure() error {
 
 func (d *Device) PWMAuto() (int, error) {
 	res, err := d.read(PWM_AUTO)
+	return int(res), err
+}
+
+func (d *Device) TStep() (int, error) {
+	res, err := d.read(TSTEP)
 	return int(res), err
 }
 
