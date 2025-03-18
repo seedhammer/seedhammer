@@ -59,8 +59,9 @@ const (
 )
 
 type Device struct {
-	uart io.ReadWriter
-	port uint8
+	Bus    io.ReadWriter
+	Addr   uint8
+	Invert bool
 }
 
 const (
@@ -82,10 +83,11 @@ const (
 	PWM_AUTO   = 0x72
 
 	// GCONF settings.
-	I_scale_analog   = 1 << 0
-	pdn_disable      = 1 << 6
-	mstep_reg_select = 1 << 7
-	multistep_filt   = 1 << 8
+	I_scale_analog   = 0b1 << 0
+	shaft            = 0b1 << 3
+	pdn_disable      = 0b1 << 6
+	mstep_reg_select = 0b1 << 7
+	multistep_filt   = 0b1 << 8
 
 	// CHOPCONF settings
 	mres_shift = 24
@@ -98,23 +100,15 @@ const (
 	attempts = 5
 )
 
-func New(uart io.ReadWriter, port uint8) *Device {
-	d := &Device{
-		uart: uart,
-		port: port,
-	}
-	return d
-}
-
 // SetupSharedUART a stepper driver by increasing its SENDDELAY, to
 // avoid cross talk when multiple drivers share UART pin.
 func (d *Device) SetupSharedUART() error {
 	// Reading from a slave may confuse another until
 	// SENDDELAY is raised. Don't read anything until
 	// then.
-	dg := writeDatagram(d.port, SLAVECONF, min_SENDDELAY<<8)
+	dg := writeDatagram(d.Addr, SLAVECONF, min_SENDDELAY<<8)
 	for i := 0; i < attempts; i++ {
-		d.uart.Write(dg[:])
+		d.Bus.Write(dg[:])
 	}
 	return nil
 }
@@ -135,6 +129,9 @@ func (d *Device) Configure() error {
 	gconf |= mstep_reg_select
 	// Don't scale IRUN/IHOLD by Vref.
 	gconf &^= I_scale_analog
+	if d.Invert {
+		gconf |= shaft
+	}
 	if err := d.write(GCONF, gconf); err != nil {
 		return fmt.Errorf("tmc2209: set GCONF: %w", err)
 	}
@@ -233,17 +230,17 @@ func crc8(data []byte) byte {
 
 func (d *Device) read(addr byte) (uint32, error) {
 	dg := []byte{
-		d.port,
+		d.Addr,
 		addr,
 	}
 	rx := make([]byte, 5)
 	var lerr error
 	for i := 0; i < attempts; i++ {
-		if _, err := d.uart.Write(dg); err != nil {
+		if _, err := d.Bus.Write(dg); err != nil {
 			lerr = err
 			continue
 		}
-		if _, err := d.uart.Read(rx); err != nil {
+		if _, err := d.Bus.Read(rx); err != nil {
 			lerr = err
 			continue
 		}
@@ -261,10 +258,10 @@ func (d *Device) write(addr uint8, val uint32) error {
 	if err != nil {
 		return err
 	}
-	dg := writeDatagram(d.port, addr, val)
+	dg := writeDatagram(d.Addr, addr, val)
 	var lerr error
 	for i := 0; i < attempts; i++ {
-		if _, err := d.uart.Write(dg[:]); err != nil {
+		if _, err := d.Bus.Write(dg[:]); err != nil {
 			lerr = err
 			continue
 		}

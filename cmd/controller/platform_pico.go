@@ -280,8 +280,16 @@ func configEngraver() (gui.Engraver, error) {
 	if err != nil {
 		return nil, err
 	}
-	X := tmc2209.New(uart, X_ADDR)
-	Y := tmc2209.New(uart, Y_ADDR)
+	X := &tmc2209.Device{
+		Bus:    uart,
+		Addr:   X_ADDR,
+		Invert: invertX,
+	}
+	Y := &tmc2209.Device{
+		Bus:    uart,
+		Addr:   Y_ADDR,
+		Invert: invertY,
+	}
 	for i, axis := range []*tmc2209.Device{X, Y} {
 		axis.SetupSharedUART()
 		if err := axis.Configure(); err != nil {
@@ -299,12 +307,6 @@ func configEngraver() (gui.Engraver, error) {
 	home := image.Point{
 		X: -homingDist,
 		Y: -homingDist,
-	}
-	if invertX {
-		home.X *= -1
-	}
-	if invertY {
-		home.Y *= -1
 	}
 	d := &mjolnir2.Device{
 		Pio:              engraverPIO,
@@ -424,14 +426,6 @@ func (e *engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan st
 		engrave.Plan(slices.Values([]engrave.Command{engrave.Move(ejectPos)})),
 	)
 	plan = engrave.Offset(originX, originY, plan)
-	invX, invY := 1, 1
-	if invertX {
-		invX *= -1
-	}
-	if invertY {
-		invY *= -1
-	}
-	plan = engrave.Scale(invX, invY, plan)
 	if err := e.Device.Engrave(plan, quit); err != nil {
 		if err := e.XAxis.Error(); err != nil {
 			return fmt.Errorf("X axis: %w", err)
