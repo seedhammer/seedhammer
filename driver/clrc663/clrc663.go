@@ -151,11 +151,11 @@ func (d *Device) reqa() error {
 		regFIFOControl, 1<<4,
 		// Set register such that we sent 7 bits, set DataEn such that we can send
 		// data.
-		regTxDataNum, 7|TxDataNumDataEn,
+		// regTxDataNum, 7|TxDataNumDataEn,
 
-		// disable the CRC registers.
-		regTxCrcPreset, 0x18|0,
-		regRxCrcPreset, 0x18|0,
+		// // disable the CRC registers.
+		// regTxCrcPreset, 0x18|0,
+		// regRxCrcPreset, 0x18|0,
 
 		regRxBitCtrl, 0,
 
@@ -621,16 +621,16 @@ func (d *Device) TestDump() error {
 	// Load preset protocol registers.
 	if err := d.runCommand(
 		cmdLoadProtocol,
-		protocol_ISO14443A_106_MILLER_MANCHESTER, protocol_ISO14443A_106_MILLER_MANCHESTER,
-		// protocol_ISO15693_26_SSC, protocol_ISO15693_26_SSC,
+		// protocol_ISO14443A_106_MILLER_MANCHESTER, protocol_ISO14443A_106_MILLER_MANCHESTER,
+		protocol_ISO15693_26_SSC_26_1_4, protocol_ISO15693_26_SSC_26_1_4,
 	); err != nil {
 		return fmt.Errorf("clrc663: LoadProtocol: %w", err)
 	}
 
 	// Load preset antenna registers.
 	const (
-		eepromAddr = eepromAddrISO14443A_106
-		// eepromAddr   = eepromAddrISO15693_SLI_1_4_SSC_26
+		// eepromAddr = eepromAddrISO14443A_106
+		eepromAddr   = eepromAddrISO15693_SLI_1_4_SSC_26
 		eepromLength = regRxAna - regDrvMode + 1
 	)
 	if err := d.runCommand(
@@ -871,7 +871,7 @@ const (
 // Protocol numbers for the LoadProtocol command.
 const (
 	protocol_ISO14443A_106_MILLER_MANCHESTER = 0
-	protocol_ISO15693_26_SSC                 = 10
+	protocol_ISO15693_26_SSC_26_1_4          = 10
 )
 
 // Antenna configuration EEPROM addresses.

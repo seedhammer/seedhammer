@@ -159,9 +159,9 @@ func Init() (*Platform, error) {
 		log.Printf("error: %v", err)
 	}
 
-	// if err := nfc.TestDump(); err != nil {
-	// 	log.Printf("error: %v\n", err)
-	// }
+	if err := nfc.TestDump(); err != nil {
+		log.Printf("error: %v\n", err)
+	}
 
 	p := &Platform{
 		wakeups: make(chan struct{}, 1),
