@@ -29,6 +29,9 @@ func (d *Device) Configure() error {
 	if err := d.runCommand(cmdSoftReset); err != nil {
 		return fmt.Errorf("clrc663: soft reset: %w", err)
 	}
+	if err := d.waitForIRQ(irqIdle, 0); err != nil {
+		return fmt.Errorf("clrc663: %w", err)
+	}
 	return nil
 }
 
@@ -102,7 +105,21 @@ func (d *Device) runCommand(cmd uint8, args ...uint8) error {
 	if err := d.writeRegs(regCommand, cmd); err != nil {
 		return fmt.Errorf("command %#x: %w", cmd, err)
 	}
-	return d.waitForIRQ(irqIdle, 0)
+	return nil
+}
+
+func (d *Device) waitForRx(timer uint8) error {
+	if err := d.waitForIRQ(irqRx, 0b1<<timer); err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	irq0, err := d.readReg(regIRQ0)
+	if err != nil {
+		return err
+	}
+	if irq0&irqRx == 0 {
+		return fmt.Errorf("read timeout")
+	}
+	return nil
 }
 
 func (d *Device) waitForIRQ(irq0Mask, irq1Mask uint8) error {
@@ -151,11 +168,11 @@ func (d *Device) reqa() error {
 		regFIFOControl, 1<<4,
 		// Set register such that we sent 7 bits, set DataEn such that we can send
 		// data.
-		// regTxDataNum, 7|TxDataNumDataEn,
+		regTxDataNum, 7|TxDataNumDataEn,
 
-		// // disable the CRC registers.
-		// regTxCrcPreset, 0x18|0,
-		// regRxCrcPreset, 0x18|0,
+		// disable the CRC registers.
+		regTxCrcPreset, 0x18|0,
+		regRxCrcPreset, 0x18|0,
 
 		regRxBitCtrl, 0,
 
@@ -251,23 +268,16 @@ func (d *Device) readBlock(block_address uint8, blk []byte) (int, error) {
 	if err := d.transceive(_MF_CMD_READ, block_address); err != nil {
 		return 0, fmt.Errorf("clrc663: read block: %w", err)
 	}
-	if err := d.waitForIRQ(irqIdle, 0); err != nil {
-		return 0, fmt.Errorf("clrc663: read block: %w", err)
-	}
-	irqs := d.scratch[:2]
-	if err := d.readRegs(regIRQ0, irqs); err != nil {
-		panic(err)
-	}
-	irq0, irq1 := irqs[0], irqs[1]
-	if err := d.writeRegs(regCommand, cmdIdle); err != nil {
-		return 0, fmt.Errorf("clrc663: read block: %w", err)
+	fmt.Println("***** SET UP TIMER ******")
+	const timer_for_timeout = 0
+	if err := d.waitForRx(timer_for_timeout); err != nil {
+		return 0, fmt.Errorf("clrc663: %w", err)
 	}
 
 	n, err := d.readFIFO(blk)
 	if err != nil {
 		return 0, fmt.Errorf("clrc663: read block: %w", err)
 	}
-	fmt.Printf("irq0 %.8b irq1 %.8b\n", irq0, irq1)
 	return n, nil
 }
 
@@ -626,6 +636,9 @@ func (d *Device) TestDump() error {
 	); err != nil {
 		return fmt.Errorf("clrc663: LoadProtocol: %w", err)
 	}
+	if err := d.waitForIRQ(irqIdle, 0); err != nil {
+		return fmt.Errorf("clrc663: %w", err)
+	}
 
 	// Load preset antenna registers.
 	const (
@@ -647,6 +660,16 @@ func (d *Device) TestDump() error {
 	// if err := d.measureLPCD(); err != nil {
 	// 	return err
 	// }
+	if err := d.iso15693Read(); err != nil {
+		return err
+	}
+	// if err := d.iso14443aRead(); err != nil {
+	// 	return err
+	// 	}
+	return nil
+}
+
+func (d *Device) iso14443aRead() error {
 	if err := d.reqa(); err != nil {
 		return err
 	}
