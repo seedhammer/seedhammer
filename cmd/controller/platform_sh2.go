@@ -1,4 +1,4 @@
-//go:build tinygo && (pico || pico2)
+//go:build tinygo && rp
 
 package main
 
@@ -177,49 +177,6 @@ func Init() (*Platform, error) {
 	if err := usbpd.AdjustVoltage(maxVoltage * 1000); err != nil {
 		log.Printf("error: %v", err)
 	}
-	// time.Sleep(1 * time.Second)
-	// {
-	// 	needlePWM := machine.PWM2
-	// 	period := 20 * time.Millisecond
-	// 	err := needlePWM.Configure(machine.PWMConfig{
-	// 		Period: uint64(period),
-	// 	})
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	ch, err := needlePWM.Channel(NEEDLE)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	needlePWMThreshold := time.Duration(needlePWM.Top()) * 5 * time.Millisecond / period
-	// 	needlePWM.Set(ch, uint32(needlePWMThreshold))
-	// 	time.Sleep(1 * time.Second)
-	// 	needlePWM.Set(ch, 0)
-	// }
-	// DATA_INT.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
-	// for {
-	// 	time.Sleep(100 * time.Millisecond)
-	// 	fmt.Println("DATA_INT:", DATA_INT.Get())
-	// }
-	// vol, err := usbpd.ReadVoltage()
-	// fmt.Println(vol, err)
-	// NEEDLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	// NEEDLE.High()
-	// time.Sleep(100 * time.Millisecond)
-	// cur, err := usbpd.ReadCurrent()
-	// NEEDLE.Low()
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// fmt.Println("current", cur)
-	// for {
-	// 	temp, err := usbpd.ReadTemperature()
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	fmt.Println("temp", temp)
-	// 	time.Sleep(200 * time.Millisecond)
-	// }
 
 	// if err := nfc.TestDump(); err != nil {
 	// 	log.Printf("error: %v\n", err)
@@ -250,27 +207,6 @@ func Init() (*Platform, error) {
 		log.Printf("pico: %v", err)
 		p.engraver.err = err
 	}
-	// {
-	// 	machine.InitADC()
-	// 	needleSenseADC.Configure(machine.ADCConfig{})
-	// 	NEEDLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	// 	NEEDLE.Low()
-	// 	samples := make([]uint16, 10000)
-	// 	samples = samples[:0]
-	// 	for range 2 {
-	// 		now := time.Now()
-	// 		NEEDLE.High()
-	// 		for time.Since(now) < 5*time.Millisecond {
-	// 			samples = append(samples, needleSenseADC.Get())
-	// 		}
-	// 		NEEDLE.Low()
-	// 		for time.Since(now) < 20*time.Millisecond {
-	// 			samples = append(samples, needleSenseADC.Get())
-	// 		}
-	// 		fmt.Println(len(samples), samples)
-	// 		samples = samples[:0]
-	// 	}
-	// }
 
 	return p, nil
 }
