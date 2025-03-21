@@ -151,25 +151,6 @@ func Init() (*Platform, error) {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
 
-	// Some platforms won't recognize the USB v1.1 interface
-	// of the microcontroller when there's also a USB PD
-	// controller present. For example, the builtin USB drive
-	// for firmware upgrades won't show up in macOS.
-	//
-	// To work around this, the CC1 and CC2 data pins are
-	// disconnected at startup (and therefore in firmware
-	// upgrade mode). An OUT pin on the CLRC663 controls the
-	// connection.
-	const usbPDCCEnablePin = 7
-	// Set pin (really, all output enabled pins) to output low.
-	if err := nfc.SetPadOutput(0b0 << usbPDCCEnablePin); err != nil {
-		return nil, fmt.Errorf("data I2C: %w", err)
-	}
-	// Set pin to output mode.
-	if err := nfc.SetPadEnable(0b1 << usbPDCCEnablePin); err != nil {
-		return nil, fmt.Errorf("data I2C: %w", err)
-	}
-
 	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
 		return nil, fmt.Errorf("touch I2C: %w", err)
 	}
