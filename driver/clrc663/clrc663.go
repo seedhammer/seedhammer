@@ -9,14 +9,21 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"machine"
 	"time"
 )
 
+// FIFOSize is the number of bytes that can be
+// read without risking overflow.
+const FIFOSize = 256
+
 type Device struct {
 	bus *machine.I2C
 
-	scratch [2]byte
+	readDone bool
+	rxLen    int
+	scratch  [14]byte
 }
 
 func New(bus *machine.I2C) *Device {
@@ -25,12 +32,33 @@ func New(bus *machine.I2C) *Device {
 	}
 }
 
+type Protocol int
+
+const (
+	ISO15693 Protocol = iota
+	ISO14443a
+)
+
+type state int
+
+const (
+	stateIdle state = iota
+	stateTransceive
+	stateRead
+)
+
 func (d *Device) Configure() error {
-	if err := d.runCommand(cmdSoftReset); err != nil {
+	if err := d.writeRegs(
+		// Cancel any running command.
+		regCommand, cmdIdle,
+		// Soft reset.
+		regCommand, cmdSoftReset,
+	); err != nil {
 		return fmt.Errorf("clrc663: soft reset: %w", err)
 	}
+	// Wait for reset to complete.
 	if err := d.waitForIRQ(irqIdle, 0); err != nil {
-		return fmt.Errorf("clrc663: %w", err)
+		return fmt.Errorf("clrc663: soft reset: %w", err)
 	}
 	return nil
 }
@@ -43,11 +71,97 @@ func (d *Device) SetPadOutput(padOut uint8) error {
 	return d.writeRegs(regPadOut, padOut)
 }
 
+func (d *Device) Transceive(tx []byte) error {
+	d.readDone = false
+	if err := d.writeRegs(
+		// Cancel any running command.
+		regCommand, cmdIdle,
+		// Clear FIFO.
+		regFIFOControl, 1<<4,
+		// Clear interrupts.
+		regIRQ0, 0x7F,
+		regIRQ1, 0x7F,
+	); err != nil {
+		return fmt.Errorf("clrc663: transceive: %w", err)
+	}
+	data := append([]byte{regFIFOData}, tx...)
+	if err := d.bus.Tx(i2cAddr, data, nil); err != nil {
+		return err
+	}
+	if err := d.writeRegs(regCommand, cmdTransceive); err != nil {
+		return fmt.Errorf("clrc663: transceive: %w", err)
+	}
+	return nil
+}
+
+// Read the data received from a Transceive.
+func (d *Device) Read(buf []byte) (int, error) {
+	if !d.readDone {
+		start := time.Now()
+		const timeout = 1 * time.Second
+		for {
+			irq0, err := d.readStatus()
+			if err != nil {
+				return 0, fmt.Errorf("clrc663: read: %w", err)
+			}
+			if irq0&irqRx == 0 {
+				// Read not completed yet.
+				if time.Since(start) > timeout {
+					return 0, fmt.Errorf("clrc663: read timeout")
+				}
+				continue
+			}
+			// Read complete; read message length.
+			scratch := d.scratch[:]
+			tx, rx := scratch[:1], scratch[1:2]
+			tx[0] = regFIFOLength
+			if err := d.bus.Tx(i2cAddr, tx, rx); err != nil {
+				return 0, fmt.Errorf("clrc663: read: %w", err)
+			}
+			d.rxLen = int(rx[0])
+			d.readDone = true
+			break
+		}
+	}
+	if d.rxLen == 0 {
+		return 0, io.EOF
+	}
+	// Read data.
+	tx := d.scratch[:1]
+	tx[0] = regFIFOData
+	buf = buf[:min(len(buf), d.rxLen)]
+	if err := d.bus.Tx(i2cAddr, tx, buf); err != nil {
+		return 0, fmt.Errorf("clrc663: read: %w", err)
+	}
+	d.rxLen -= len(buf)
+	return len(buf), nil
+}
+
+func (d *Device) readStatus() (irq0 uint8, err error) {
+	scratch := d.scratch[:]
+	regStart := scratch[:1]
+	scratch = scratch[1:]
+	vals := scratch[:5]
+	regStart[0] = regIRQ0
+	if err := d.bus.Tx(i2cAddr, regStart, vals); err != nil {
+		return 0, err
+	}
+	irq0, errCode := vals[0], vals[4]
+	if err != nil {
+		return 0, err
+	}
+	if irq0&irqErr != 0 {
+		return 0, fmt.Errorf("command error (code %#.2x)", errCode)
+	}
+	return
+}
+
 func (d *Device) readReg(reg uint8) (uint8, error) {
-	if err := d.bus.Tx(i2cAddr, []byte{reg}, d.scratch[:1]); err != nil {
+	val := d.scratch[:1]
+	if err := d.bus.Tx(i2cAddr, []byte{reg}, val); err != nil {
 		return 0, fmt.Errorf("clrc663: read register %#x: %w", reg, err)
 	}
-	return d.scratch[0], nil
+	return val[0], nil
 }
 
 func (d *Device) readRegs(reg uint8, val []uint8) error {
@@ -85,12 +199,12 @@ func (d *Device) writeRegs(regVals ...uint8) error {
 
 func (d *Device) writeFIFO(data ...uint8) error {
 	// Idle and flush FIFO.
-	if err := d.writeRegs(
-		regCommand, cmdIdle,
-		regFIFOControl, 1<<4,
-	); err != nil {
-		return err
-	}
+	// if err := d.writeRegs(
+	// 	regCommand, cmdIdle,
+	// 	regFIFOControl, 1<<4,
+	// ); err != nil {
+	// 	return err
+	// }
 	data = append([]byte{regFIFOData}, data...)
 	if err := d.bus.Tx(i2cAddr, data, nil); err != nil {
 		return err
@@ -244,6 +358,14 @@ func (d *Device) reqa() error {
 }
 
 func (d *Device) readBlock(block_address uint8, blk []byte) (int, error) {
+	const (
+		_RECOM_14443A_CRC = 0x18
+		_CRC_OFF          = 0
+		_CRC_ON           = 1
+		_TXDATANUM_DATAEN = 1 << 3
+
+		_MF_CMD_READ = 0x30 //!< To read a block from mifare card.
+	)
 	if err := d.writeRegs(
 		regCommand, cmdIdle,
 		regFIFOControl, 1<<4, // Flush FIFO.
@@ -316,6 +438,16 @@ func (d *Device) selectTag() ([]byte, uint8, error) {
 	if err != nil {
 		return nil, 0, fmt.Errorf("clrc663: select: %w", err)
 	}
+
+	const (
+		_ISO14443_CAS_LEVEL_1 = 0x93
+		_ISO14443_CAS_LEVEL_2 = 0x95
+		_ISO14443_CAS_LEVEL_3 = 0x97
+		_RECOM_14443A_CRC     = 0x18
+		_TXDATANUM_DATAEN     = 1 << 3
+		_CRC_OFF              = 0
+		_CRC_ON               = 1
+	)
 
 	for cascade_level := uint8(1); cascade_level <= 3; cascade_level++ {
 		cmd := uint8(0)
@@ -412,7 +544,7 @@ func (d *Device) selectTag() ([]byte, uint8, error) {
 			if irq0&irqErr != 0 { // some error occured.
 				// Check what kind of error.
 				// error = mfrc630_read_reg(MFRC630_REG_ERROR);
-				if error&error_CollDet == 0 {
+				if error&errorCollDet == 0 {
 					// Some other error occurred.
 					return nil, 0, fmt.Errorf("clrc663: select: error: %#x\n", error)
 				}
@@ -540,7 +672,7 @@ func (d *Device) selectTag() ([]byte, uint8, error) {
 			if err != nil {
 				return nil, 0, fmt.Errorf("clrc663: select: %w", err)
 			}
-			if error&error_CollDet != 0 {
+			if error&errorCollDet != 0 {
 				// a collision was detected with NVB=0x70, should never happen.
 				return nil, 0, errors.New("clrc663: impossible collision")
 			}
@@ -627,45 +759,72 @@ func (d *Device) measureLPCD() error {
 	return nil
 }
 
-func (d *Device) TestDump() error {
+func (d *Device) RadioOn(prot Protocol) error {
+	var (
+		rxProtocol, txProtocol uint8
+		regEEPROMAddr          uint16
+	)
+	switch prot {
+	case ISO15693:
+		rxProtocol, txProtocol = protocol_ISO15693_26_SSC_26_1_4, protocol_ISO15693_26_SSC_26_1_4
+		regEEPROMAddr = eepromAddrISO15693_SLI_1_4_SSC_26
+	case ISO14443a:
+		rxProtocol, txProtocol = protocol_ISO14443A_106_MILLER_MANCHESTER, protocol_ISO14443A_106_MILLER_MANCHESTER
+		regEEPROMAddr = eepromAddrISO14443A_106
+	default:
+		panic("invalid protocol")
+	}
 	// Load preset protocol registers.
 	if err := d.runCommand(
 		cmdLoadProtocol,
-		// protocol_ISO14443A_106_MILLER_MANCHESTER, protocol_ISO14443A_106_MILLER_MANCHESTER,
-		protocol_ISO15693_26_SSC_26_1_4, protocol_ISO15693_26_SSC_26_1_4,
+		rxProtocol, txProtocol,
 	); err != nil {
-		return fmt.Errorf("clrc663: LoadProtocol: %w", err)
+		return fmt.Errorf("LoadProtocol: %w", err)
 	}
 	if err := d.waitForIRQ(irqIdle, 0); err != nil {
-		return fmt.Errorf("clrc663: %w", err)
+		return err
 	}
 
 	// Load preset antenna registers.
-	const (
-		// eepromAddr = eepromAddrISO14443A_106
-		eepromAddr   = eepromAddrISO15693_SLI_1_4_SSC_26
-		eepromLength = regRxAna - regDrvMode + 1
-	)
+	const eepromLength = regRxAna - regDrvMode + 1
 	if err := d.runCommand(
 		cmdLoadReg,
 		// Source EEPROM address.
-		uint8(eepromAddr>>8), uint8(eepromAddr&0xff),
+		uint8(regEEPROMAddr>>8), uint8(regEEPROMAddr&0xff),
 		// Destination register
 		regDrvMode,
 		// Length
 		eepromLength,
 	); err != nil {
-		return fmt.Errorf("clrc663: LoadReg: %w", err)
+		return fmt.Errorf("LoadReg: %w", err)
+	}
+	if err := d.waitForIRQ(irqIdle, 0); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *Device) RadioOff() error {
+	// Cancel any running command and shut off radio.
+	if err := d.writeRegs(regCommand, cmdIdle|commandModemOff); err != nil {
+		return fmt.Errorf("clrc663: modem off: %w", err)
+	}
+	return nil
+}
+
+func (d *Device) TestDump() error {
+	if err := d.RadioOn(ISO15693); err != nil {
+		return fmt.Errorf("clrc663: %w", err)
 	}
 	// if err := d.measureLPCD(); err != nil {
 	// 	return err
 	// }
-	if err := d.iso15693Read(); err != nil {
+	// if err := d.iso15693Read(); err != nil {
+	// 	return err
+	// }
+	if err := d.iso14443aRead(); err != nil {
 		return err
 	}
-	// if err := d.iso14443aRead(); err != nil {
-	// 	return err
-	// 	}
 	return nil
 }
 
@@ -714,6 +873,8 @@ func (d *Device) iso14443aRead() error {
 			break
 		}
 	}
+
+	const ndefType = 0x03
 	switch typ {
 	case ndefType:
 		msg := content.Bytes()
@@ -873,22 +1034,11 @@ const (
 	irq1LPCDEn = 0b1 << 5
 	irq1PinEn  = 0b1 << 6
 
-	error_CollDet = 1 << 2
+	commandModemOff = 0b1 << 6
 
-	_ISO14443_CAS_LEVEL_1 = 0x93
-	_ISO14443_CAS_LEVEL_2 = 0x95
-	_ISO14443_CAS_LEVEL_3 = 0x97
-
-	_RECOM_14443A_CRC = 0x18
-	_CRC_OFF          = 0
-	_CRC_ON           = 1
-	_TXDATANUM_DATAEN = 1 << 3
-
-	_MF_CMD_READ = 0x30 //!< To read a block from mifare card.
+	errorCollDet = 0b1 << 2
 
 	type2BlkSize = 4
-
-	ndefType = 0x03
 )
 
 // Protocol numbers for the LoadProtocol command.

@@ -3,11 +3,13 @@
 package main
 
 import (
+	"bytes"
 	"device/rp"
 	"errors"
 	"fmt"
 	"image"
 	"image/draw"
+	"io"
 	"log"
 	"machine"
 	"slices"
@@ -24,6 +26,7 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/gui"
 	"seedhammer.com/image/rgb565"
+	"seedhammer.com/nfc/iso15693"
 )
 
 const (
@@ -147,9 +150,52 @@ func Init() (*Platform, error) {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
 	nfc := clrc663.New(dataI2C)
+	fmt.Println("******* Configuring NFC reader ******")
 	if err := nfc.Configure(); err != nil {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
+
+	return nil, func() error {
+		fmt.Println("******* Reading NFC tag ******")
+		// if err := nfc.TestDump(); err != nil {
+		// 	log.Printf("nfc: %v\n", err)
+		// 	panic(err)
+		// }
+
+		if err := nfc.RadioOn(clrc663.ISO15693); err != nil {
+			return err
+		}
+		defer nfc.RadioOff()
+		tag, err := iso15693.Open(nfc)
+		if err != nil {
+			return err
+		}
+		fmt.Println("tag.UID", tag.UID)
+		// buf := make([]byte, 1024)
+		// n, err := tag.Read(buf)
+		// if err != nil && !errors.Is(err, io.EOF) {
+		// 	return err
+		// }
+		// fmt.Println("data", n, buf[:n])
+		// buf := make([]byte, clrc663.FIFOSize)
+		buf := make([]byte, 32)
+		accum := new(bytes.Buffer)
+		for {
+			n, err := tag.Read(buf)
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				log.Printf("nfcread : %v\n", err)
+				break
+			}
+			// fmt.Println("data", n, buf[:n])
+			accum.Write(buf[:n])
+		}
+		all := accum.Bytes()
+		return fmt.Errorf("NFC done (%d): %v", len(all), all)
+	}()
+	panic("done")
 
 	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
 		return nil, fmt.Errorf("touch I2C: %w", err)
@@ -157,10 +203,6 @@ func Init() (*Platform, error) {
 	usbpd := ap33772s.New(dataI2C)
 	if err := usbpd.AdjustVoltage(maxVoltage * 1000); err != nil {
 		log.Printf("error: %v", err)
-	}
-
-	if err := nfc.TestDump(); err != nil {
-		log.Printf("error: %v\n", err)
 	}
 
 	p := &Platform{
