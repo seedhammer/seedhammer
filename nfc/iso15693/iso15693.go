@@ -12,6 +12,9 @@ type Tag struct {
 	UID uint64
 
 	bus Transceiver
+	// bufSize is the largest unmber of bytes to request
+	// from bus.
+	bufSize int
 	// blockNo is the block number to issue the next
 	// read from.
 	blockNo int
@@ -36,9 +39,12 @@ type Transceiver interface {
 }
 
 // Open a tag and read its UID.
-func Open(bus Transceiver) (*Tag, error) {
+// Size is the maximum number of bytes to request from
+// the transceiver.
+func Open(bus Transceiver, size int) (*Tag, error) {
 	tag := &Tag{
-		bus: bus,
+		bus:     bus,
+		bufSize: size,
 	}
 	req := tag.scratch[:3]
 	const maskLength = 0
@@ -48,15 +54,15 @@ func Open(bus Transceiver) (*Tag, error) {
 	req[1] = cmdInventory
 	req[2] = maskLength
 	if err := tag.transceive(req); err != nil {
-		return nil, fmt.Errorf("iso15693: inventory: %w", err)
+		return nil, fmt.Errorf("iso15693: Inventory: %w", err)
 	}
 	dsfidUID := tag.scratch[:]
 	n, err := tag.read(dsfidUID)
 	if err != nil {
-		return nil, fmt.Errorf("iso15693: inventory: %w", err)
+		return nil, fmt.Errorf("iso15693: Inventory: %w", err)
 	}
 	if n != 9 {
-		return nil, fmt.Errorf("iso15693: unexpected inventory response length: %d", n)
+		return nil, fmt.Errorf("iso15693: unexpected Inventory response length: %d", n)
 	}
 	// UID is after the 1-byte DSFID.
 	tag.UID = binary.LittleEndian.Uint64(dsfidUID[1:])
@@ -69,9 +75,6 @@ func (t *Tag) transceive(tx []byte) error {
 }
 
 // Read from the tag.
-//
-// Note: Read guarantees not to request more than len(rx)
-// bytes from the underlying [Transceiver].
 func (t *Tag) Read(rx []byte) (int, error) {
 	if len(rx) < maxBlockSize {
 		return 0, fmt.Errorf("iso15693: buffer too small")
@@ -105,7 +108,7 @@ func (t *Tag) Read(rx []byte) (int, error) {
 			}
 			// Issue the maximal number of blocks that fits
 			// len(rx) minus the response flag byte.
-			nblocks := (len(rx) - 1) / t.blockSize
+			nblocks := (t.bufSize - 1) / t.blockSize
 			if err := t.issueRead(nblocks); err != nil {
 				return 0, fmt.Errorf("iso15693: %w", err)
 			}

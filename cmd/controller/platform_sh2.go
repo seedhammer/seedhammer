@@ -3,13 +3,11 @@
 package main
 
 import (
-	"bytes"
 	"device/rp"
 	"errors"
 	"fmt"
 	"image"
 	"image/draw"
-	"io"
 	"log"
 	"machine"
 	"slices"
@@ -27,6 +25,7 @@ import (
 	"seedhammer.com/gui"
 	"seedhammer.com/image/rgb565"
 	"seedhammer.com/nfc/iso14443a"
+	"seedhammer.com/nfc/ndef"
 )
 
 const (
@@ -163,35 +162,40 @@ func Init() (*Platform, error) {
 			return err
 		}
 		defer nfc.RadioOff()
-		// tag, err := iso15693.Open(nfc)
+		// tag, err := iso15693.Open(nfc, clrc663.FIFOSize)
 		tag, err := iso14443a.Open(nfc)
 		if err != nil {
 			return err
 		}
-		fmt.Println("tag.UID", tag.UID)
+		// fmt.Println("tag.UID", tag.UID)
 		// buf := make([]byte, 1024)
 		// n, err := tag.Read(buf)
 		// if err != nil && !errors.Is(err, io.EOF) {
 		// 	return err
 		// }
 		// fmt.Println("data", n, buf[:n])
-		buf := make([]byte, clrc663.FIFOSize)
-		// buf := make([]byte, 32)
-		accum := new(bytes.Buffer)
-		for {
-			n, err := tag.Read(buf)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					break
-				}
-				log.Printf("nfcread : %v\n", err)
-				break
-			}
-			// fmt.Println("data", n, buf[:n])
-			accum.Write(buf[:n])
+		contents := ndef.NewReader(tag)
+		if err := contents.Next(); err != nil {
+			return err
 		}
-		all := accum.Bytes()
-		return fmt.Errorf("NFC done (%d): %v", len(all), all)
+		// buf := make([]byte, clrc663.FIFOSize)
+		// // buf := make([]byte, 32)
+		// accum := new(bytes.Buffer)
+		// for {
+		// 	n, err := tag.Read(buf)
+		// 	if err != nil {
+		// 		if errors.Is(err, io.EOF) {
+		// 			break
+		// 		}
+		// 		log.Printf("nfcread : %v\n", err)
+		// 		break
+		// 	}
+		// 	fmt.Println("data", n, buf[:n])
+		// 	accum.Write(buf[:n])
+		// }
+		// all := accum.Bytes()
+		// return fmt.Errorf("NFC done (%d): %v", len(all), all)
+		return errors.New("not done yet?")
 	}()
 	panic("done")
 

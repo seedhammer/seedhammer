@@ -83,13 +83,16 @@ func (d *Device) SetRxBitCtrl(v uint8) {
 	d.rxBitCtrl = v
 }
 
-func (d *Device) SetCRC(enable bool) {
-	if enable {
-		d.rxCRCPreset |= 0b1
+func (d *Device) SetCRC(tx, rx bool) {
+	if tx {
 		d.txCRCPreset |= 0b1
 	} else {
-		d.rxCRCPreset &^= 0b1
 		d.txCRCPreset &^= 0b1
+	}
+	if rx {
+		d.rxCRCPreset |= 0b1
+	} else {
+		d.rxCRCPreset &^= 0b1
 	}
 }
 
@@ -138,8 +141,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 				continue
 			}
 			// Read complete; read message length.
-			scratch := d.scratch[:]
-			tx, rx := scratch[:1], scratch[1:2]
+			tx, rx := d.scratch[:1], d.scratch[1:2]
 			tx[0] = regFIFOLength
 			if err := d.bus.Tx(i2cAddr, tx, rx); err != nil {
 				return 0, fmt.Errorf("clrc663: read: %w", err)
@@ -478,8 +480,6 @@ const (
 	commandModemOff = 0b1 << 6
 
 	errorCollDet = 0b1 << 2
-
-	type2BlkSize = 4
 )
 
 // Protocol numbers for the LoadProtocol command.
