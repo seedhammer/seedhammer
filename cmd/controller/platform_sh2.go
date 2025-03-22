@@ -26,7 +26,7 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/gui"
 	"seedhammer.com/image/rgb565"
-	"seedhammer.com/nfc/iso15693"
+	"seedhammer.com/nfc/iso14443a"
 )
 
 const (
@@ -157,16 +157,14 @@ func Init() (*Platform, error) {
 
 	return nil, func() error {
 		fmt.Println("******* Reading NFC tag ******")
-		// if err := nfc.TestDump(); err != nil {
-		// 	log.Printf("nfc: %v\n", err)
-		// 	panic(err)
-		// }
-
-		if err := nfc.RadioOn(clrc663.ISO15693); err != nil {
+		const prot = clrc663.ISO14443a
+		// const prot = clrc663.ISO15693
+		if err := nfc.RadioOn(prot); err != nil {
 			return err
 		}
 		defer nfc.RadioOff()
-		tag, err := iso15693.Open(nfc)
+		// tag, err := iso15693.Open(nfc)
+		tag, err := iso14443a.Open(nfc)
 		if err != nil {
 			return err
 		}
@@ -177,8 +175,8 @@ func Init() (*Platform, error) {
 		// 	return err
 		// }
 		// fmt.Println("data", n, buf[:n])
-		// buf := make([]byte, clrc663.FIFOSize)
-		buf := make([]byte, 32)
+		buf := make([]byte, clrc663.FIFOSize)
+		// buf := make([]byte, 32)
 		accum := new(bytes.Buffer)
 		for {
 			n, err := tag.Read(buf)
