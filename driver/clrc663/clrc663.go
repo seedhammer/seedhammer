@@ -43,14 +43,6 @@ const (
 	ISO14443a
 )
 
-type Option int
-
-const (
-	// Tx7Bit enables 7-bit transmission, useful
-	// for commands such as REQA of ISO 14443a.
-	Tx7Bit Option = iota
-)
-
 func (d *Device) Configure() error {
 	if err := d.writeRegs(
 		// Cancel any running command.
