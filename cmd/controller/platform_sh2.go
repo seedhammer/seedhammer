@@ -24,8 +24,6 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/gui"
 	"seedhammer.com/image/rgb565"
-	"seedhammer.com/nfc/iso14443a"
-	"seedhammer.com/nfc/ndef"
 )
 
 const (
@@ -68,41 +66,43 @@ type Platform struct {
 const (
 	TOUCH_SDA = machine.GPIO14
 	TOUCH_SCL = machine.GPIO15
-	TOUCH_INT = machine.GPIO12
+	TOUCH_INT = machine.GPIO16
 
 	LCD_RS  = machine.NoPin
 	LCD_CS  = machine.NoPin
 	LCD_TE  = machine.GPIO13
-	LCD_DC  = machine.GPIO16
-	LCD_WRX = machine.GPIO17
-	LCD_DB0 = machine.GPIO18
+	LCD_DC  = machine.GPIO17
+	LCD_WRX = machine.GPIO18
+	LCD_DB0 = machine.GPIO19
 
-	DRV_ENABLE = machine.GPIO11
+	DRV_ENABLE = machine.GPIO10
 
-	NEEDLE       = machine.GPIO4
-	NEEDLE_SENSE = machine.GPIO26
+	STEPPER_UART = machine.GPIO9
+	X_ADDR       = 0b00
+	Y_ADDR       = 0b01
+	X_DIAG       = machine.GPIO8
+	Y_DIAG       = machine.GPIO7
 
-	STEPPER_UART    = machine.GPIO10
-	X_ADDR          = 0b00
-	X_DIAG          = machine.GPIO8
-	X_STEP          = machine.GPIO6
-	X_DIR           = machine.GPIO3
-	Y_ADDR          = 0b01
-	Y_DIAG          = machine.GPIO7
-	Y_STEP          = machine.GPIO5
-	Y_DIR           = machine.GPIO2
-	engraverBasePin = Y_DIR
+	engraverBasePin = machine.GPIO2
+	// Stepper and needle pins are assumed to
+	// be at constant offsets from engraver base pin.
+	Y_DIR  = engraverBasePin + 0
+	X_DIR  = engraverBasePin + 1
+	NEEDLE = engraverBasePin + 2
+	Y_STEP = engraverBasePin + 3
+	X_STEP = engraverBasePin + 4
 
-	DATA_INT = machine.GPIO27
-	DATA_SDA = machine.GPIO28
-	DATA_SCL = machine.GPIO29
+	NEEDLE_VREF = machine.GPIO11
+	DATA_INT    = machine.GPIO27
+	DATA_SDA    = machine.GPIO28
+	DATA_SCL    = machine.GPIO29
 
 	lcdDMAChannel = 0
 )
 
 var (
-	needleSenseADC = machine.ADC{Pin: NEEDLE_SENSE}
-	touchI2C       = machine.I2C1
+	needleVREFPWM = machine.PWM5
+	touchI2C      = machine.I2C1
 	// Data I2C bus for the USB PD and NFC peripherals.
 	dataI2C     = machine.I2C0
 	lcdPIO      = rp.PIO0
@@ -115,6 +115,12 @@ const (
 	needlePeriod = 20 * time.Millisecond
 	// The duration of a needle cycle turned on.
 	needleActivation = 45 * time.Millisecond / 10
+	// needleCurrentLimit in millisamperes (mA).
+	needleCurrentLimit = 1_000
+	// needleSenseScale is the current limit
+	// in milliamperes (mA) that corresponds to a
+	// 100% PWM duty cycle output to NEEDLE_VREF.
+	needleSenseScale = 32_500
 
 	// Maximum supply voltage in volts.
 	maxVoltage = 28
@@ -125,21 +131,26 @@ const (
 	// minimumStallVelocity is the speed in full-steps/second for
 	// StallGuard to be enabled.
 	minimumStallVelocity = 250
-	fullstepsPerMM       = 200 / 8
-	stepsPerMM           = fullstepsPerMM * tmc2209.Microsteps
+	// fullStepsPerRevolution is the number of full-steps for a full
+	// motor revolution.
+	fullStepsPerRevolution = 200
+	// mmPerRevolution is the axis movement in millimeters per revolution.
+	mmPerRevolution = 8
+	// mm is the number of (micro-)steps per millimeter.
+	mm = fullStepsPerRevolution / mmPerRevolution * tmc2209.Microsteps
 	// The coordinates of the top-left plate corner relative to the
 	// homing zero.
-	originX, originY = 2.1 * stepsPerMM, 2.1 * stepsPerMM
+	originX, originY = 2.1 * mm, 2.1 * mm
 	// Maximum distance to travel before giving up homing.
-	homingDist = 250 * stepsPerMM
-	// strokeWidth of engravings.
-	strokeWidth = 3 * stepsPerMM / 10
+	homingDist = 100 * mm
+	// strokeWidth of engraving lines.
+	strokeWidth = 0.3 * mm
 	// Speeds in steps/second.
-	topSpeed       = 40 * stepsPerMM
-	engravingSpeed = 8 * stepsPerMM
-	homingSpeed    = 15 * stepsPerMM
+	topSpeed       = 40 * mm
+	engravingSpeed = 8 * mm
+	homingSpeed    = 15 * mm
 	// acceleration in steps/s².
-	acceleration = 100 * stepsPerMM
+	acceleration = 100 * mm
 	invertX      = true
 	invertY      = false
 )
@@ -148,63 +159,74 @@ func Init() (*Platform, error) {
 	if err := dataI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: DATA_SDA, SCL: DATA_SCL}); err != nil {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
-	nfc := clrc663.New(dataI2C)
-	fmt.Println("******* Configuring NFC reader ******")
-	if err := nfc.Configure(); err != nil {
-		return nil, fmt.Errorf("data I2C: %w", err)
-	}
-
-	return nil, func() error {
-		fmt.Println("******* Reading NFC tag ******")
-		const prot = clrc663.ISO14443a
-		// const prot = clrc663.ISO15693
-		if err := nfc.RadioOn(prot); err != nil {
-			return err
-		}
-		defer nfc.RadioOff()
-		// tag, err := iso15693.Open(nfc, clrc663.FIFOSize)
-		tag, err := iso14443a.Open(nfc)
-		if err != nil {
-			return err
-		}
-		// fmt.Println("tag.UID", tag.UID)
-		// buf := make([]byte, 1024)
-		// n, err := tag.Read(buf)
-		// if err != nil && !errors.Is(err, io.EOF) {
-		// 	return err
-		// }
-		// fmt.Println("data", n, buf[:n])
-		contents := ndef.NewReader(tag)
-		if err := contents.Next(); err != nil {
-			return err
-		}
-		// buf := make([]byte, clrc663.FIFOSize)
-		// // buf := make([]byte, 32)
-		// accum := new(bytes.Buffer)
-		// for {
-		// 	n, err := tag.Read(buf)
-		// 	if err != nil {
-		// 		if errors.Is(err, io.EOF) {
-		// 			break
-		// 		}
-		// 		log.Printf("nfcread : %v\n", err)
-		// 		break
-		// 	}
-		// 	fmt.Println("data", n, buf[:n])
-		// 	accum.Write(buf[:n])
-		// }
-		// all := accum.Bytes()
-		// return fmt.Errorf("NFC done (%d): %v", len(all), all)
-		return errors.New("not done yet?")
-	}()
-	panic("done")
-
-	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
-		return nil, fmt.Errorf("touch I2C: %w", err)
-	}
+	DATA_INT.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
 	usbpd := ap33772s.New(dataI2C)
 	if err := usbpd.AdjustVoltage(maxVoltage * 1000); err != nil {
 		log.Printf("error: %v", err)
+	}
+	nfc := clrc663.New(dataI2C)
+	if err := nfc.Configure(); err != nil {
+		return nil, fmt.Errorf("data I2C: %w", err)
+	}
+	nfc.SetPadEnable(0b1 << 4)
+	// for {
+	// 	for DATA_INT.Get() {
+	// 	}
+	// 	nfc.SetPadEnable(0b1 << 4)
+	// 	st, err := usbpd.ReadStatus()
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+	// 	println(st)
+	// 	nfc.SetPadEnable(0b0 << 4)
+	// }
+
+	// return nil, func() error {
+	// 	fmt.Println("******* Reading NFC tag ******")
+	// 	const prot = clrc663.ISO14443a
+	// 	// const prot = clrc663.ISO15693
+	// 	if err := nfc.RadioOn(prot); err != nil {
+	// 		return err
+	// 	}
+	// 	defer nfc.RadioOff()
+	// 	// tag, err := iso15693.Open(nfc, clrc663.FIFOSize)
+	// 	tag, err := iso14443a.Open(nfc)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	// fmt.Println("tag.UID", tag.UID)
+	// 	// buf := make([]byte, 1024)
+	// 	// n, err := tag.Read(buf)
+	// 	// if err != nil && !errors.Is(err, io.EOF) {
+	// 	// 	return err
+	// 	// }
+	// 	// fmt.Println("data", n, buf[:n])
+	// 	contents := ndef.NewReader(tag)
+	// 	if err := contents.Next(); err != nil {
+	// 		return err
+	// 	}
+	// 	// buf := make([]byte, clrc663.FIFOSize)
+	// 	// // buf := make([]byte, 32)
+	// 	// accum := new(bytes.Buffer)
+	// 	// for {
+	// 	// 	n, err := tag.Read(buf)
+	// 	// 	if err != nil {
+	// 	// 		if errors.Is(err, io.EOF) {
+	// 	// 			break
+	// 	// 		}
+	// 	// 		log.Printf("nfcread : %v\n", err)
+	// 	// 		break
+	// 	// 	}
+	// 	// 	fmt.Println("data", n, buf[:n])
+	// 	// 	accum.Write(buf[:n])
+	// 	// }
+	// 	// all := accum.Bytes()
+	// 	// return fmt.Errorf("NFC done (%d): %v", len(all), all)
+	// 	return errors.New("not done yet?")
+	// }()
+
+	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
+		return nil, fmt.Errorf("touch I2C: %w", err)
 	}
 
 	p := &Platform{
@@ -237,6 +259,30 @@ func Init() (*Platform, error) {
 }
 
 func configEngraver() (gui.Engraver, error) {
+	DRV_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	DRV_ENABLE.Set(true)
+	vrefCh, err := needleVREFPWM.Channel(NEEDLE_VREF)
+	if err != nil {
+		// This should never happen with a proper match
+		// between the PWM unit and the vref pin.
+		panic(err)
+	}
+	// The needle current sense is a voltage reference.
+	// Since we can't generate an (analog) voltage
+	// directly, an external low-pass filter converts a
+	// PWM signal to a voltage from 0-3.3V. The PWM frequency
+	// simply needs to be large enough to minimize voltage
+	// ripples.
+	const vrefPWMFreq = 100 * machine.KHz
+	if err := needleVREFPWM.Configure(machine.PWMConfig{
+		Period: uint64(time.Second / vrefPWMFreq),
+	}); err != nil {
+		panic(err)
+	}
+	// Compute duty cycle that corresponds to the limit.
+	duty := uint32(uint64(needleVREFPWM.Top()) * needleCurrentLimit / needleSenseScale)
+	needleVREFPWM.Set(vrefCh, duty)
+
 	uart, err := tmc2209.NewUART(stepperPIO, STEPPER_UART)
 	if err != nil {
 		return nil, err
@@ -260,11 +306,9 @@ func configEngraver() (gui.Engraver, error) {
 			return nil, fmt.Errorf("configuring stepper stall threshold %d: %w", i, err)
 		}
 		if err := axis.SetMinimumStallVelocity(minimumStallVelocity); err != nil {
-			return nil, fmt.Errorf("configuring stepper stall threshold %d: %w", i, err)
+			return nil, fmt.Errorf("configuring stepper stall velocity %d: %w", i, err)
 		}
 	}
-	DRV_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	DRV_ENABLE.Set(true)
 	home := image.Point{
 		X: -homingDist,
 		Y: -homingDist,
@@ -362,7 +406,7 @@ func (p *Platform) PlateSizes() []backup.PlateSize {
 func (p *Platform) EngraverParams() engrave.Params {
 	return engrave.Params{
 		StrokeWidth: strokeWidth,
-		Millimeter:  stepsPerMM,
+		Millimeter:  mm,
 	}
 }
 

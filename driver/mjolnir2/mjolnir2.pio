@@ -22,7 +22,7 @@
 ; pin 0: step y
 ; pin 1: step x
 ;
-; Note that the side set mapping overlaps the out pins.
+; Note that the side set pins overlap the out pins.
 ;
 .program mjolnir2
 
