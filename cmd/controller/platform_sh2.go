@@ -114,9 +114,9 @@ const (
 	// The period of a needle cycle.
 	needlePeriod = 20 * time.Millisecond
 	// The duration of a needle cycle turned on.
-	needleActivation = 45 * time.Millisecond / 10
+	needleActivation = 5 * time.Millisecond
 	// needleCurrentLimit in millisamperes (mA).
-	needleCurrentLimit = 1_000
+	needleCurrentLimit = 3_000
 	// needleSenseScale is the current limit
 	// in milliamperes (mA) that corresponds to a
 	// 100% PWM duty cycle output to NEEDLE_VREF.

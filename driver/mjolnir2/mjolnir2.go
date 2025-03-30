@@ -38,7 +38,6 @@ type Device struct {
 	NeedleActivation time.Duration
 
 	xnotify, ynotify chan struct{}
-	accelDelays      []uint16
 }
 
 const (
@@ -56,8 +55,6 @@ const (
 )
 
 func (d *Device) Configure() error {
-	d.accelDelays = newAccelCurve(d.TopSpeed, d.Acceleration)
-
 	if d.xnotify == nil {
 		d.xnotify = make(chan struct{}, 1)
 	}
@@ -134,16 +131,13 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 
 	txReg := pio.Tx(d.Pio, pioSM)
 	xdiag, ydiag := false, false
-	accelLen := max(1, stepsForSpeed(moveSpeed, d.Acceleration))
-	engraveAccelLen := max(1, stepsForSpeed(d.EngravingSpeed, d.Acceleration))
-	pioFreq := d.TopSpeed * pioCyclesPerStep
-	needlePeriod := int(d.NeedlePeriod * time.Duration(pioFreq) / time.Second)
-	needleActivation := int(d.NeedleActivation * time.Duration(pioFreq) / time.Second)
 	eng := &engraver{
-		MoveDelays:       d.accelDelays[:accelLen],
-		EngraveDelays:    d.accelDelays[:engraveAccelLen],
-		NeedlePeriod:     needlePeriod,
-		NeedleActivation: needleActivation,
+		Speed:            moveSpeed,
+		EngravingSpeed:   d.EngravingSpeed,
+		Acceleration:     d.Acceleration,
+		TicksPerSecond:   d.TopSpeed,
+		NeedlePeriod:     d.NeedlePeriod,
+		NeedleActivation: d.NeedleActivation,
 	}
 	for step := range eng.Engrave(plan) {
 		select {

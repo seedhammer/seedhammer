@@ -2,20 +2,22 @@ package mjolnir2
 
 import (
 	"image"
-	"math"
 	"slices"
 	"testing"
+	"time"
 
 	"seedhammer.com/engrave"
 )
 
 func TestEngraver(t *testing.T) {
+	const mm = 6400
 	cmds := []engrave.Command{
 		engrave.Move(image.Pt(0, 0)),
-		engrave.Move(image.Pt(50, 10)),
-		engrave.Line(image.Pt(10, 30)),
-		engrave.Line(image.Pt(60, 30)),
-		engrave.Line(image.Pt(50, 10)),
+		engrave.Move(image.Pt(1, 0)),
+		engrave.Line(image.Pt(100*mm, 10*mm)),
+		engrave.Move(image.Pt(10*mm, 30*mm)),
+		engrave.Line(image.Pt(60*mm, 30*mm)),
+		engrave.Line(image.Pt(50*mm, 10*mm)),
 		engrave.Move(image.Pt(0, 0)),
 	}
 	plan := engrave.Plan(slices.Values(cmds))
@@ -23,12 +25,20 @@ func TestEngraver(t *testing.T) {
 	for pen == cmds[0].Coord {
 		cmds = cmds[1:]
 	}
-	accelDelays := []uint16{16, 8, 4, 2, 1}
+	const (
+		speed          = 40. * mm
+		engravingSpeed = 15. * mm
+		accel          = 100. * mm
+
+		ticksPerSecond = speed
+	)
 	eng := &engraver{
-		MoveDelays:       accelDelays,
-		EngraveDelays:    accelDelays,
-		NeedlePeriod:     20,
-		NeedleActivation: 6,
+		Speed:            speed,
+		EngravingSpeed:   engravingSpeed,
+		Acceleration:     accel,
+		TicksPerSecond:   ticksPerSecond,
+		NeedlePeriod:     20 * time.Millisecond,
+		NeedleActivation: 6 * time.Millisecond,
 	}
 	for step := range eng.Engrave(plan) {
 		pen.X += int(step.StepX) * (1 - int(step.DirX)*2)
@@ -39,27 +49,6 @@ func TestEngraver(t *testing.T) {
 	}
 	if len(cmds) > 0 {
 		t.Errorf("engraving didn't visit the points %v", cmds)
-	}
-}
-
-func TestAccelerationCurve(t *testing.T) {
-	const (
-		speed = 100
-		accel = 50
-	)
-	curve := newAccelCurve(speed, accel)
-	sum := 0
-	for _, v := range curve {
-		sum += int(v) + pioCyclesPerStep
-	}
-	dist := stepsForSpeed(speed, accel)
-	if dist != len(curve) {
-		t.Errorf("speed = %d, acceleration = %d got distance %d, expected %d", speed, accel, len(curve), dist)
-	}
-	gotTime := int(math.Round(float64(sum) / (speed * pioCyclesPerStep)))
-	expTime := int(math.Round(math.Sqrt(2 * float64(dist) / float64(accel))))
-	if expTime != gotTime {
-		t.Errorf("speed = %d, acceleration = %d got time %d, expected %d", speed, accel, gotTime, expTime)
 	}
 }
 
