@@ -9,10 +9,6 @@ import (
 )
 
 type step struct {
-	// The delay in cycles before issuing the
-	// step and needle. A delay of zero is the
-	// fixed delay [pioCyclesPerStep].
-	Delay        int
 	DirX, DirY   uint8
 	Needle       uint8
 	StepX, StepY uint8

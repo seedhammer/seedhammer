@@ -66,11 +66,12 @@ func (d *Device) Configure() error {
 	conf.OutBase = uint8(pinDirY + d.BasePin)
 	conf.OutCount = mjolnir2pinBits
 	conf.FIFOMode = pio.FIFOJoinTX
-	conf.PullThreshold = mjolnir2delayBits + mjolnir2pinBits
+	conf.PullThreshold = mjolnir2pinBits
 	conf.Autopull = true
 	conf.Freq = uint32(d.TopSpeed) * pioCyclesPerStep
 	pio.Configure(d.Pio, pioSM, conf.Build())
 	pio.Program(d.Pio, progOffset, mjolnir2Instructions)
+	pio.Instr(d.Pio, pioSM).Set(clearXInst)
 
 	d.XDiag.Configure(machine.PinConfig{Mode: machine.PinInput})
 	d.XDiag.SetInterrupt(machine.PinRising, d.diagInterrupt)
@@ -146,17 +147,18 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 		case <-d.xnotify:
 			if !homing {
 				return errors.New("mjolnir2: x-axis stepper driver failed")
+			} else if ydiag {
+				return nil
 			}
 			xdiag = true
 		case <-d.ynotify:
 			if !homing {
 				return errors.New("mjolnir2: y-axis stepper driver failed")
+			} else if xdiag {
+				return nil
 			}
 			ydiag = true
 		default:
-		}
-		if homing && ydiag && xdiag {
-			return nil
 		}
 		pins := uint32(
 			step.DirX<<pinDirX |
@@ -166,11 +168,10 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 				step.StepY<<pinStepY,
 		)
 
-		cmd := pins<<mjolnir2delayBits | uint32(step.Delay)
 		// Wait for FIFO.
 		for d.Pio.GetFSTAT_TXFULL()&(0b1<<pioSM) != 0 {
 		}
-		txReg.Set(cmd)
+		txReg.Set(pins)
 	}
 	if homing {
 		return errors.New("mjolnir2: homing timed out")

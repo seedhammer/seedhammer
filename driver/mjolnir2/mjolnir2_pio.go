@@ -5,25 +5,25 @@ package mjolnir2
 import "seedhammer.com/driver/pio"
 
 const (
-	pioCyclesPerStep = 6
+	pioCyclesPerStep = 5
 )
+
+var clearXInst = uint32(mjolnir2_utilInstructions[0])
 
 // mjolnir2
 
 const mjolnir2WrapTarget = 0
-const mjolnir2Wrap = 5
+const mjolnir2Wrap = 4
 
 const mjolnir2pinBits = 5
-const mjolnir2delayBits = 27
 
 var mjolnir2Instructions = []uint16{
 	//     .wrap_target
-	0x605b, //  0: out    y, 27
-	0xb001, //  1: mov    pins, x         side 0
-	0x6025, //  2: out    x, 5
-	0xb001, //  3: mov    pins, x         side 0
-	0x0084, //  4: jmp    y--, 4
-	0xa001, //  5: mov    pins, x
+	0x80c0, //  0: pull   ifempty noblock
+	0x6045, //  1: out    y, 5
+	0xb002, //  2: mov    pins, y         side 0
+	0xa002, //  3: mov    pins, y
+	0xb002, //  4: mov    pins, y         side 0
 	//     .wrap
 }
 
@@ -32,6 +32,26 @@ const mjolnir2Origin = -1
 func mjolnir2ProgramDefaultConfig(offset uint8) pio.StateMachineConfig {
 	cfg := pio.DefaultStateMachineConfig()
 	cfg.SetWrap(offset+mjolnir2WrapTarget, offset+mjolnir2Wrap)
+	cfg.SetSidesetParams(3, true, false)
+	return cfg
+}
+
+// mjolnir2_util
+
+const mjolnir2_utilWrapTarget = 0
+const mjolnir2_utilWrap = 0
+
+var mjolnir2_utilInstructions = []uint16{
+	//     .wrap_target
+	0xe020, //  0: set    x, 0
+	//     .wrap
+}
+
+const mjolnir2_utilOrigin = -1
+
+func mjolnir2_utilProgramDefaultConfig(offset uint8) pio.StateMachineConfig {
+	cfg := pio.DefaultStateMachineConfig()
+	cfg.SetWrap(offset+mjolnir2_utilWrapTarget, offset+mjolnir2_utilWrap)
 	cfg.SetSidesetParams(3, true, false)
 	return cfg
 }
