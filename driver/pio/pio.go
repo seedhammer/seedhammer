@@ -258,12 +258,22 @@ func Instr(p *rp.PIO0_Type, sm uint8) *volatile.Register32 {
 	return &conf.INSTR
 }
 
-func WaitTXStall(p *rp.PIO0_Type, machinesMask int) {
+func WaitTxStall(p *rp.PIO0_Type, machinesMask int) {
 	m := uint32(machinesMask)
 	// Clear stall flag(s).
 	p.SetFDEBUG_TXSTALL(m)
 	// Wait.
 	for p.GetFDEBUG_TXSTALL()&m != m {
+	}
+}
+
+func WaitTxNotFull(p *rp.PIO0_Type, machinesMask int) {
+	for p.GetFSTAT_TXFULL()&uint32(machinesMask) != 0 {
+	}
+}
+
+func WaitTxEmpty(p *rp.PIO0_Type, machinesMask int) {
+	for p.GetFSTAT_TXEMPTY()&uint32(machinesMask) == 0 {
 	}
 }
 

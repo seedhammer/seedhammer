@@ -85,7 +85,7 @@ func (d *UART) Write(tx []byte) (int, error) {
 	}
 
 	// Wait for completion.
-	pio.WaitTXStall(d.pio, 0b1<<pioSM)
+	pio.WaitTxStall(d.pio, 0b1<<pioSM)
 	return len(tx), nil
 }
 

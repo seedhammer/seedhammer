@@ -129,8 +129,20 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 	pio.Jump(d.Pio, pioSM, progOffset)
 	pio.Enable(d.Pio, 0b1<<pioSM)
 	defer pio.Disable(d.Pio, 0b1<<pioSM)
-
 	txReg := pio.Tx(d.Pio, pioSM)
+	defer func() {
+		// Wait for all commands to complete. We can't wait for
+		// TX FIFO stalling, because the pio program doesn't stall.
+		// Instead, submit a no-op command and wait for empty FIFO.
+
+		// Wait for FIFO space.
+		pio.WaitTxNotFull(d.Pio, 0b1<<pioSM)
+		// Submit no-op.
+		txReg.Set(0b00000)
+		// Wait for empty FIFO.
+		pio.WaitTxEmpty(d.Pio, 0b1<<pioSM)
+	}()
+
 	xdiag, ydiag := false, false
 	eng := &engraver{
 		Speed:            moveSpeed,
@@ -169,8 +181,7 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 		)
 
 		// Wait for FIFO.
-		for d.Pio.GetFSTAT_TXFULL()&(0b1<<pioSM) != 0 {
-		}
+		pio.WaitTxNotFull(d.Pio, 0b1<<pioSM)
 		txReg.Set(pins)
 	}
 	if homing {

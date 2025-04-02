@@ -171,7 +171,7 @@ func (d *Device) setPullThreshold(thres int) {
 }
 
 func (d *Device) flushFIFO() {
-	pio.WaitTXStall(d.pio, 0b1<<pioStateMachine)
+	pio.WaitTxStall(d.pio, 0b1<<pioStateMachine)
 }
 
 func (d *Device) EndFrame() {
