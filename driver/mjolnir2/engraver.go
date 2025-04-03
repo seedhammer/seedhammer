@@ -14,67 +14,86 @@ type step struct {
 	StepX, StepY uint8
 }
 
-type engraver struct {
+type engravingConfig struct {
 	// Move speed in steps/second.
 	Speed int
 	// EngraveSpeed in steps/second.
 	EngravingSpeed int
 	// Acceleration (and deceleration) steps/second².
 	Acceleration int
-	// Engraver ticks per second.
+	// Engraver ticks per second. A tick represents the duration
+	// of a completed pio step.
 	TicksPerSecond int
 	// Needle period and activation duration.
 	NeedlePeriod     time.Duration
 	NeedleActivation time.Duration
 }
 
-func (e *engraver) Engrave(plan engrave.Plan) iter.Seq[step] {
+// engraving represents the state of an engraving, along with pre-computed
+// values for efficiency.
+type engraving struct {
+	phase phase
+	pen   image.Point
+	// Needle period activation in ticks.
+	needlePeriod int
+	needleAct    int
+	// Speeds, represented as the number of ticks to
+	// reach velocity v. It equals
+	//
+	//   t_a = v / a
+	//
+	// In units of ticks:
+	//
+	//   t_a = (v/tps) / (a/(tps * tps)) = v * tps / a
+	//
+	speed, engravingSpeed int
+	// Acceleration in seconds, a_s, converted to steps/ticks²:
+	//
+	//   a = a_s / (tps * tps)
+	//
+	// aInv2 equals 2a⁻¹.
+	aInv2 int
+}
+
+type phase int
+
+const (
+	startPhase phase = iota
+	accelPhase
+	movePhase
+	decelPhase
+	endPhase
+)
+
+func (c engravingConfig) New() *engraving {
+	tps := uint64(c.TicksPerSecond)
+	as := uint64(c.Acceleration)
+	return &engraving{
+		needlePeriod:   int(c.NeedlePeriod * time.Duration(c.TicksPerSecond) / time.Second),
+		needleAct:      int(c.NeedleActivation * time.Duration(c.TicksPerSecond) / time.Second),
+		aInv2:          int(2 * tps * tps / as),
+		speed:          int(uint64(c.Speed) * tps / as),
+		engravingSpeed: int(uint64(c.EngravingSpeed) * tps / as),
+	}
+}
+
+func (e *engravingConfig) Engrave(plan engrave.Plan) iter.Seq[step] {
+	st := e.New()
 	return func(yield func(step) bool) {
-		pen := image.Point{}
-		tps := uint64(e.TicksPerSecond)
-		as := uint64(e.Acceleration)
-		// Acceleration a_s, converted to steps/ticks²:
-		//
-		//   a = a_s / (tps * tps)
-		//
-		// aInv2 equals 2a⁻¹.
-		aInv2 := int(2 * tps * tps / as)
-		needlePeriod := int(e.NeedlePeriod * time.Duration(e.TicksPerSecond) / time.Second)
-		needleAct := int(e.NeedleActivation * time.Duration(e.TicksPerSecond) / time.Second)
 		for cmd := range plan {
 			var l bresenham
-			dist := cmd.Coord.Sub(pen)
-			pen = cmd.Coord
+			dist := cmd.Coord.Sub(st.pen)
+			st.pen = cmd.Coord
 			dirx, diry, steps := l.Reset(dist)
-			maxv := uint64(e.Speed)
+			ta := st.speed
 			step := step{
 				DirX: dirx,
 				DirY: diry,
 			}
 			if cmd.Line {
-				maxv = uint64(e.EngravingSpeed)
+				ta = st.engravingSpeed
 			}
 
-			type phase int
-			const (
-				startPhase phase = iota
-				accelPhase
-				movePhase
-				decelPhase
-				endPhase
-			)
-			ph := startPhase
-			// Compute the number of ticks, ta, that accelerates to velocity v.
-			//
-			// In units of seconds:
-			//
-			//   t_a = v / a
-			//
-			// In units of ticks:
-			//
-			//   t_a = (v/tps) / (a/(tps * tps)) = v * tps / a
-			//
-			ta := int(maxv * tps / as)
 			// s tracks the number of integer steps.
 			s := 0
 			// Δs accumulates fractional steps, in integer units of 1/2a⁻¹.
@@ -88,14 +107,14 @@ func (e *engraver) Engrave(plan engrave.Plan) iter.Seq[step] {
 			for {
 				// Complete a needle cycle of engraving to ensure
 				// there's a dot at the beginning.
-				if ph == startPhase && (!cmd.Line || tneedle == needlePeriod-1) {
-					ph++
+				if st.phase == startPhase && (!cmd.Line || tneedle == st.needlePeriod-1) {
+					st.phase++
 					t = 0
 				}
 				// Accelerate until half the distance is travelled
 				// or the maximum velocity reached.
-				if ph == accelPhase && (s == steps/2 || t == ta) {
-					ph++
+				if st.phase == accelPhase && (s == steps/2 || t == ta) {
+					st.phase++
 					// Spend as many steps decelerating as spent accelerating.
 					sd = steps - s
 					// Record actual time spent accelerating, except in the
@@ -106,28 +125,28 @@ func (e *engraver) Engrave(plan engrave.Plan) iter.Seq[step] {
 					t = 0
 				}
 				// Move at constant speed until deceleration.
-				if ph == movePhase && s == sd {
-					ph++
+				if st.phase == movePhase && s == sd {
+					st.phase++
 					t = 0
 				}
 				// Decelerate until endpoint.
-				if ph == decelPhase && s == steps {
-					ph++
+				if st.phase == decelPhase && s == steps {
+					st.phase++
 					t = 0
 				}
 				// Complete needle cycle, if needed.
-				if ph == endPhase && (!cmd.Line || tneedle == 0) {
+				if st.phase == endPhase && (!cmd.Line || tneedle == 0) {
 					break
 				}
 				step := step
 				// Advance needle cycle.
-				tneedle = (tneedle + 1) % needlePeriod
-				if cmd.Line && tneedle < needleAct {
+				tneedle = (tneedle + 1) % st.needlePeriod
+				if cmd.Line && tneedle < st.needleAct {
 					step.Needle = 1
 				}
 				// Advance time and Δs.
 				t++
-				switch ph {
+				switch st.phase {
 				case accelPhase:
 					// The distance travelled under acceleration a for 1 tick
 					// equals
@@ -155,10 +174,10 @@ func (e *engraver) Engrave(plan engrave.Plan) iter.Seq[step] {
 					// The start and end phases don't step.
 				}
 				// Step when Δs reaches 1.
-				if Δs >= aInv2 {
+				if Δs >= st.aInv2 {
 					s++
 					// Reduce nominator.
-					Δs -= aInv2
+					Δs -= st.aInv2
 					step.StepX, step.StepY = l.Step()
 				}
 				if !yield(step) {

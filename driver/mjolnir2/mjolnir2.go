@@ -52,6 +52,14 @@ const (
 const (
 	pioSM      = 0
 	progOffset = 0
+
+	// pioStepsPerWord is the number of pio steps that
+	// fit into a 32-bit pio FIFO entry.
+	pioStepsPerWord = 32 / mjolnir2pinBits
+
+	// No-op is the pio step that clears every pin
+	// and stops the needle.
+	noop = 0b00000
 )
 
 func (d *Device) Configure() error {
@@ -66,11 +74,12 @@ func (d *Device) Configure() error {
 	conf.OutBase = uint8(pinDirY + d.BasePin)
 	conf.OutCount = mjolnir2pinBits
 	conf.FIFOMode = pio.FIFOJoinTX
-	conf.PullThreshold = mjolnir2pinBits
+	conf.PullThreshold = mjolnir2pinBits * pioStepsPerWord
 	conf.Autopull = true
 	conf.Freq = uint32(d.TopSpeed) * pioCyclesPerStep
 	pio.Configure(d.Pio, pioSM, conf.Build())
 	pio.Program(d.Pio, progOffset, mjolnir2Instructions)
+	// Register x must be cleared for stall to disable all pins.
 	pio.Instr(d.Pio, pioSM).Set(clearXInst)
 
 	d.XDiag.Configure(machine.PinConfig{Mode: machine.PinInput})
@@ -131,20 +140,17 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 	defer pio.Disable(d.Pio, 0b1<<pioSM)
 	txReg := pio.Tx(d.Pio, pioSM)
 	defer func() {
-		// Wait for all commands to complete. We can't wait for
+		// Wait for all steps to complete. We can't wait for
 		// TX FIFO stalling, because the pio program doesn't stall.
-		// Instead, submit a no-op command and wait for empty FIFO.
+		// Instead, submit a no-op step and wait for empty FIFO.
 
-		// Wait for FIFO space.
 		pio.WaitTxNotFull(d.Pio, 0b1<<pioSM)
-		// Submit no-op.
-		txReg.Set(0b00000)
-		// Wait for empty FIFO.
+		txReg.Set(noop)
 		pio.WaitTxEmpty(d.Pio, 0b1<<pioSM)
 	}()
 
 	xdiag, ydiag := false, false
-	eng := &engraver{
+	eng := &engravingConfig{
 		Speed:            moveSpeed,
 		EngravingSpeed:   d.EngravingSpeed,
 		Acceleration:     d.Acceleration,
@@ -152,6 +158,32 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 		NeedlePeriod:     d.NeedlePeriod,
 		NeedleActivation: d.NeedleActivation,
 	}
+	// // buf of pio words waiting to be submitted.
+	// buf := make([]uint32, 4*1024)
+	// // cmdIdx indexes pio steps in buf. Note that there
+	// // are [pioCmdsPerWord]*len(buf) such indices.
+	// cmdIdx := 0
+	// for cmd := range plan {
+	// 	select {
+	// 	case <-quit:
+	// 		return nil
+	// 	case <-d.xnotify:
+	// 		if !homing {
+	// 			return errors.New("mjolnir2: x-axis stepper driver failed")
+	// 		} else if ydiag {
+	// 			return nil
+	// 		}
+	// 		xdiag = true
+	// 	case <-d.ynotify:
+	// 		if !homing {
+	// 			return errors.New("mjolnir2: y-axis stepper driver failed")
+	// 		} else if xdiag {
+	// 			return nil
+	// 		}
+	// 		ydiag = true
+	// 	default:
+	// 	}
+	// }
 	for step := range eng.Engrave(plan) {
 		select {
 		case <-quit:
