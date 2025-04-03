@@ -134,64 +134,45 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 	}()
 
 	xdiag, ydiag := false, false
-	eng := &engravingConfig{
+	e := engravingConfig{
 		Speed:            moveSpeed,
 		EngravingSpeed:   d.EngravingSpeed,
 		Acceleration:     d.Acceleration,
 		TicksPerSecond:   d.TopSpeed,
 		NeedlePeriod:     d.NeedlePeriod,
 		NeedleActivation: d.NeedleActivation,
-	}
-	// // buf of pio words waiting to be submitted.
-	// buf := make([]uint32, 4*1024)
-	// // cmdIdx indexes pio steps in buf. Note that there
-	// // are [pioCmdsPerWord]*len(buf) such indices.
-	// cmdIdx := 0
-	// for cmd := range plan {
-	// 	select {
-	// 	case <-quit:
-	// 		return nil
-	// 	case <-d.xnotify:
-	// 		if !homing {
-	// 			return errors.New("mjolnir2: x-axis stepper driver failed")
-	// 		} else if ydiag {
-	// 			return nil
-	// 		}
-	// 		xdiag = true
-	// 	case <-d.ynotify:
-	// 		if !homing {
-	// 			return errors.New("mjolnir2: y-axis stepper driver failed")
-	// 		} else if xdiag {
-	// 			return nil
-	// 		}
-	// 		ydiag = true
-	// 	default:
-	// 	}
-	// }
-	for step := range eng.Engrave(plan) {
-		select {
-		case <-quit:
-			return nil
-		case <-d.xnotify:
-			if !homing {
-				return errors.New("mjolnir2: x-axis stepper driver failed")
-			} else if ydiag {
+	}.New()
+	for cmd := range plan {
+		e.Command(cmd)
+		for {
+			select {
+			case <-quit:
 				return nil
+			case <-d.xnotify:
+				if !homing {
+					return errors.New("mjolnir2: x-axis stepper driver failed")
+				} else if ydiag {
+					return nil
+				}
+				xdiag = true
+			case <-d.ynotify:
+				if !homing {
+					return errors.New("mjolnir2: y-axis stepper driver failed")
+				} else if xdiag {
+					return nil
+				}
+				ydiag = true
+			default:
 			}
-			xdiag = true
-		case <-d.ynotify:
-			if !homing {
-				return errors.New("mjolnir2: y-axis stepper driver failed")
-			} else if xdiag {
-				return nil
-			}
-			ydiag = true
-		default:
-		}
 
-		// Wait for FIFO.
-		pio.WaitTxNotFull(d.Pio, 0b1<<pioSM)
-		txReg.Set(uint32(step))
+			step, ok := e.Step()
+			if !ok {
+				break
+			}
+			// Wait for FIFO.
+			pio.WaitTxNotFull(d.Pio, 0b1<<pioSM)
+			txReg.Set(uint32(step))
+		}
 	}
 	if homing {
 		return errors.New("mjolnir2: homing timed out")
