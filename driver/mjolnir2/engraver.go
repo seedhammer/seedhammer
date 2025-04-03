@@ -26,10 +26,6 @@ type engravingConfig struct {
 }
 
 const (
-	// pioStepsPerWord is the number of pio steps that
-	// fit into a 32-bit pio FIFO entry.
-	pioStepsPerWord = 32 / mjolnir2pinBits
-
 	// No-op is the pio step that clears every pin
 	// and stops the needle.
 	noop = 0b00000

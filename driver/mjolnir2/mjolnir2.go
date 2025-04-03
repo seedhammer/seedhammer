@@ -43,6 +43,9 @@ type Device struct {
 const (
 	pioSM      = 0
 	progOffset = 0
+	// pioStepsPerWord is the number of pio steps that
+	// fit into a 32-bit pio FIFO entry.
+	pioStepsPerWord = 32 / mjolnir2pinBits
 )
 
 func (d *Device) Configure() error {
@@ -57,8 +60,7 @@ func (d *Device) Configure() error {
 	conf.OutBase = uint8(pinDirY + d.BasePin)
 	conf.OutCount = mjolnir2pinBits
 	conf.FIFOMode = pio.FIFOJoinTX
-	// conf.PullThreshold = mjolnir2pinBits * pioStepsPerWord
-	conf.PullThreshold = mjolnir2pinBits
+	conf.PullThreshold = mjolnir2pinBits * pioStepsPerWord
 	conf.Autopull = true
 	conf.Freq = uint32(d.TopSpeed) * pioCyclesPerStep
 	pio.Configure(d.Pio, pioSM, conf.Build())
@@ -142,36 +144,56 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 		NeedlePeriod:     d.NeedlePeriod,
 		NeedleActivation: d.NeedleActivation,
 	}.New()
+	const bufSize = 1
+	buf := make([]uint32, bufSize)
+	idx := 0
+	stepIdx := 0
 	for cmd := range plan {
 		e.Command(cmd)
-		for {
-			select {
-			case <-quit:
-				return nil
-			case <-d.xnotify:
-				if !homing {
-					return errors.New("mjolnir2: x-axis stepper driver failed")
-				} else if ydiag {
-					return nil
+		done := false
+		for !done {
+		loop:
+			for idx < len(buf) {
+				for stepIdx < pioStepsPerWord {
+					step, ok := e.Step()
+					if !ok {
+						done = true
+						break loop
+					}
+					buf[idx] |= uint32(step) << (stepIdx * mjolnir2pinBits)
+					stepIdx++
 				}
-				xdiag = true
-			case <-d.ynotify:
-				if !homing {
-					return errors.New("mjolnir2: y-axis stepper driver failed")
-				} else if xdiag {
-					return nil
-				}
-				ydiag = true
-			default:
+				stepIdx = 0
+				idx++
 			}
+			for _, w := range buf[:idx] {
+				select {
+				case <-quit:
+					return nil
+				case <-d.xnotify:
+					if !homing {
+						return errors.New("mjolnir2: x-axis stepper driver failed")
+					} else if ydiag {
+						return nil
+					}
+					xdiag = true
+				case <-d.ynotify:
+					if !homing {
+						return errors.New("mjolnir2: y-axis stepper driver failed")
+					} else if xdiag {
+						return nil
+					}
+					ydiag = true
+				default:
+				}
 
-			step, ok := e.Step()
-			if !ok {
-				break
+				// Wait for FIFO.
+				pio.WaitTxNotFull(d.Pio, 0b1<<pioSM)
+				txReg.Set(w)
 			}
-			// Wait for FIFO.
-			pio.WaitTxNotFull(d.Pio, 0b1<<pioSM)
-			txReg.Set(uint32(step))
+			idx = 0
+			stepIdx = 0
+			clear(buf)
 		}
 	}
 	if homing {
