@@ -8,11 +8,8 @@ import (
 	"seedhammer.com/engrave"
 )
 
-type step struct {
-	DirX, DirY   uint8
-	Needle       uint8
-	StepX, StepY uint8
-}
+// step is a 5-pin pio command with a bit per output pin.
+type step uint8
 
 type engravingConfig struct {
 	// Move speed in steps/second.
@@ -29,11 +26,35 @@ type engravingConfig struct {
 	NeedleActivation time.Duration
 }
 
+const (
+	// pioStepsPerWord is the number of pio steps that
+	// fit into a 32-bit pio FIFO entry.
+	pioStepsPerWord = 32 / mjolnir2pinBits
+
+	// No-op is the pio step that clears every pin
+	// and stops the needle.
+	noop = 0b00000
+)
+
+const (
+	// Pin offsets from base pin.
+	pinDirY = iota
+	pinDirX
+	pinNeedle
+	pinStepY
+	pinStepX
+)
+
 // engraving represents the state of an engraving, along with pre-computed
 // values for efficiency.
 type engraving struct {
+	// State.
 	phase phase
 	pen   image.Point
+	step  step
+
+	// Pre-computed constants.
+
 	// Needle period activation in ticks.
 	needlePeriod int
 	needleAct    int
@@ -77,19 +98,21 @@ func (c engravingConfig) New() *engraving {
 	}
 }
 
+func (e *engraving) Reset() {
+	e.phase = startPhase
+}
+
 func (e *engravingConfig) Engrave(plan engrave.Plan) iter.Seq[step] {
 	st := e.New()
 	return func(yield func(step) bool) {
 		for cmd := range plan {
+			st.Reset()
 			var l bresenham
 			dist := cmd.Coord.Sub(st.pen)
 			st.pen = cmd.Coord
 			dirx, diry, steps := l.Reset(dist)
 			ta := st.speed
-			step := step{
-				DirX: dirx,
-				DirY: diry,
-			}
+			st.step = step(0).WithDirs(dirx, diry)
 			if cmd.Line {
 				ta = st.engravingSpeed
 			}
@@ -138,11 +161,11 @@ func (e *engravingConfig) Engrave(plan engrave.Plan) iter.Seq[step] {
 				if st.phase == endPhase && (!cmd.Line || tneedle == 0) {
 					break
 				}
-				step := step
+				step := st.step
 				// Advance needle cycle.
 				tneedle = (tneedle + 1) % st.needlePeriod
 				if cmd.Line && tneedle < st.needleAct {
-					step.Needle = 1
+					step = step.WidthNeedle()
 				}
 				// Advance time and Δs.
 				t++
@@ -178,7 +201,7 @@ func (e *engravingConfig) Engrave(plan engrave.Plan) iter.Seq[step] {
 					s++
 					// Reduce nominator.
 					Δs -= st.aInv2
-					step.StepX, step.StepY = l.Step()
+					step = step.WithSteps(l.Step())
 				}
 				if !yield(step) {
 					return
@@ -230,4 +253,35 @@ func (l *bresenham) Step() (uint8, uint8) {
 	l.D += 2 * l.dminor
 	return (maj &^ l.swap) | (min & l.swap),
 		(maj & l.swap) | (min &^ l.swap)
+}
+
+func (s step) WithDirs(dirx, diry uint8) step {
+	s |= step(dirx<<pinDirX | diry<<pinDirY)
+	return s
+}
+
+func (s step) WidthNeedle() step {
+	s |= 0b1 << pinNeedle
+	return s
+}
+
+func (s step) WithSteps(stepx, stepy uint8) step {
+	s |= step(stepx<<pinStepX | stepy<<pinStepY)
+	return s
+}
+
+func (s step) StepX() uint8 {
+	return uint8(s >> pinStepX & 0b1)
+}
+
+func (s step) StepY() uint8 {
+	return uint8(s >> pinStepY & 0b1)
+}
+
+func (s step) DirX() uint8 {
+	return uint8(s >> pinDirX & 0b1)
+}
+
+func (s step) DirY() uint8 {
+	return uint8(s >> pinDirY & 0b1)
 }

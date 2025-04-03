@@ -32,7 +32,7 @@ func TestEngraver(t *testing.T) {
 
 		ticksPerSecond = speed
 	)
-	eng := &engraver{
+	eng := &engravingConfig{
 		Speed:            speed,
 		EngravingSpeed:   engravingSpeed,
 		Acceleration:     accel,
@@ -41,8 +41,8 @@ func TestEngraver(t *testing.T) {
 		NeedleActivation: 6 * time.Millisecond,
 	}
 	for step := range eng.Engrave(plan) {
-		pen.X += int(step.StepX) * (1 - int(step.DirX)*2)
-		pen.Y += int(step.StepY) * (1 - int(step.DirY)*2)
+		pen.X += int(step.StepX()) * (1 - int(step.DirX())*2)
+		pen.Y += int(step.StepY()) * (1 - int(step.DirY())*2)
 		for len(cmds) > 0 && pen == cmds[0].Coord {
 			cmds = cmds[1:]
 		}

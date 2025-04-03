@@ -41,25 +41,8 @@ type Device struct {
 }
 
 const (
-	// Pin offsets from base pin.
-	pinDirY = iota
-	pinDirX
-	pinNeedle
-	pinStepY
-	pinStepX
-)
-
-const (
 	pioSM      = 0
 	progOffset = 0
-
-	// pioStepsPerWord is the number of pio steps that
-	// fit into a 32-bit pio FIFO entry.
-	pioStepsPerWord = 32 / mjolnir2pinBits
-
-	// No-op is the pio step that clears every pin
-	// and stops the needle.
-	noop = 0b00000
 )
 
 func (d *Device) Configure() error {
@@ -74,7 +57,8 @@ func (d *Device) Configure() error {
 	conf.OutBase = uint8(pinDirY + d.BasePin)
 	conf.OutCount = mjolnir2pinBits
 	conf.FIFOMode = pio.FIFOJoinTX
-	conf.PullThreshold = mjolnir2pinBits * pioStepsPerWord
+	// conf.PullThreshold = mjolnir2pinBits * pioStepsPerWord
+	conf.PullThreshold = mjolnir2pinBits
 	conf.Autopull = true
 	conf.Freq = uint32(d.TopSpeed) * pioCyclesPerStep
 	pio.Configure(d.Pio, pioSM, conf.Build())
@@ -204,17 +188,10 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 			ydiag = true
 		default:
 		}
-		pins := uint32(
-			step.DirX<<pinDirX |
-				step.DirY<<pinDirY |
-				step.Needle<<pinNeedle |
-				step.StepX<<pinStepX |
-				step.StepY<<pinStepY,
-		)
 
 		// Wait for FIFO.
 		pio.WaitTxNotFull(d.Pio, 0b1<<pioSM)
-		txReg.Set(pins)
+		txReg.Set(uint32(step))
 	}
 	if homing {
 		return errors.New("mjolnir2: homing timed out")
