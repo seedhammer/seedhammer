@@ -40,8 +40,7 @@ type Device struct {
 	NeedleActivation time.Duration
 
 	xnotify, ynotify chan struct{}
-	channel          uint8
-	buf, buf2        []uint32
+	driver           engravingDriver
 }
 
 const (
@@ -52,17 +51,53 @@ const (
 	pioStepsPerWord = 32 / mjolnir2pinBits
 )
 
+// engravingDriver drives an engraving through interrupts
+// and DMA transfers.
+type engravingDriver struct {
+	engraving engraving
+	channel   uint8
+	commands  chan engrave.Command
+	stall     chan struct{}
+	buf, buf2 []uint32
+	idx       int
+	stepIdx   int
+	eof       bool
+}
+
 func (d *Device) Configure() error {
 	ch, err := dma.Reserve()
 	if err != nil {
 		return fmt.Errorf("mjolnir2: %w", err)
 	}
-	d.channel = ch
+	dmaChan := dma.ChannelAt(ch)
+	// Set DMA destination to pio TX FIFO.
+	dmaChan.WRITE_ADDR.Set(uint32(uintptr(unsafe.Pointer(pio.Tx(d.Pio, pioSM)))))
+	// Configure channel.
+	dmaChan.CTRL_TRIG.Set(
+		// Increment read address on each transfer.
+		rp.DMA_CH0_CTRL_TRIG_INCR_READ |
+			// Transfer 32-bit words.
+			rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_SIZE_WORD<<rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_Pos |
+			// Don't chain.
+			uint32(ch)<<rp.DMA_CH0_CTRL_TRIG_CHAIN_TO_Pos |
+			// Pace transfers by the pio TX FIFO.
+			pio.DreqTx(d.Pio, pioSM)<<rp.DMA_CH0_CTRL_TRIG_TREQ_SEL_Pos |
+			// High-priority to minimize stall risk.
+			rp.DMA_CH0_CTRL_TRIG_HIGH_PRIORITY,
+	)
+	// bufSize is a compromise: larger buffers decrease interrupt
+	// frequency, but also increase interrupt latency because
+	// buffers are filled in the interrupt handler.
+	const bufSize = 256
+	d.driver = engravingDriver{
+		channel:  ch,
+		buf:      make([]uint32, bufSize),
+		buf2:     make([]uint32, bufSize),
+		commands: make(chan engrave.Command, 64),
+		stall:    make(chan struct{}, 1),
+	}
 	d.xnotify = make(chan struct{}, 1)
 	d.ynotify = make(chan struct{}, 1)
-	const bufSize = 1024
-	d.buf = make([]uint32, bufSize)
-	d.buf2 = make([]uint32, bufSize)
 	conf := mjolnir2ProgramDefaultConfig(progOffset)
 	conf.SidesetBase = uint8(pinStepY + d.BasePin)
 	conf.OutBase = uint8(pinDirY + d.BasePin)
@@ -81,6 +116,85 @@ func (d *Device) Configure() error {
 	d.YDiag.Configure(machine.PinConfig{Mode: machine.PinInput})
 	d.YDiag.SetInterrupt(machine.PinRising, d.diagInterrupt)
 	return nil
+}
+
+func (e *engravingDriver) Reset(eng engraving) {
+	e.engraving = eng
+	e.idx = 0
+	e.stepIdx = 0
+	e.eof = true
+	clear(e.buf)
+}
+
+func (e *engravingDriver) handleInterrupt() {
+	dma.ClearForceInterrupt(e.channel)
+	// The buffer may not be full when starting or restarting
+	// after a stall.
+	e.fillBuffer()
+	// If there's nothing to flush, we're stalled. It's ok
+	// to stall here because the engraver is at standstill
+	// between commands.
+	if !e.flush() {
+		select {
+		case e.stall <- struct{}{}:
+		default:
+		}
+		return
+	}
+	// Fill buffer in the interrupt handler to avoid stalling
+	// the engraver while moving because of unfortunate goroutine
+	// scheduling.
+	e.fillBuffer()
+}
+
+func (e *engravingDriver) fillBuffer() {
+	for e.idx < len(e.buf) {
+		if e.eof {
+			// Fetch next command.
+			select {
+			case cmd := <-e.commands:
+				e.engraving.Command(cmd)
+				e.eof = false
+			default:
+				return
+			}
+		}
+		// Fill buffer.
+		for e.idx < len(e.buf) {
+			for e.stepIdx < pioStepsPerWord {
+				step, ok := e.engraving.Step()
+				if !ok {
+					e.eof = true
+					return
+				}
+				e.buf[e.idx] |= uint32(step) << (e.stepIdx * mjolnir2pinBits)
+				e.stepIdx++
+			}
+			e.stepIdx = 0
+			e.idx++
+		}
+	}
+}
+
+func (e *engravingDriver) flush() bool {
+	idx := e.idx
+	// Round buffer size up to include any partly filled word.
+	if e.stepIdx > 0 {
+		idx++
+	}
+	if idx == 0 {
+		return false
+	}
+	ch := dma.ChannelAt(e.channel)
+	ch.READ_ADDR.Set(uint32(uintptr(unsafe.Pointer(unsafe.SliceData(e.buf)))))
+	ch.TRANS_COUNT.Set(uint32(len(e.buf[:idx])))
+	ch.CTRL_TRIG.SetBits(rp.DMA_CH0_CTRL_TRIG_EN)
+	// Swap buffers.
+	e.buf, e.buf2 = e.buf2, e.buf
+	clear(e.buf)
+	e.idx = 0
+	e.stepIdx = 0
+	return true
 }
 
 func (d *Device) diagInterrupt(pin machine.Pin) {
@@ -133,42 +247,45 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 	pio.Enable(d.Pio, 0b1<<pioSM)
 	defer pio.Disable(d.Pio, 0b1<<pioSM)
 	txReg := pio.Tx(d.Pio, pioSM)
+	// Wait for all steps to complete. We can't wait for
+	// TX FIFO stalling, because the pio program doesn't stall.
+	// Instead, submit a no-op step and wait for empty FIFO.
 	defer func() {
-		// Wait for all steps to complete. We can't wait for
-		// TX FIFO stalling, because the pio program doesn't stall.
-		// Instead, submit a no-op step and wait for empty FIFO.
-
 		pio.WaitTxNotFull(d.Pio, 0b1<<pioSM)
 		txReg.Set(noop)
 		pio.WaitTxEmpty(d.Pio, 0b1<<pioSM)
 	}()
-	ch := dma.ChannelAt(d.channel)
+	ch := dma.ChannelAt(d.driver.channel)
 	// Abort any pending transfer.
 	defer func() {
 		ch.CTRL_TRIG.ClearBits(rp.DMA_CH0_CTRL_TRIG_EN)
-		rp.DMA.CHAN_ABORT.Set(0b1 << d.channel)
+		rp.DMA.CHAN_ABORT.Set(0b1 << d.driver.channel)
 		for rp.DMA.CHAN_ABORT.Get() != 0 {
 		}
 	}()
 
 	xdiag, ydiag := false, false
-	e := engravingConfig{
+	dd := &d.driver
+	dd.Reset(engravingConfig{
 		Speed:            moveSpeed,
 		EngravingSpeed:   d.EngravingSpeed,
 		Acceleration:     d.Acceleration,
 		TicksPerSecond:   d.TopSpeed,
 		NeedlePeriod:     d.NeedlePeriod,
 		NeedleActivation: d.NeedleActivation,
-	}.New()
-	idx := 0
-	stepIdx := 0
+	}.New())
+	if err := dma.SetInterrupt(dd.channel, dd.handleInterrupt); err != nil {
+		return fmt.Errorf("mjolnir2: engrave: %w", err)
+	}
+	defer dma.SetInterrupt(dd.channel, nil)
+	stalled := true
+cmds:
 	for cmd := range plan {
-		e.Command(cmd)
-		done := false
-		for !done {
+	loop:
+		for {
 			select {
 			case <-quit:
-				return nil
+				break cmds
 			case <-d.xnotify:
 				if !homing {
 					return errors.New("mjolnir2: x-axis stepper driver failed")
@@ -183,57 +300,42 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 					return nil
 				}
 				ydiag = true
-			default:
-			}
-		loop:
-			for idx < len(d.buf) {
-				for stepIdx < pioStepsPerWord {
-					step, ok := e.Step()
-					if !ok {
-						done = true
-						break loop
-					}
-					d.buf[idx] |= uint32(step) << (stepIdx * mjolnir2pinBits)
-					stepIdx++
+			case <-dd.stall:
+				stalled = true
+			case dd.commands <- cmd:
+				if stalled {
+					// (Re-)start driver.
+					stalled = false
+					dma.ForceInterrupt(d.driver.channel)
 				}
-				stepIdx = 0
-				idx++
-			}
-			if done || idx == len(d.buf) {
-				// Wait for previous transfer to complete.
-				for ch.CTRL_TRIG.Get()&rp.DMA_CH0_CTRL_TRIG_BUSY != 0 {
-				}
-				// Start buffer transfer.
-				ch.READ_ADDR.Set(uint32(uintptr(unsafe.Pointer(unsafe.SliceData(d.buf)))))
-				ch.WRITE_ADDR.Set(uint32(uintptr(unsafe.Pointer(pio.Tx(d.Pio, pioSM)))))
-				ch.TRANS_COUNT.Set(uint32(len(d.buf[:idx])))
-				ch.CTRL_TRIG.Set(
-					// Increment read address on each transfer.
-					rp.DMA_CH0_CTRL_TRIG_INCR_READ |
-						// Transfer 32-bit words.
-						rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_SIZE_WORD<<rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_Pos |
-						// Don't chain.
-						uint32(d.channel)<<rp.DMA_CH0_CTRL_TRIG_CHAIN_TO_Pos |
-						// Pace transfers by the pio TX FIFO.
-						pio.DreqTx(d.Pio, pioSM)<<rp.DMA_CH0_CTRL_TRIG_TREQ_SEL_Pos |
-						// High-priority to minimize stall risk.
-						rp.DMA_CH0_CTRL_TRIG_HIGH_PRIORITY |
-						// Start transfer.
-						rp.DMA_CH0_CTRL_TRIG_EN,
-				)
-				// Swap buffers.
-				d.buf, d.buf2 = d.buf2, d.buf
-				clear(d.buf)
-				idx = 0
-				stepIdx = 0
+				break loop
 			}
 		}
 	}
-	if homing {
-		return errors.New("mjolnir2: homing timed out")
+	for {
+		if stalled {
+			if homing {
+				return errors.New("mjolnir2: homing timed out")
+			}
+			return nil
+		}
+		select {
+		case <-d.xnotify:
+			if !homing {
+				return errors.New("mjolnir2: x-axis stepper driver failed")
+			} else if ydiag {
+				return nil
+			}
+			xdiag = true
+		case <-d.ynotify:
+			if !homing {
+				return errors.New("mjolnir2: y-axis stepper driver failed")
+			} else if xdiag {
+				return nil
+			}
+			ydiag = true
+		case <-dd.stall:
+			stalled = true
+		}
 	}
-	// All done without error. Wait for DMA to finish transfer.
-	for ch.CTRL_TRIG.Get()&rp.DMA_CH0_CTRL_TRIG_BUSY != 0 {
-	}
-	return nil
 }

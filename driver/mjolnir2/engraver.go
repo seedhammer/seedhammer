@@ -96,10 +96,10 @@ const (
 	endPhase
 )
 
-func (c engravingConfig) New() *engraving {
+func (c engravingConfig) New() engraving {
 	tps := uint64(c.TicksPerSecond)
 	as := uint64(c.Acceleration)
-	return &engraving{
+	return engraving{
 		needlePeriod:   int(c.NeedlePeriod * time.Duration(c.TicksPerSecond) / time.Second),
 		needleAct:      int(c.NeedleActivation * time.Duration(c.TicksPerSecond) / time.Second),
 		aInv2:          int(2 * tps * tps / as),
