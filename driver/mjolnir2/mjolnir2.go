@@ -7,10 +7,13 @@ package mjolnir2
 import (
 	"device/rp"
 	"errors"
+	"fmt"
 	"image"
 	"machine"
 	"time"
+	"unsafe"
 
+	"seedhammer.com/driver/dma"
 	"seedhammer.com/driver/pio"
 	"seedhammer.com/engrave"
 )
@@ -20,7 +23,6 @@ type Device struct {
 	BasePin machine.Pin
 	XDiag   machine.Pin
 	YDiag   machine.Pin
-
 	// Home is the homing vector, whose direction
 	// specifies the direction of the origin,
 	// and length specifies the distance before
@@ -38,6 +40,8 @@ type Device struct {
 	NeedleActivation time.Duration
 
 	xnotify, ynotify chan struct{}
+	channel          uint8
+	buf, buf2        []uint32
 }
 
 const (
@@ -49,12 +53,16 @@ const (
 )
 
 func (d *Device) Configure() error {
-	if d.xnotify == nil {
-		d.xnotify = make(chan struct{}, 1)
+	ch, err := dma.Reserve()
+	if err != nil {
+		return fmt.Errorf("mjolnir2: %w", err)
 	}
-	if d.ynotify == nil {
-		d.ynotify = make(chan struct{}, 1)
-	}
+	d.channel = ch
+	d.xnotify = make(chan struct{}, 1)
+	d.ynotify = make(chan struct{}, 1)
+	const bufSize = 1024
+	d.buf = make([]uint32, bufSize)
+	d.buf2 = make([]uint32, bufSize)
 	conf := mjolnir2ProgramDefaultConfig(progOffset)
 	conf.SidesetBase = uint8(pinStepY + d.BasePin)
 	conf.OutBase = uint8(pinDirY + d.BasePin)
@@ -134,6 +142,14 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 		txReg.Set(noop)
 		pio.WaitTxEmpty(d.Pio, 0b1<<pioSM)
 	}()
+	ch := dma.ChannelAt(d.channel)
+	// Abort any pending transfer.
+	defer func() {
+		ch.CTRL_TRIG.ClearBits(rp.DMA_CH0_CTRL_TRIG_EN)
+		rp.DMA.CHAN_ABORT.Set(0b1 << d.channel)
+		for rp.DMA.CHAN_ABORT.Get() != 0 {
+		}
+	}()
 
 	xdiag, ydiag := false, false
 	e := engravingConfig{
@@ -144,60 +160,80 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 		NeedlePeriod:     d.NeedlePeriod,
 		NeedleActivation: d.NeedleActivation,
 	}.New()
-	const bufSize = 1
-	buf := make([]uint32, bufSize)
 	idx := 0
 	stepIdx := 0
 	for cmd := range plan {
 		e.Command(cmd)
 		done := false
 		for !done {
+			select {
+			case <-quit:
+				return nil
+			case <-d.xnotify:
+				if !homing {
+					return errors.New("mjolnir2: x-axis stepper driver failed")
+				} else if ydiag {
+					return nil
+				}
+				xdiag = true
+			case <-d.ynotify:
+				if !homing {
+					return errors.New("mjolnir2: y-axis stepper driver failed")
+				} else if xdiag {
+					return nil
+				}
+				ydiag = true
+			default:
+			}
 		loop:
-			for idx < len(buf) {
+			for idx < len(d.buf) {
 				for stepIdx < pioStepsPerWord {
 					step, ok := e.Step()
 					if !ok {
 						done = true
 						break loop
 					}
-					buf[idx] |= uint32(step) << (stepIdx * mjolnir2pinBits)
+					d.buf[idx] |= uint32(step) << (stepIdx * mjolnir2pinBits)
 					stepIdx++
 				}
 				stepIdx = 0
 				idx++
 			}
-			for _, w := range buf[:idx] {
-				select {
-				case <-quit:
-					return nil
-				case <-d.xnotify:
-					if !homing {
-						return errors.New("mjolnir2: x-axis stepper driver failed")
-					} else if ydiag {
-						return nil
-					}
-					xdiag = true
-				case <-d.ynotify:
-					if !homing {
-						return errors.New("mjolnir2: y-axis stepper driver failed")
-					} else if xdiag {
-						return nil
-					}
-					ydiag = true
-				default:
+			if done || idx == len(d.buf) {
+				// Wait for previous transfer to complete.
+				for ch.CTRL_TRIG.Get()&rp.DMA_CH0_CTRL_TRIG_BUSY != 0 {
 				}
-
-				// Wait for FIFO.
-				pio.WaitTxNotFull(d.Pio, 0b1<<pioSM)
-				txReg.Set(w)
+				// Start buffer transfer.
+				ch.READ_ADDR.Set(uint32(uintptr(unsafe.Pointer(unsafe.SliceData(d.buf)))))
+				ch.WRITE_ADDR.Set(uint32(uintptr(unsafe.Pointer(pio.Tx(d.Pio, pioSM)))))
+				ch.TRANS_COUNT.Set(uint32(len(d.buf[:idx])))
+				ch.CTRL_TRIG.Set(
+					// Increment read address on each transfer.
+					rp.DMA_CH0_CTRL_TRIG_INCR_READ |
+						// Transfer 32-bit words.
+						rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_SIZE_WORD<<rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_Pos |
+						// Don't chain.
+						uint32(d.channel)<<rp.DMA_CH0_CTRL_TRIG_CHAIN_TO_Pos |
+						// Pace transfers by the pio TX FIFO.
+						pio.DreqTx(d.Pio, pioSM)<<rp.DMA_CH0_CTRL_TRIG_TREQ_SEL_Pos |
+						// High-priority to minimize stall risk.
+						rp.DMA_CH0_CTRL_TRIG_HIGH_PRIORITY |
+						// Start transfer.
+						rp.DMA_CH0_CTRL_TRIG_EN,
+				)
+				// Swap buffers.
+				d.buf, d.buf2 = d.buf2, d.buf
+				clear(d.buf)
+				idx = 0
+				stepIdx = 0
 			}
-			idx = 0
-			stepIdx = 0
-			clear(buf)
 		}
 	}
 	if homing {
 		return errors.New("mjolnir2: homing timed out")
+	}
+	// All done without error. Wait for DMA to finish transfer.
+	for ch.CTRL_TRIG.Get()&rp.DMA_CH0_CTRL_TRIG_BUSY != 0 {
 	}
 	return nil
 }
