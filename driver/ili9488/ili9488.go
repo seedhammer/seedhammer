@@ -5,16 +5,19 @@ package ili9488
 
 import (
 	"device/rp"
+	"fmt"
 	"image"
 	"machine"
 	"time"
 	"unsafe"
 
+	"seedhammer.com/driver/dma"
 	"seedhammer.com/driver/pio"
 )
 
 type Device struct {
 	pio                       *rp.PIO0_Type
+	channel                   uint8
 	dc, cs, rst, wrx, db0, te machine.Pin
 	window                    image.Rectangle
 	cmdBuf                    [20]byte
@@ -25,20 +28,21 @@ type Device struct {
 type Config struct {
 }
 
-func New(dmaChannel uint8, dc, cs, rst, wrx, db0, te machine.Pin, pio *rp.PIO0_Type) *Device {
-	// Hard code to DMA channel 0 for convenience.
-	if dmaChannel != 0 {
-		panic("only DMA channel 0 i supported")
+func New(dc, cs, rst, wrx, db0, te machine.Pin, pio *rp.PIO0_Type) (*Device, error) {
+	ch, err := dma.Reserve()
+	if err != nil {
+		return nil, fmt.Errorf("ili9488: %w", err)
 	}
 	return &Device{
-		pio: pio,
-		dc:  dc,
-		cs:  cs,
-		rst: rst,
-		wrx: wrx,
-		db0: db0,
-		te:  te,
-	}
+		channel: ch,
+		pio:     pio,
+		dc:      dc,
+		cs:      cs,
+		rst:     rst,
+		wrx:     wrx,
+		db0:     db0,
+		te:      te,
+	}, nil
 }
 
 const MaxDrawSize = 4096
@@ -199,17 +203,17 @@ func (d *Device) Draw(buf [][2]byte) {
 		d.waitDMA()
 	}
 
-	dma := rp.DMA
-	dma.CH0_READ_ADDR.Set(uint32(uintptr(unsafe.Pointer(unsafe.SliceData(buf)))))
-	dma.CH0_WRITE_ADDR.Set(uint32(uintptr(unsafe.Pointer(pio.Tx(d.pio, pioStateMachine)))))
-	dma.CH0_TRANS_COUNT.Set(uint32(len(buf)))
-	dma.CH0_CTRL_TRIG.Set(
+	ch := dma.ChannelAt(d.channel)
+	ch.READ_ADDR.Set(uint32(uintptr(unsafe.Pointer(unsafe.SliceData(buf)))))
+	ch.WRITE_ADDR.Set(uint32(uintptr(unsafe.Pointer(pio.Tx(d.pio, pioStateMachine)))))
+	ch.TRANS_COUNT.Set(uint32(len(buf)))
+	ch.CTRL_TRIG.Set(
 		// Increment read address on each transfer.
 		rp.DMA_CH0_CTRL_TRIG_INCR_READ |
 			// Pixels are big endian, 16 bits.
 			rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_SIZE_HALFWORD<<rp.DMA_CH0_CTRL_TRIG_DATA_SIZE_Pos |
 			0b1<<rp.DMA_CH0_CTRL_TRIG_BSWAP_Pos |
-			0b0<<rp.DMA_CH0_CTRL_TRIG_CHAIN_TO_Pos |
+			uint32(d.channel)<<rp.DMA_CH0_CTRL_TRIG_CHAIN_TO_Pos |
 			// Pace transfers by the PIO TX FIFO.
 			pio.DreqTx(d.pio, pioStateMachine)<<rp.DMA_CH0_CTRL_TRIG_TREQ_SEL_Pos |
 			// Start transfer.
@@ -218,9 +222,9 @@ func (d *Device) Draw(buf [][2]byte) {
 }
 
 func (d *Device) waitDMA() {
-	dma := rp.DMA
 	// Wait for DMA completion.
-	for dma.GetCH0_CTRL_TRIG_BUSY() != 0 {
+	ch := dma.ChannelAt(d.channel)
+	for ch.CTRL_TRIG.Get()&rp.DMA_CH0_CTRL_TRIG_BUSY_Msk != 0 {
 	}
 }
 

@@ -96,8 +96,6 @@ const (
 	DATA_INT    = machine.GPIO27
 	DATA_SDA    = machine.GPIO28
 	DATA_SCL    = machine.GPIO29
-
-	lcdDMAChannel = 0
 )
 
 var (
@@ -237,10 +235,14 @@ func Init() (*Platform, error) {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
 	}
 
-	p.lcdDev = ili9488.New(lcdDMAChannel, LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0, LCD_TE, lcdPIO)
-	if err := p.lcdDev.Configure(ili9488.Config{}); err != nil {
+	lcd, err := ili9488.New(LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0, LCD_TE, lcdPIO)
+	if err != nil {
 		return nil, err
 	}
+	if err := lcd.Configure(ili9488.Config{}); err != nil {
+		return nil, err
+	}
+	p.lcdDev = lcd
 	touch := ft6x36.New(touchI2C)
 	TOUCH_INT.Configure(machine.PinConfig{Mode: machine.PinInput})
 	TOUCH_INT.SetInterrupt(machine.PinFalling, p.touchInterrupt)
