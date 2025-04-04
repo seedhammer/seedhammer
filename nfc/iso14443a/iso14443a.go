@@ -10,9 +10,7 @@ import (
 )
 
 type Tag struct {
-	bus Transceiver
-	// uid     [10]byte
-	// uidLen  int
+	bus     Transceiver
 	page    uint8
 	scratch [12]byte
 }
@@ -48,11 +46,11 @@ func (t *Tag) reqa() (uint16, error) {
 	defer t.bus.SetTxBits(0)
 	t.bus.SetCRC(false, false)
 	if err := t.bus.Transceive(reqa); err != nil {
-		return 0, fmt.Errorf("iso14443a: REQA: %w", err)
+		return 0, fmt.Errorf("REQA: %w", err)
 	}
 	atqa := t.scratch[:2]
 	if _, err := io.ReadFull(t.bus, atqa); err != nil {
-		return 0, fmt.Errorf("iso14443a: REQA: %w", err)
+		return 0, fmt.Errorf("REQA: %w", err)
 	}
 
 	return binary.LittleEndian.Uint16(atqa), nil
@@ -74,10 +72,10 @@ func (t *Tag) selectTag() error {
 		}
 		req2, resp := t.scratch[:7], t.scratch[7:7+5]
 		n, err := t.bus.Read(resp)
-		if err != nil {
+		resp = resp[:n]
+		if err != nil && !errors.Is(err, io.EOF) {
 			return fmt.Errorf("select: %w", err)
 		}
-		resp = resp[:n]
 
 		req2[0] = cmd
 		req2[1] = 0x70
@@ -119,7 +117,7 @@ func (t *Tag) Read(rx []byte) (int, error) {
 	}
 
 	n, err := t.bus.Read(rx)
-	if err != nil {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return n, fmt.Errorf("iso14443a: Read: %w", err)
 	}
 	if len(rx) < n {
