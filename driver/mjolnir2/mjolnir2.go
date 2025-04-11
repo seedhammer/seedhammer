@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"iter"
 	"machine"
 	"time"
 	"unsafe"
@@ -39,8 +40,7 @@ type Device struct {
 	NeedlePeriod     time.Duration
 	NeedleActivation time.Duration
 
-	xnotify, ynotify chan struct{}
-	driver           engravingDriver
+	driver engravingDriver
 }
 
 const (
@@ -54,15 +54,26 @@ const (
 // engravingDriver drives an engraving through interrupts
 // and DMA transfers.
 type engravingDriver struct {
+	xdiag     machine.Pin
+	ydiag     machine.Pin
+	basePin   machine.Pin
 	engraving engraving
 	channel   uint8
 	commands  chan engrave.Command
 	stall     chan struct{}
+	diag      chan axis
+	homing    bool
 	buf, buf2 []uint32
 	idx       int
-	stepIdx   int
 	eof       bool
 }
+
+type axis uint8
+
+const (
+	xaxis axis = 0b1 << iota
+	yaxis
+)
 
 func (d *Device) Configure() error {
 	ch, err := dma.Reserve()
@@ -86,18 +97,17 @@ func (d *Device) Configure() error {
 			rp.DMA_CH0_CTRL_TRIG_HIGH_PRIORITY,
 	)
 	// bufSize is a compromise: larger buffers decrease interrupt
-	// frequency, but also increase interrupt latency because
+	// frequency at the cost of longer interrupt pauses because
 	// buffers are filled in the interrupt handler.
 	const bufSize = 256
 	d.driver = engravingDriver{
-		channel:  ch,
-		buf:      make([]uint32, bufSize),
-		buf2:     make([]uint32, bufSize),
-		commands: make(chan engrave.Command, 64),
-		stall:    make(chan struct{}, 1),
+		channel: ch,
+		buf:     make([]uint32, bufSize),
+		buf2:    make([]uint32, bufSize),
+		basePin: d.BasePin,
+		xdiag:   d.XDiag,
+		ydiag:   d.YDiag,
 	}
-	d.xnotify = make(chan struct{}, 1)
-	d.ynotify = make(chan struct{}, 1)
 	conf := mjolnir2ProgramDefaultConfig(progOffset)
 	conf.SidesetBase = uint8(pinStepY + d.BasePin)
 	conf.OutBase = uint8(pinDirY + d.BasePin)
@@ -112,43 +122,42 @@ func (d *Device) Configure() error {
 	pio.Instr(d.Pio, pioSM).Set(clearXInst)
 
 	d.XDiag.Configure(machine.PinConfig{Mode: machine.PinInput})
-	d.XDiag.SetInterrupt(machine.PinRising, d.diagInterrupt)
 	d.YDiag.Configure(machine.PinConfig{Mode: machine.PinInput})
-	d.YDiag.SetInterrupt(machine.PinRising, d.diagInterrupt)
 	return nil
 }
 
-func (e *engravingDriver) Reset(eng engraving) {
+func (e *engravingDriver) Reset(homing bool, eng engraving) {
+	const bufSize = 64
+	e.commands = make(chan engrave.Command, bufSize)
+	e.stall = make(chan struct{}, 1)
+	e.diag = make(chan axis, 1)
+	e.homing = homing
 	e.engraving = eng
-	e.idx = 0
-	e.stepIdx = 0
 	e.eof = true
-	clear(e.buf)
+	e.idx = 0
 }
 
-func (e *engravingDriver) handleInterrupt() {
-	dma.ClearForceInterrupt(e.channel)
-	// The buffer may not be full when starting or restarting
-	// after a stall.
-	e.fillBuffer()
-	// If there's nothing to flush, we're stalled. It's ok
-	// to stall here because the engraver is at standstill
-	// between commands.
-	if !e.flush() {
+func (e *engravingDriver) handleDMA() {
+	if e.empty() {
+		// If there's nothing to flush, we're stalled. Stalling
+		// is acceptable because the engraver is at standstill
+		// between commands.
 		select {
 		case e.stall <- struct{}{}:
 		default:
 		}
 		return
 	}
-	// Fill buffer in the interrupt handler to avoid stalling
-	// the engraver while moving because of unfortunate goroutine
-	// scheduling.
+	e.setDMA()
+	e.startDMA()
+	// Fill buffer here in the interrupt handler to avoid stalling
+	// the engraver because of unfortunate goroutine scheduling.
 	e.fillBuffer()
 }
 
 func (e *engravingDriver) fillBuffer() {
-	for e.idx < len(e.buf) {
+outer:
+	for !e.full() {
 		if e.eof {
 			// Fetch next command.
 			select {
@@ -159,62 +168,72 @@ func (e *engravingDriver) fillBuffer() {
 				return
 			}
 		}
-		// Fill buffer.
-		for e.idx < len(e.buf) {
-			for e.stepIdx < pioStepsPerWord {
-				step, ok := e.engraving.Step()
-				if !ok {
-					e.eof = true
-					return
-				}
-				e.buf[e.idx] |= uint32(step) << (e.stepIdx * mjolnir2pinBits)
-				e.stepIdx++
-			}
-			e.stepIdx = 0
-			e.idx++
+		step, ok := e.engraving.Step()
+		if !ok {
+			e.eof = true
+			continue outer
 		}
+		idx := e.idx / pioStepsPerWord
+		stepIdx := e.idx % pioStepsPerWord
+		w := e.buf[idx]
+		if stepIdx == 0 {
+			w = 0
+		}
+		w |= uint32(step) << (stepIdx * mjolnir2pinBits)
+		e.buf[idx] = w
+		e.idx++
 	}
 }
 
-func (e *engravingDriver) flush() bool {
-	idx := e.idx
+func (e *engravingDriver) full() bool {
+	return e.idx == len(e.buf)*pioStepsPerWord
+}
+
+func (e *engravingDriver) empty() bool {
+	return e.idx == 0
+}
+
+func (e *engravingDriver) setDMA() {
 	// Round buffer size up to include any partly filled word.
-	if e.stepIdx > 0 {
-		idx++
-	}
-	if idx == 0 {
-		return false
-	}
+	n := (e.idx + pioStepsPerWord - 1) / pioStepsPerWord
 	ch := dma.ChannelAt(e.channel)
 	ch.READ_ADDR.Set(uint32(uintptr(unsafe.Pointer(unsafe.SliceData(e.buf)))))
-	ch.TRANS_COUNT.Set(uint32(len(e.buf[:idx])))
-	ch.CTRL_TRIG.SetBits(rp.DMA_CH0_CTRL_TRIG_EN)
+	ch.TRANS_COUNT.Set(uint32(len(e.buf[:n])))
 	// Swap buffers.
 	e.buf, e.buf2 = e.buf2, e.buf
-	clear(e.buf)
 	e.idx = 0
-	e.stepIdx = 0
-	return true
 }
 
-func (d *Device) diagInterrupt(pin machine.Pin) {
-	var stepPin machine.Pin
-	var notify chan struct{}
+func (e *engravingDriver) startDMA() {
+	ch := dma.ChannelAt(e.channel)
+	ch.CTRL_TRIG.SetBits(rp.DMA_CH0_CTRL_TRIG_EN)
+}
+
+func (e *engravingDriver) handleDiag(pin machine.Pin) {
+	var stepPin, otherPin machine.Pin
+	var a axis
 	switch pin {
-	case d.XDiag:
-		stepPin = pinStepX + d.BasePin
-		notify = d.xnotify
-	case d.YDiag:
-		stepPin = pinStepY + d.BasePin
-		notify = d.ynotify
+	case e.xdiag:
+		stepPin = pinStepX + e.basePin
+		otherPin = pinStepY + e.basePin
+		a = xaxis
+	case e.ydiag:
+		stepPin = pinStepY + e.basePin
+		otherPin = pinStepX + e.basePin
+		a = yaxis
 	default:
 		return
 	}
 	// Disconnect the step pin from the PIO program and set it low.
 	stepPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	stepPin.Low()
+	if !e.homing {
+		// Disable both axes in case of blockage.
+		otherPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
+		otherPin.Low()
+	}
 	select {
-	case notify <- struct{}{}:
+	case e.diag <- a:
 	default:
 	}
 }
@@ -230,15 +249,6 @@ func (d *Device) Engrave(plan engrave.Plan, quit <-chan struct{}) error {
 }
 
 func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan engrave.Plan) error {
-	// Clear notifications.
-	select {
-	case <-d.xnotify:
-	default:
-	}
-	select {
-	case <-d.ynotify:
-	default:
-	}
 	pio.ConfigurePins(d.Pio, pioSM, d.BasePin, mjolnir2pinBits)
 	pio.Pindirs(d.Pio, pioSM, d.BasePin, mjolnir2pinBits, machine.PinOutput)
 	// Reset and start state machine.
@@ -264,9 +274,8 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 		}
 	}()
 
-	xdiag, ydiag := false, false
 	dd := &d.driver
-	dd.Reset(engravingConfig{
+	dd.Reset(homing, engravingConfig{
 		Speed:            moveSpeed,
 		EngravingSpeed:   d.EngravingSpeed,
 		Acceleration:     d.Acceleration,
@@ -274,68 +283,70 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 		NeedlePeriod:     d.NeedlePeriod,
 		NeedleActivation: d.NeedleActivation,
 	}.New())
-	if err := dma.SetInterrupt(dd.channel, dd.handleInterrupt); err != nil {
+	for _, pin := range []machine.Pin{d.XDiag, d.YDiag} {
+		if err := pin.SetInterrupt(machine.PinRising, dd.handleDiag); err != nil {
+			return fmt.Errorf("mjolnir2: engrave: %w", err)
+		}
+		defer pin.SetInterrupt(0, nil)
+	}
+	if err := dma.SetInterrupt(dd.channel, dd.handleDMA); err != nil {
 		return fmt.Errorf("mjolnir2: engrave: %w", err)
 	}
 	defer dma.SetInterrupt(dd.channel, nil)
+	cmds, c := iter.Pull(iter.Seq[engrave.Command](plan))
+	defer c()
+	cmd, moreCommands := cmds()
 	stalled := true
-cmds:
-	for cmd := range plan {
-	loop:
-		for {
-			select {
-			case <-quit:
-				break cmds
-			case <-d.xnotify:
-				if !homing {
-					return errors.New("mjolnir2: x-axis stepper driver failed")
-				} else if ydiag {
-					return nil
-				}
-				xdiag = true
-			case <-d.ynotify:
-				if !homing {
-					return errors.New("mjolnir2: y-axis stepper driver failed")
-				} else if xdiag {
-					return nil
-				}
-				ydiag = true
-			case <-dd.stall:
-				stalled = true
-			case dd.commands <- cmd:
-				if stalled {
-					// (Re-)start driver.
-					stalled = false
-					dma.ForceInterrupt(d.driver.channel)
-				}
-				break loop
-			}
-		}
-	}
+	var blocked axis
 	for {
-		if stalled {
-			if homing {
-				return errors.New("mjolnir2: homing timed out")
-			}
-			return nil
+		stallCmds := dd.commands
+		if !moreCommands {
+			stallCmds = nil
 		}
 		select {
-		case <-d.xnotify:
+		case <-quit:
+			return nil
+		case axis := <-dd.diag:
 			if !homing {
-				return errors.New("mjolnir2: x-axis stepper driver failed")
-			} else if ydiag {
+				switch axis {
+				case xaxis:
+					return errors.New("mjolnir2: x-axis blocked")
+				case yaxis:
+					return errors.New("mjolnir2: y-axis blocked")
+				default:
+					panic("invalid axis")
+				}
+			}
+			blocked |= axis
+			if blocked == (xaxis | yaxis) {
 				return nil
 			}
-			xdiag = true
-		case <-d.ynotify:
-			if !homing {
-				return errors.New("mjolnir2: y-axis stepper driver failed")
-			} else if xdiag {
-				return nil
-			}
-			ydiag = true
 		case <-dd.stall:
 			stalled = true
+		case stallCmds <- cmd:
+			cmd, moreCommands = cmds()
+		}
+		// During stalls, we're responsible for filling the buffer
+		// and restarting the interrupt handler.
+		if stalled {
+			dd.fillBuffer()
+			if !moreCommands && dd.empty() {
+				// We're done.
+				break
+			}
+			// Restart engraver when both the buffer and command channel
+			// are full.
+			if dd.full() && len(dd.commands) == cap(dd.commands) || !moreCommands {
+				stalled = false
+				dd.setDMA()
+				// The interrupt handler assumes a filled buffer.
+				dd.fillBuffer()
+				dd.startDMA()
+			}
 		}
 	}
+	if homing {
+		return errors.New("mjolnir2: homing timed out")
+	}
+	return nil
 }

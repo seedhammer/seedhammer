@@ -41,18 +41,13 @@ type Platform struct {
 	timer   *time.Timer
 
 	lcdDev   *ili9488.Device
-	engraver struct {
-		dev gui.Engraver
-		err error
-	}
-
-	touch struct {
+	engraver gui.Engraver
+	touch    struct {
 		dev     *ft6x36.Device
 		ints    chan struct{}
 		last    bool
 		lastPos image.Point
 	}
-
 	display struct {
 		minx, maxx         int
 		row, nrows, endrow int
@@ -222,14 +217,21 @@ func Init() (*Platform, error) {
 	// 	// return fmt.Errorf("NFC done (%d): %v", len(all), all)
 	// 	return errors.New("not done yet?")
 	// }()
+	e, err := configEngraver()
+	if err != nil {
+		return nil, err
+	}
+	// Home and move needle to eject position.
+	go e.engrave(engrave.Commands(), nil)
 
 	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
 		return nil, fmt.Errorf("touch I2C: %w", err)
 	}
 
 	p := &Platform{
-		wakeups: make(chan struct{}, 1),
-		timer:   time.NewTimer(0),
+		wakeups:  make(chan struct{}, 1),
+		timer:    time.NewTimer(0),
+		engraver: e,
 	}
 	for i := range p.display.buffers {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
@@ -248,19 +250,11 @@ func Init() (*Platform, error) {
 	TOUCH_INT.SetInterrupt(machine.PinFalling, p.touchInterrupt)
 	p.touch.ints = make(chan struct{}, 1)
 	p.touch.dev = touch
-	// Setup both drivers for sharing their UART pin.
-	e, err := configEngraver()
-	if err == nil {
-		p.engraver.dev = e
-	} else {
-		log.Printf("pico: %v", err)
-		p.engraver.err = err
-	}
 
 	return p, nil
 }
 
-func configEngraver() (gui.Engraver, error) {
+func configEngraver() (*engraver, error) {
 	DRV_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	DRV_ENABLE.Set(true)
 	vrefCh, err := needleVREFPWM.Channel(NEEDLE_VREF)
@@ -331,10 +325,13 @@ func configEngraver() (gui.Engraver, error) {
 	if err := d.Configure(); err != nil {
 		return nil, err
 	}
+	ready := make(chan struct{}, 1)
+	ready <- struct{}{}
 	return &engraver{
 		Device: d,
 		XAxis:  X,
 		YAxis:  Y,
+		ready:  ready,
 	}, nil
 }
 
@@ -415,11 +412,20 @@ func (p *Platform) EngraverParams() engrave.Params {
 type engraver struct {
 	XAxis, YAxis *tmc2209.Device
 	*mjolnir2.Device
+	ready chan struct{}
 }
 
 func (e *engraver) Close() {}
 
 func (e *engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan struct{}) error {
+	return e.engrave(plan, quit)
+}
+
+func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
+	<-e.ready
+	defer func() {
+		e.ready <- struct{}{}
+	}()
 	// Set up pins.
 	DRV_ENABLE.Set(false)
 	defer DRV_ENABLE.Set(true)
@@ -446,7 +452,7 @@ func (e *engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan st
 }
 
 func (p *Platform) Engraver() (gui.Engraver, error) {
-	return p.engraver.dev, p.engraver.err
+	return p.engraver, nil
 }
 
 func (p *Platform) ScanQR(img *image.Gray) ([][]byte, error) {
