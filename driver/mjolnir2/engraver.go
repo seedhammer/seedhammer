@@ -1,14 +1,35 @@
 package mjolnir2
 
 import (
+	"errors"
 	"image"
+	"iter"
 	"time"
 
 	"seedhammer.com/engrave"
 )
 
+// engravingDriver is an engraving driver suitable for
+// driving through interrupts and DMA.
+type engravingDriver struct {
+	transfer  func(buf []uint32)
+	engraving engraving
+	commands  chan engrave.Command
+	stall     chan struct{}
+	buf, buf2 []uint32
+	idx       int
+	eof       bool
+}
+
 // step is a 5-pin pio command with a bit per output pin.
 type step uint8
+
+type axis uint8
+
+const (
+	xaxis axis = 0b1 << iota
+	yaxis
+)
 
 type engravingConfig struct {
 	// Move speed in steps/second.
@@ -29,6 +50,9 @@ const (
 	// No-op is the pio step that clears every pin
 	// and stops the needle.
 	noop = 0b00000
+	// pioStepsPerWord is the number of pio steps that
+	// fit into a 32-bit pio FIFO entry.
+	pioStepsPerWord = 32 / mjolnir2pinBits
 )
 
 const (
@@ -284,4 +308,140 @@ func (s step) DirX() uint8 {
 
 func (s step) DirY() uint8 {
 	return uint8(s >> pinDirY & 0b1)
+}
+
+func (e *engravingDriver) reset(transfer func([]uint32), eng engraving) {
+	const bufSize = 64
+	e.transfer = transfer
+	e.commands = make(chan engrave.Command, bufSize)
+	e.stall = make(chan struct{}, 1)
+	e.engraving = eng
+	e.eof = true
+	e.idx = 0
+}
+
+func (e *engravingDriver) handleTransferCompleted() {
+	if e.empty() {
+		// If there's nothing to flush, we're stalled. Stalling
+		// is acceptable because the engraver is at standstill
+		// between commands.
+		select {
+		case e.stall <- struct{}{}:
+		default:
+		}
+		return
+	}
+	e.transfer(e.swapBuffers())
+	// Fill buffer here in the interrupt handler to avoid stalling
+	// the engraver because of unfortunate goroutine scheduling.
+	e.fillBuffer()
+}
+
+func (e *engravingDriver) fillBuffer() {
+outer:
+	for !e.full() {
+		if e.eof {
+			// Fetch next command.
+			select {
+			case cmd := <-e.commands:
+				e.engraving.Command(cmd)
+				e.eof = false
+			default:
+				return
+			}
+		}
+		step, ok := e.engraving.Step()
+		if !ok {
+			e.eof = true
+			continue outer
+		}
+		idx := e.idx / pioStepsPerWord
+		stepIdx := e.idx % pioStepsPerWord
+		w := e.buf[idx]
+		if stepIdx == 0 {
+			w = 0
+		}
+		w |= uint32(step) << (stepIdx * mjolnir2pinBits)
+		e.buf[idx] = w
+		e.idx++
+	}
+}
+
+func (e *engravingDriver) full() bool {
+	return e.idx == len(e.buf)*pioStepsPerWord
+}
+
+func (e *engravingDriver) empty() bool {
+	return e.idx == 0
+}
+
+func (e *engravingDriver) swapBuffers() []uint32 {
+	// Round buffer size up to include any partly filled word.
+	n := (e.idx + pioStepsPerWord - 1) / pioStepsPerWord
+	buf := e.buf[:n]
+	// Swap.
+	e.buf, e.buf2 = e.buf2, e.buf
+	e.idx = 0
+	return buf
+}
+
+func (e *engravingDriver) engrave(transfer func([]uint32), diag <-chan axis, conf engraving, quit <-chan struct{}, homing bool, plan engrave.Plan) error {
+	e.reset(transfer, conf)
+	cmds, c := iter.Pull(iter.Seq[engrave.Command](plan))
+	defer c()
+	cmd, moreCommands := cmds()
+	if !moreCommands {
+		return nil
+	}
+	stalled := true
+	var blocked axis
+	for {
+		stallCmds := e.commands
+		if !moreCommands {
+			stallCmds = nil
+		}
+		select {
+		case <-quit:
+			return nil
+		case axis := <-diag:
+			if !homing {
+				switch axis {
+				case xaxis:
+					return errors.New("mjolnir2: x-axis blocked")
+				case yaxis:
+					return errors.New("mjolnir2: y-axis blocked")
+				default:
+					panic("invalid axis")
+				}
+			}
+			blocked |= axis
+			if blocked == (xaxis | yaxis) {
+				return nil
+			}
+		case <-e.stall:
+			stalled = true
+		case stallCmds <- cmd:
+			cmd, moreCommands = cmds()
+		}
+		// During stalls, we're responsible for filling the buffer
+		// and restarting the interrupt handler.
+		if stalled {
+			e.fillBuffer()
+			if !moreCommands && e.empty() {
+				// We're done.
+				break
+			}
+			if e.full() || !moreCommands {
+				stalled = false
+				buf := e.swapBuffers()
+				// The interrupt handler assumes a filled buffer.
+				e.fillBuffer()
+				transfer(buf)
+			}
+		}
+	}
+	if homing {
+		return errors.New("mjolnir2: homing timed out")
+	}
+	return nil
 }
