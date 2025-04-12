@@ -5,13 +5,16 @@
 package ap33772s
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"machine"
+	"time"
 )
 
 type Device struct {
 	bus     *machine.I2C
-	scratch [2]byte
+	scratch [1 + (nSPRs+nEPRs)*2]byte
 }
 
 func New(bus *machine.I2C) *Device {
@@ -67,32 +70,58 @@ func (d *Device) ReadStatus() (int, error) {
 	return int(v), nil
 }
 
-// AdjustVoltage negotiates the highest voltage that doesn't
-// exceed the maximum. It returns the voltage negotiated.
-func (d *Device) AdjustVoltage(maxVoltagemV int) error {
-	pdos := make([]byte, (nSPRs+nEPRs)*2)
-	if err := d.bus.Tx(ap33772sAddr, []byte{regSRCPDO}, pdos); err != nil {
+// LimitCurrent limits the current to the specified value.
+// The limit is ignored if higher than the negotiated limit.
+// A limit of zero represents the negotiated limit.
+func (d *Device) LimitCurrent(limitmA int) error {
+	// Read negotiated limit.
+	req, resp := d.scratch[:1], d.scratch[1:3]
+	req[0] = regIREQ
+	if err := d.bus.Tx(ap33772sAddr, req, resp); err != nil {
+		return fmt.Errorf("ap3372s: %w", err)
+	}
+	bo := binary.LittleEndian
+	mA := int(bo.Uint16(resp)) * 10
+	if mA < limitmA {
+		return nil
+	}
+	// Set limit.
+	req = d.scratch[:2]
+	req[0] = regOCPTHR
+	req[1] = uint8(limitmA / 50)
+	if err := d.bus.Tx(ap33772sAddr, req, nil); err != nil {
+		return fmt.Errorf("ap3372s: %w", err)
+	}
+	return nil
+}
+
+// AdjustVoltage negotiates the highest voltage in the range.
+func (d *Device) AdjustVoltage(minVoltagemV, maxVoltagemV int) error {
+	req, pdos := d.scratch[:1], d.scratch[1:1+(nSPRs+nEPRs)*2]
+	req[0] = regSRCPDO
+	if err := d.bus.Tx(ap33772sAddr, req, pdos); err != nil {
 		return fmt.Errorf("ap3372s: %w", err)
 	}
 	bestPDO := -1
 	bestVoltage := uint16(0)
-	bestVoltagemV := uint16(0)
+	bestVoltagemV := 0
 	bestCurrent := uint16(0)
+	bo := binary.LittleEndian
 	for i := 0; i < nSPRs+nEPRs; i++ {
 		// PDOs are 16 bit, big endian.
-		pdo := uint16(pdos[i*2+1])<<8 | uint16(pdos[i*2+0])
+		pdo := bo.Uint16(pdos[i*2:])
 		if detect := pdo>>15 == 0b1; !detect {
 			continue
 		}
 		current := (pdo >> 10) & 0b1111
 		voltage := pdo & 0xff
-		voltagemV := voltage
+		voltagemV := int(voltage)
 		if i < nSPRs {
 			voltagemV *= 100
 		} else {
 			voltagemV *= 200
 		}
-		if int(voltagemV) <= maxVoltagemV {
+		if minVoltagemV <= voltagemV && voltagemV <= maxVoltagemV {
 			if voltagemV > bestVoltagemV || (voltagemV == bestVoltagemV && current > bestCurrent) {
 				bestVoltage = voltage
 				bestVoltagemV = voltagemV
@@ -101,17 +130,33 @@ func (d *Device) AdjustVoltage(maxVoltagemV int) error {
 			}
 		}
 	}
-	if bestPDO != -1 {
-		req := uint16(
-			uint16(bestPDO+1)<<12 | // PDOs are 1-indexed
-				bestCurrent<<8 |
-				bestVoltage,
-		)
-		if err := d.bus.Tx(ap33772sAddr, []byte{regPD_REQMSG, uint8(req), uint8(req >> 8)}, nil); err != nil {
+	if bestPDO == -1 {
+		return errors.New("ap3372s: no suitable voltage found")
+	}
+	pdoReq := uint16(
+		uint16(bestPDO+1)<<12 | // PDOs are 1-indexed
+			bestCurrent<<8 |
+			bestVoltage,
+	)
+	req = d.scratch[:3]
+	req[0] = regPD_REQMSG
+	bo.PutUint16(req[1:], pdoReq)
+	if err := d.bus.Tx(ap33772sAddr, req, nil); err != nil {
+		return fmt.Errorf("ap3372s: %w", err)
+	}
+	for range 5 {
+		time.Sleep(100 * time.Millisecond)
+		req, resp := d.scratch[:1], d.scratch[1:3]
+		req[0] = regVREQ
+		if err := d.bus.Tx(ap33772sAddr, req, resp); err != nil {
 			return fmt.Errorf("ap3372s: %w", err)
 		}
+		mV := int(bo.Uint16(resp)) * 50
+		if mV == bestVoltagemV {
+			return nil
+		}
 	}
-	return nil
+	return errors.New("ap33772s: power negotiation timed out")
 }
 
 func (d *Device) writeReg(reg, val uint8) error {

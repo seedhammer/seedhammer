@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"image"
 	"image/draw"
-	"log"
 	"machine"
 	"slices"
 	"time"
@@ -115,8 +114,14 @@ const (
 	// 100% PWM duty cycle output to NEEDLE_VREF.
 	needleSenseScale = 32_500
 
-	// Maximum supply voltage in volts.
+	idleVoltage = 5
+	// Voltage range for engraving.
+	minVoltage = 20
 	maxVoltage = 28
+	// Current limit for engraving. Note that the needle
+	// sense current above only limits the activation current,
+	// whereas this limits the average current.
+	currentLimit = 3_000
 
 	// stallThreshold is the TMC2209 SGTHRS for triggering a
 	// stall.
@@ -153,10 +158,6 @@ func Init() (*Platform, error) {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
 	DATA_INT.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
-	usbpd := ap33772s.New(dataI2C)
-	if err := usbpd.AdjustVoltage(maxVoltage * 1000); err != nil {
-		log.Printf("error: %v", err)
-	}
 	nfc := clrc663.New(dataI2C)
 	if err := nfc.Configure(); err != nil {
 		return nil, fmt.Errorf("data I2C: %w", err)
@@ -275,6 +276,7 @@ func configEngraver() (*engraver, error) {
 	}); err != nil {
 		panic(err)
 	}
+	usbpd := ap33772s.New(dataI2C)
 	// Compute duty cycle that corresponds to the limit.
 	duty := uint32(uint64(needleVREFPWM.Top()) * needleCurrentLimit / needleSenseScale)
 	needleVREFPWM.Set(vrefCh, duty)
@@ -328,10 +330,11 @@ func configEngraver() (*engraver, error) {
 	ready := make(chan struct{}, 1)
 	ready <- struct{}{}
 	return &engraver{
-		Device: d,
-		XAxis:  X,
-		YAxis:  Y,
-		ready:  ready,
+		Dev:   d,
+		PD:    usbpd,
+		XAxis: X,
+		YAxis: Y,
+		ready: ready,
 	}, nil
 }
 
@@ -411,8 +414,9 @@ func (p *Platform) EngraverParams() engrave.Params {
 
 type engraver struct {
 	XAxis, YAxis *tmc2209.Device
-	*mjolnir2.Device
-	ready chan struct{}
+	PD           *ap33772s.Device
+	Dev          *mjolnir2.Device
+	ready        chan struct{}
 }
 
 func (e *engraver) Close() {}
@@ -426,6 +430,14 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 	defer func() {
 		e.ready <- struct{}{}
 	}()
+	if err := e.PD.AdjustVoltage(minVoltage*1000, maxVoltage*1000); err != nil {
+		return err
+	}
+	defer e.PD.AdjustVoltage(idleVoltage*1000, idleVoltage*1000)
+	if err := e.PD.LimitCurrent(currentLimit); err != nil {
+		return err
+	}
+	defer e.PD.LimitCurrent(0)
 	// Set up pins.
 	DRV_ENABLE.Set(false)
 	defer DRV_ENABLE.Set(true)
@@ -439,7 +451,7 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 		engrave.Plan(slices.Values([]engrave.Command{engrave.Move(ejectPos)})),
 	)
 	plan = engrave.Offset(originX, originY, plan)
-	if err := e.Device.Engrave(plan, quit); err != nil {
+	if err := e.Dev.Engrave(plan, quit); err != nil {
 		if err := e.XAxis.Error(); err != nil {
 			return fmt.Errorf("X axis: %w", err)
 		}
