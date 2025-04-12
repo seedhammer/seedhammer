@@ -17,7 +17,7 @@ import (
 
 type Device struct {
 	pio                       *rp.PIO0_Type
-	channel                   uint8
+	channel                   dma.ChannelID
 	dc, cs, rst, wrx, db0, te machine.Pin
 	window                    image.Rectangle
 	cmdBuf                    [20]byte

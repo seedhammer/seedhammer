@@ -58,7 +58,7 @@ type engravingDriver struct {
 	ydiag     machine.Pin
 	basePin   machine.Pin
 	engraving engraving
-	channel   uint8
+	channel   dma.ChannelID
 	commands  chan engrave.Command
 	stall     chan struct{}
 	diag      chan axis
