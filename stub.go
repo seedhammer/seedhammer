@@ -8,7 +8,7 @@ import (
 
 	"seedhammer.com/driver/ap33772s"
 	"seedhammer.com/driver/st25r3916"
-	"seedhammer.com/nfc/iso14443a"
+	"seedhammer.com/nfc/iso15693"
 	"seedhammer.com/nfc/ndef"
 )
 
@@ -56,15 +56,15 @@ func run() error {
 	}
 	// nfc.SetCRC(true, true)
 	// return nfc.Listen()
-	prot := st25r3916.ISO14443a
-	// prot := st25r3916.ISO15693
+	// prot := st25r3916.ISO14443a
+	prot := st25r3916.ISO15693
 	if err := nfc.RadioOn(prot); err != nil {
 		return err
 	}
 	defer nfc.RadioOff()
 	fmt.Println("**** opening tag")
-	tag, err := iso14443a.Open(nfc)
-	// tag, err := iso15693.Open(nfc, st25r3916.FIFOSize)
+	// tag, err := iso14443a.Open(nfc)
+	tag, err := iso15693.Open(nfc, st25r3916.FIFOSize)
 	fmt.Println("***** tag opened", err)
 	if err != nil {
 		return err

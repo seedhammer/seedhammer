@@ -16,11 +16,13 @@ import (
 type Device struct {
 	Bus    *machine.I2C
 	Int    machine.Pin
-	txBits uint8
+	txBits byte
 	txCRC  bool
 	rxCRC  bool
+	prot   Protocol
 
 	scratch [100]byte
+	enc     [100]byte
 }
 
 // FIFOSize is the number of bytes that can be
@@ -47,16 +49,18 @@ func (d *Device) Configure() error {
 	if err := d.Bus.Tx(i2cAddr, datasheetSetup, nil); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
-	// Disable the MCU_CLK pin.
-	if err := d.writeReg(regIOConf1, 0b11<<out_cl); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
-	}
-	// Increase IO drive strength, as recommended in table 20.
-	if err := d.writeReg(regIOConf2, 0b1<<io_drv_lvl); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
-	}
-	// Calibrate capacitive sensor.
-	if err := d.writeReg(regCapSensorCtrl, 0); err != nil {
+	if err := d.writeRegs(
+		regIOConf1, 0b11<<out_cl, // Disable the MCU_CLK pin.
+		regIOConf2, 0b1<<io_drv_lvl, // Increase IO drive strength, as recommended in table 20.
+		regResAMMod, 0b1<<fa3_f|0<<md_res, // Minimum non-overlap.
+		regExtFieldAct, 0b001<<trg_l|0b0001<<rfe_t, // Lower activation threshold.
+		regExtFieldDeact, 0b000<<trg_ld|0b000<<rfe_td, // Lower deactivation threshold.
+		regNFCIP1PassiveTarg, 5<<fdel, // Adjust fdel to 2 as suggested by the datasheet table 32.
+		regPassiveTargetMod, 0x5f, // Reduce RFO resistance in modulated state.
+		regEMDSupConf, 0b1<<rx_start_emv, // Enable start on first 4 bits.
+		regCapSensorCtrl, 0, // Reset capacitive sensor calibration.
+		regStreamModeDef, modeISO15693, // Setup streaming mode for iso15693.
+	); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
 	if err := d.command(cmdCalibrateCapSensor); err != nil {
@@ -102,7 +106,7 @@ func (d *Device) Configure() error {
 	for !d.Int.Get() {
 	}
 	// // Measure supply
-	// for i := uint8(0); i <= 4; i++ {
+	// for i := byte(0); i <= 4; i++ {
 	// 	if err := d.writeReg(regRegulatorCtrl, i<<mpsv); err != nil {
 	// 		return fmt.Errorf("st25r3916: %w", err)
 	// 	}
@@ -139,14 +143,14 @@ func (d *Device) Configure() error {
 	// }
 	//
 	// Adjust regulators.
-	// First, the reg_s bit must be cycled.
-	if err := d.writeReg(regRegulatorCtrl, 0b1<<reg_s); err != nil {
+	if err := d.writeRegs(
+		// First, the reg_s bit must be cycled.
+		regRegulatorCtrl, 0b1<<reg_s,
+		regRegulatorCtrl, 0b0<<reg_s,
+	); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
-	if err := d.writeReg(regRegulatorCtrl, 0b0<<reg_s); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
-	}
-	// Then issue the adjust regulator command.
+	// Then the adjust regulator command issues.
 	if err := d.command(cmdAdjustRegulator); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
@@ -157,7 +161,20 @@ func (d *Device) Configure() error {
 }
 
 func (d *Device) Listen() error {
-	if err := d.stopAll(); err != nil {
+	// 	//    /****** Default Analog Configuration for Chip-Specific Poll Common ******/
+	// 	//    , MODE_ENTRY_9_REG( (RFAL_ANALOG_CONFIG_TECH_CHIP | RFAL_ANALOG_CONFIG_CHIP_POLL_COMMON)
+	// 	//                        , ST25R3916_REG_MODE, ST25R3916_REG_MODE_tr_am  , ST25R3916_REG_MODE_tr_am_am                                           /* Use AM modulation */
+	// 	//                        , ST25R3916_REG_TX_DRIVER, ST25R3916_REG_TX_DRIVER_am_mod_mask, ST25R3916_REG_TX_DRIVER_am_mod_12percent                /* Set Modulation index */
+	// 	//                        , ST25R3916_REG_AUX_MOD, (ST25R3916_REG_AUX_MOD_dis_reg_am | ST25R3916_REG_AUX_MOD_res_am), 0x00                           /* Use AM via regulator */
+	// 	//                        , ST25R3916_REG_ANT_TUNE_A, 0xFF, 0x82                                                                                  /* Set Antenna Tuning (Poller): ANTL */
+	// 	//                        , ST25R3916_REG_ANT_TUNE_B, 0xFF, 0x82                                                                                  /* Set Antenna Tuning (Poller): ANTL */
+	// 	//                        , ST25R3916_REG_OVERSHOOT_CONF1,  0xFF, 0x00                                                                            /* Disable Overshoot Protection  */
+	// 	//                        , ST25R3916_REG_OVERSHOOT_CONF2,  0xFF, 0x00                                                                            /* Disable Overshoot Protection  */
+	// 	//                        , ST25R3916_REG_UNDERSHOOT_CONF1, 0xFF, 0x00                                                                            /* Disable Undershoot Protection */
+	// 	//                        , ST25R3916_REG_UNDERSHOOT_CONF2, 0xFF, 0x00                                                                            /* Disable Undershoot Protection */
+	// 	//                        )
+	// }
+	if err := d.command(cmdStopAll); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	// Load PT memory with NFC-A card emulation responses.
@@ -181,12 +198,11 @@ func (d *Device) Listen() error {
 	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	// Adjust fdel to 2, as suggested by the datasheet in table 32.
-	if err := d.writeReg(regNFCIP1PassiveTarg, 2<<fdel); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
 	// Enable receiver and external field detector.
 	if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<rx_en|0b11<<en_fd_c); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
+	if err := d.command(cmdResetRXGain); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	// Start sensing.
@@ -194,7 +210,7 @@ func (d *Device) Listen() error {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	fmt.Println("waiting anxiously")
-	// oldstate := uint8(0)
+	// oldstate := byte(0)
 	// Wait for ready.
 	act := false
 	buf := make([]byte, 100)
@@ -277,27 +293,19 @@ func (d *Device) RadioOff() error {
 }
 
 func (d *Device) RadioOn(prot Protocol) error {
-	if err := d.stopAll(); err != nil {
+	if err := d.command(cmdStopAll); err != nil {
+		return fmt.Errorf("st25r3916: %w", err)
+	}
+	if err := d.configureProtocol(prot); err != nil {
+		return fmt.Errorf("st25r3916: %w", err)
+	}
+	// Reset RX gain.
+	if err := d.command(cmdResetRXGain); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
 	// Enable transmitter and receiver.
 	if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<tx_en|0b1<<rx_en); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
-	}
-	// Set mode.
-	switch prot {
-	case ISO14443a:
-		if err := d.writeReg(regModeDef, omISO14443A); err != nil {
-			return fmt.Errorf("st25r3916: %w", err)
-		}
-	case ISO15693:
-		if err := d.writeReg(regModeDef, omISO15693); err != nil {
-			return fmt.Errorf("st25r3916: %w", err)
-		}
-		if err := d.writeReg(regStreamModeDef, modeISO15693); err != nil {
-			return fmt.Errorf("st25r3916: %w", err)
-		}
-		panic("TODO")
 	}
 
 	// Wait for the receiver to power up.
@@ -306,34 +314,73 @@ func (d *Device) RadioOn(prot Protocol) error {
 }
 
 func (d *Device) Transceive(tx []byte) error {
-	const reqa = 0x26
-	var err error
-	// Special case REQA.
-	if len(tx) == 1 && tx[0] == reqa {
-		// Transmit REQA.
-		err = d.command(cmdTransmitREQA)
-	} else {
-		if err := d.command(cmdClearFIFO); err != nil {
-			return fmt.Errorf("st25r3916: %w", err)
-		}
-		if err := d.writeFIFO(tx, d.txBits); err != nil {
-			return fmt.Errorf("st25r3916: %w", err)
-		}
-		aux := uint8(0)
-		if !d.rxCRC {
-			aux = 0b1 << no_crc_rx
-		}
-		if err := d.writeReg(regAuxDef, aux); err != nil {
-			return fmt.Errorf("st25r3916: %w", err)
-		}
-		cmd := uint8(cmdTransmitWithCRC)
-		if !d.txCRC {
-			cmd = cmdTransmitWithoutCRC
-		}
-		err = d.command(cmd)
+	if err := d.command(cmdClearFIFO); err != nil {
+		return fmt.Errorf("st25r3916: transceive: %w", err)
 	}
-	if err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+	switch d.prot {
+	case ISO14443a:
+		const reqa = 0x26
+		// Special case REQA.
+		if len(tx) == 1 && tx[0] == reqa {
+			// Transmit REQA.
+			if err := d.command(cmdTransmitREQA); err != nil {
+				return fmt.Errorf("st25r3916: transceive: %w", err)
+			}
+		} else {
+			aux := byte(0)
+			if !d.rxCRC {
+				aux = 0b1 << no_crc_rx
+			}
+			if err := d.writeReg(regAuxDef, aux); err != nil {
+				return fmt.Errorf("st25r3916: transceive: %w", err)
+			}
+			if err := d.writeTXLen(len(tx), d.txBits); err != nil {
+				return fmt.Errorf("st25r3916: transceive: %w", err)
+			}
+			if err := d.writeFIFO(tx); err != nil {
+				return fmt.Errorf("st25r3916: transceive: %w", err)
+			}
+			cmd := byte(cmdTransmitWithCRC)
+			if !d.txCRC {
+				cmd = cmdTransmitWithoutCRC
+			}
+			if err := d.command(cmd); err != nil {
+				return fmt.Errorf("st25r3916: transceive: %w", err)
+			}
+		}
+	case ISO15693:
+		const (
+			sof1of4 = 0x21
+			eof1of4 = 0x04
+		)
+		txlen := 1 + (len(tx)+2)*4 + 1 // SOF, data, CRC, EOF.
+		if err := d.writeTXLen(txlen, 0); err != nil {
+			return fmt.Errorf("st25r3916: transceive: %w", err)
+		}
+		crc := crcCITT(tx)
+		fmt.Printf("transceive len: %d crc %.4x %x %.8b\n", txlen, crc, tx, tx)
+		e := encoder1of4{Dev: d, Buf: d.enc[:0]}
+		e.Write(sof1of4)
+		e.Encode(tx...)
+		e.Encode(byte(crc), byte(crc>>8))
+		e.Write(eof1of4)
+		if err := e.Flush(); err != nil {
+			return fmt.Errorf("st25r3916: transceive: %w", err)
+		}
+		// buf := make([]byte, 100)
+		// n, err := d.Read(buf)
+		// if err != nil && !errors.Is(err, io.EOF) {
+		// 	return err
+		// }
+		// fmt.Printf("FIFO     : (%d) %x\n", n, buf[:n])
+
+		// Disable built-in CRC calculation.
+		if err := d.writeReg(regAuxDef, 0b1<<no_crc_rx); err != nil {
+			return fmt.Errorf("st25r3916: transceive: %w", err)
+		}
+		if err := d.command(cmdTransmitWithoutCRC); err != nil {
+			return fmt.Errorf("st25r3916: transceive: %w", err)
+		}
 	}
 	for {
 		for d.Int.Get() {
@@ -345,10 +392,107 @@ func (d *Device) Transceive(tx []byte) error {
 		if err != nil {
 			return fmt.Errorf("st25r3916: %w", err)
 		}
+		if intr&(0b1<<i_txe) != 0 {
+			fmt.Println("transceive done")
+		}
 		if intr&(0b1<<i_rxe) != 0 {
 			break
 		}
 	}
+	return nil
+}
+
+type encoder1of4 struct {
+	Dev *Device
+	Buf []byte
+
+	err error
+}
+
+func (e *encoder1of4) Write(data ...byte) {
+	for len(data) > 0 {
+		if len(e.Buf) == cap(e.Buf) {
+			e.Flush()
+		}
+		n := min(len(data), cap(e.Buf)-len(e.Buf))
+		e.Buf = append(e.Buf, data[:n]...)
+		data = data[n:]
+	}
+}
+
+func (e *encoder1of4) Flush() error {
+	if e.err == nil {
+		e.err = e.Dev.writeFIFO(e.Buf)
+	}
+	e.Buf = e.Buf[:0]
+	return e.err
+}
+
+func (e *encoder1of4) Encode(data ...byte) {
+	if len(e.Buf)+4 > cap(e.Buf) {
+		e.Flush()
+	}
+	const (
+		data_00_1_4 = 0x02
+		data_01_1_4 = 0x08
+		data_10_1_4 = 0x20
+		data_11_1_4 = 0x80
+	)
+	encMap := [...]byte{
+		data_00_1_4,
+		data_01_1_4,
+		data_10_1_4,
+		data_11_1_4,
+	}
+	for _, b := range data {
+		for range 4 {
+			e.Buf = append(e.Buf, encMap[b&0b11])
+			b >>= 2
+		}
+	}
+}
+
+func (d *Device) configureProtocol(prot Protocol) error {
+	type config struct {
+		opMode     byte
+		rxConf     [4]byte
+		corrConf   [2]byte
+		overshoot  [2]byte
+		undershoot [2]byte
+	}
+	var conf config
+	switch prot {
+	case ISO14443a:
+		conf = config{
+			opMode:     omISO14443A,
+			rxConf:     [...]byte{0x08, 0x2d, 0x00, 0x00},
+			corrConf:   [...]byte{0x51, 0x00},
+			overshoot:  [...]byte{0x40, 0x03},
+			undershoot: [...]byte{0x40, 0x03},
+		}
+	case ISO15693:
+		conf = config{
+			opMode:   omISO15693,
+			rxConf:   [...]byte{0x13, 0x2d, 0x00, 0x00},
+			corrConf: [...]byte{0x13, 0x01},
+		}
+	}
+	if err := d.writeRegs(
+		regModeDef, conf.opMode,
+		regRXConf1, conf.rxConf[0],
+		regRXConf2, conf.rxConf[1],
+		regRXConf3, conf.rxConf[2],
+		regRXConf4, conf.rxConf[3],
+		regCorrConf1, conf.corrConf[0],
+		regCorrConf2, conf.corrConf[1],
+		regOvershootConf1, conf.overshoot[0],
+		regOvershootConf2, conf.overshoot[1],
+		regUndershootConf1, conf.undershoot[0],
+		regUndershootConf2, conf.undershoot[1],
+	); err != nil {
+		return fmt.Errorf("st25r3916: %w", err)
+	}
+	d.prot = prot
 	return nil
 }
 
@@ -379,7 +523,7 @@ func (d *Device) SetTxBits(bits int) {
 	if bits < 0 || 7 < bits {
 		panic("invalid tx bits")
 	}
-	d.txBits = uint8(bits)
+	d.txBits = byte(bits)
 }
 
 func (d *Device) Read(buf []byte) (int, error) {
@@ -390,7 +534,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 	}
 	fifoLen := int(fifoStatus[1]&0b1100_0000)<<2 | int(fifoStatus[0])
 	// Exclude the CRC bytes.
-	if d.rxCRC {
+	if d.prot == ISO14443a && d.rxCRC {
 		fifoLen -= 2
 	}
 	n := min(fifoLen, len(buf))
@@ -405,27 +549,29 @@ func (d *Device) Read(buf []byte) (int, error) {
 	return n, nil
 }
 
-func (d *Device) writeFIFO(tx []byte, txBits uint8) error {
-	// First write number
+func (d *Device) writeTXLen(bytes int, bits byte) error {
+	// First write FIFO size.
 	const maxTxSize = 0b1<<13 - 1
 	// We don't support streaming transmissions.
-	if len(tx) > FIFOSize || len(tx) > maxTxSize {
-		return fmt.Errorf("write FIFO: buffer too large: %d", len(tx))
+	if bytes > FIFOSize || bytes > maxTxSize {
+		return fmt.Errorf("write FIFO: buffer too large: %d", bytes)
 	}
-	if len(tx) > maxTxSize {
-		return fmt.Errorf("write FIFO: buffer too large: %d bytes", len(tx))
+	if bytes > maxTxSize {
+		return fmt.Errorf("write FIFO: buffer too large: %d bytes", bytes)
 	}
 	// Set transmit size.
 	req := d.scratch[:3]
 	req[0] = modeWriteReg | regNumTX1
 	// Most significant bits.
-	req[1] = uint8(len(tx) >> 5)
+	req[1] = byte(bytes >> 5)
 	// Least significant bits and the partial bits.
-	req[2] = uint8((len(tx)&0b11111)<<3) | txBits
-	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
-		return err
-	}
-	req = d.scratch[:]
+	req[2] = byte((bytes&0b11111)<<3) | bits
+	return d.Bus.Tx(i2cAddr, req, nil)
+}
+
+func (d *Device) writeFIFO(tx []byte) error {
+	fmt.Printf("writeFIFO: (%d) %x\n", len(tx), tx)
+	req := d.scratch[:]
 	req[0] = modeFIFO | loadFIFO
 	for len(tx) > 0 {
 		n := copy(req[1:], tx)
@@ -437,33 +583,60 @@ func (d *Device) writeFIFO(tx []byte, txBits uint8) error {
 	return nil
 }
 
-func (d *Device) stopAll() error {
-	// Stop all activities.
-	if err := d.command(cmdStopAll); err != nil {
-		return err
+func (d *Device) readReg(reg byte) (byte, error) {
+	isSpaceB := reg&spaceB != 0
+	reg &^= spaceB
+	req, res := d.scratch[:2], d.scratch[2:3]
+	req[0] = cmdSpaceBAccess
+	req[1] = modeReadReg | reg
+	if !isSpaceB {
+		req = req[1:]
 	}
-	// Reset RX gain.
-	return d.command(cmdResetRXGain)
-}
-
-func (d *Device) readReg(reg uint8) (uint8, error) {
-	req, res := d.scratch[:1], d.scratch[1:2]
-	req[0] = modeReadReg | reg
 	err := d.Bus.Tx(i2cAddr, req, res)
 	return res[0], err
 }
 
-func (d *Device) writeReg(reg, val uint8) error {
-	req := d.scratch[:2]
-	req[0] = modeWriteReg | reg
-	req[1] = val
+// writeRegs in pairs of (register, value).
+func (d *Device) writeRegs(values ...byte) error {
+	for i := 0; i < len(values); i += 2 {
+		reg, val := values[i], values[i+1]
+		if err := d.writeReg(reg, val); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *Device) writeReg(reg, val byte) error {
+	var req []byte
+	isSpaceB := reg&spaceB != 0
+	reg &^= spaceB
+	req = d.scratch[:3]
+	req[0] = cmdSpaceBAccess
+	req[1] = modeWriteReg | reg
+	req[2] = val
+	if !isSpaceB {
+		req = req[1:]
+	}
 	return d.Bus.Tx(i2cAddr, req, nil)
 }
 
-func (d *Device) command(cmd uint8) error {
+func (d *Device) command(cmd byte) error {
 	req := d.scratch[:1]
 	req[0] = modeCommand | cmd
 	return d.Bus.Tx(i2cAddr, req, nil)
+}
+
+func crcCITT(data []byte) uint16 {
+	crc := uint16(0xffff)
+	for _, b := range data {
+		b ^= byte(crc & 0xFF)
+		b ^= b << 4
+
+		b16 := uint16(b)
+		crc = (crc >> 8) ^ (b16 << 8) ^ (b16 << 3) ^ (b16 >> 4)
+	}
+	return ^crc
 }
 
 const (
@@ -490,6 +663,10 @@ const (
 	regNFCIP1PassiveTarg = 0x08
 	regStreamModeDef     = 0x09
 	regAuxDef            = 0x0a
+	regRXConf1           = 0x0b
+	regRXConf2           = 0x0c
+	regRXConf3           = 0x0d
+	regRXConf4           = 0x0e
 	regMainIntr          = 0x1a
 	regTimerNFCIntr      = 0x1b
 	regErrorWakeupIntr   = 0x1c
@@ -500,13 +677,23 @@ const (
 	regNumTX1            = 0x22
 	regNumTX2            = 0x23
 	regADConvOut         = 0x25
-	regRegulatorCtrl     = 0x2C
+	regPassiveTargetMod  = 0x29
+	regExtFieldAct       = 0x2a
+	regExtFieldDeact     = 0x2b
+	regRegulatorCtrl     = 0x2c
 	regCapSensorCtrl     = 0x2f
 	regCapSensor         = 0x30
 	regICID              = 0x3f
 	// Register addresses, space B. See table 28.
-	spaceB     = 0b1 << 7
-	regReAMMod = spaceB | 0x2a
+	spaceB             = 0b1 << 7
+	regEMDSupConf      = spaceB | 0x05
+	regCorrConf1       = spaceB | 0x0c
+	regCorrConf2       = spaceB | 0x0d
+	regResAMMod        = spaceB | 0x2a
+	regOvershootConf1  = spaceB | 0x30
+	regOvershootConf2  = spaceB | 0x31
+	regUndershootConf1 = spaceB | 0x32
+	regUndershootConf2 = spaceB | 0x33
 
 	// Commands, see table table 13.
 	// Note that the constant include the command mode prefix 0b11. For example,
@@ -595,4 +782,19 @@ const (
 
 	// NFCIP-1 passive target definition bits (table 32).
 	fdel = 4
+
+	// Resistive AM modulation bits.
+	md_res = 0
+	fa3_f  = 7
+
+	// External field detector activation bits (table 83).
+	rfe_t = 0
+	trg_l = 4
+
+	// External field detector deactivation bits (table 86).
+	rfe_td = 0
+	trg_ld = 4
+
+	// EMD suppression configuration bits (table 38).
+	rx_start_emv = 6
 )
