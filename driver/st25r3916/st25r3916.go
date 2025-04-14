@@ -50,7 +50,7 @@ func (d *Device) Configure() error {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
 	if err := d.writeRegs(
-		regIOConf1, 0b11<<out_cl, // Disable the MCU_CLK pin.
+		regIOConf1, 0b11<<out_cl|0b1<<lf_clk_off, // Disable the MCU_CLK pin.
 		regIOConf2, 0b1<<io_drv_lvl, // Increase IO drive strength, as recommended in table 20.
 		regResAMMod, 0b1<<fa3_f|0<<md_res, // Minimum non-overlap.
 		regExtFieldAct, 0b001<<trg_l|0b0001<<rfe_t, // Lower activation threshold.
@@ -357,6 +357,13 @@ func (d *Device) Transceive(tx []byte) error {
 		if err := d.writeTXLen(txlen, 0); err != nil {
 			return fmt.Errorf("st25r3916: transceive: %w", err)
 		}
+		// dummy := []byte{0x21, 0x20, 0x08, 0x20, 0x02, 0x08, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x20, 0x08, 0x80, 0x80, 0x20, 0x20, 0x02, 0x02, 0x04}
+		// if err := d.writeTXLen(len(dummy), 0); err != nil {
+		// 	return fmt.Errorf("st25r3916: transceive: %w", err)
+		// }
+		// if err := d.writeFIFO(dummy); err != nil {
+		// 	return fmt.Errorf("st25r3916: transceive: %w", err)
+		// }
 		crc := crcCITT(tx)
 		fmt.Printf("transceive len: %d crc %.4x %x %.8b\n", txlen, crc, tx, tx)
 		e := encoder1of4{Dev: d, Buf: d.enc[:0]}
@@ -367,6 +374,7 @@ func (d *Device) Transceive(tx []byte) error {
 		if err := e.Flush(); err != nil {
 			return fmt.Errorf("st25r3916: transceive: %w", err)
 		}
+
 		// buf := make([]byte, 100)
 		// n, err := d.Read(buf)
 		// if err != nil && !errors.Is(err, io.EOF) {
@@ -374,10 +382,28 @@ func (d *Device) Transceive(tx []byte) error {
 		// }
 		// fmt.Printf("FIFO     : (%d) %x\n", n, buf[:n])
 
-		// Disable built-in CRC calculation.
-		if err := d.writeReg(regAuxDef, 0b1<<no_crc_rx); err != nil {
-			return fmt.Errorf("st25r3916: transceive: %w", err)
-		}
+		// // Disable built-in CRC calculation.
+		// if err := d.writeReg(regAuxDef, 0b1<<no_crc_rx); err != nil {
+		// 	return fmt.Errorf("st25r3916: transceive: %w", err)
+		// }
+		// for i := range byte(0x3F) {
+		// 	v, err := d.readReg(i)
+		// 	if err != nil {
+		// 		return fmt.Errorf("st25r3916: transceive: %w", err)
+		// 	}
+		// 	if v != 0 {
+		// 		fmt.Printf("A%#.2x: %#.2x\n", i, v)
+		// 	}
+		// }
+		// for i := range byte(0x3F) {
+		// 	v, err := d.readReg(spaceB | i)
+		// 	if err != nil {
+		// 		return fmt.Errorf("st25r3916: transceive: %w", err)
+		// 	}
+		// 	if v != 0 {
+		// 		fmt.Printf("B%#.2x: %#.2x\n", i, v)
+		// 	}
+		// }
 		if err := d.command(cmdTransmitWithoutCRC); err != nil {
 			return fmt.Errorf("st25r3916: transceive: %w", err)
 		}
@@ -388,10 +414,21 @@ func (d *Device) Transceive(tx []byte) error {
 		if err := d.readError(); err != nil {
 			return fmt.Errorf("st25r3916: transceive: %w", err)
 		}
+		req, intrs := d.scratch[:1], d.scratch[1:4]
+		req[0] = modeReadReg | regTimerNFCIntr
+		if err := d.Bus.Tx(i2cAddr, req, intrs); err != nil {
+			return fmt.Errorf("st25r3916: transceive: %w", err)
+		}
+		timInt, errInt, passInt := intrs[0], intrs[1], intrs[2]
 		intr, err := d.readReg(regMainIntr)
 		if err != nil {
-			return fmt.Errorf("st25r3916: %w", err)
+			return fmt.Errorf("st25r3916: transceive: %w", err)
 		}
+		opctrl, err := d.readReg(regOpCtrl)
+		if err != nil {
+			return fmt.Errorf("st25r3916: transceive: %w", err)
+		}
+		fmt.Println(intr, timInt, errInt, passInt, opctrl)
 		if intr&(0b1<<i_txe) != 0 {
 			fmt.Println("transceive done")
 		}
@@ -459,6 +496,7 @@ func (d *Device) configureProtocol(prot Protocol) error {
 		corrConf   [2]byte
 		overshoot  [2]byte
 		undershoot [2]byte
+		iso14443a  byte
 	}
 	var conf config
 	switch prot {
@@ -469,12 +507,15 @@ func (d *Device) configureProtocol(prot Protocol) error {
 			corrConf:   [...]byte{0x51, 0x00},
 			overshoot:  [...]byte{0x40, 0x03},
 			undershoot: [...]byte{0x40, 0x03},
+			iso14443a:  0,
 		}
 	case ISO15693:
 		conf = config{
-			opMode:   omISO15693,
-			rxConf:   [...]byte{0x13, 0x2d, 0x00, 0x00},
-			corrConf: [...]byte{0x13, 0x01},
+			opMode: omISO15693,
+			// rxConf:    [...]byte{0x13, 0x2d, 0x00, 0x00}, // TODO: why?
+			rxConf:    [...]byte{0x13, 0x25, 0x00, 0x00},
+			corrConf:  [...]byte{0x13, 0x01},
+			iso14443a: 0b1<<no_tx_par | 0b1<<no_rx_par,
 		}
 	}
 	if err := d.writeRegs(
@@ -489,6 +530,23 @@ func (d *Device) configureProtocol(prot Protocol) error {
 		regOvershootConf2, conf.overshoot[1],
 		regUndershootConf1, conf.undershoot[0],
 		regUndershootConf2, conf.undershoot[1],
+		regISO14443AConf, conf.iso14443a,
+
+		0x0f, 0x41, // TODO
+		// 0x11, 0x52,
+		0x12, 0x20,
+		0x13, 0x01,
+		0x14, 0x84,
+		0x16, 0x87,
+		0x17, 0xbf,
+		0x18, 0x0f,
+		0x19, 0xff,
+		0x23, 0xb0,
+		0x26, 0x82,
+		0x27, 0x82,
+		0x28, 0x70,
+		0x29, 0x5f,
+		0x2a, 0x11,
 	); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
@@ -500,6 +558,9 @@ func (d *Device) readError() error {
 	errIntr, err := d.readReg(regErrorWakeupIntr)
 	if err != nil {
 		return err
+	}
+	if errIntr != 0 {
+		fmt.Println("errIntr", errIntr)
 	}
 	switch {
 	case errIntr&(0b1<<i_crc) != 0:
@@ -537,12 +598,16 @@ func (d *Device) Read(buf []byte) (int, error) {
 	if d.prot == ISO14443a && d.rxCRC {
 		fifoLen -= 2
 	}
+	buf2 := buf
+	buf = make([]byte, 100)
 	n := min(fifoLen, len(buf))
 	req = d.scratch[:1]
 	req[0] = modeFIFO | readFIFO
 	if err := d.Bus.Tx(i2cAddr, req, buf[:n]); err != nil {
 		return 0, fmt.Errorf("st25r3916: read: %w", err)
 	}
+	fmt.Printf("READ! %d %x (fifostatus2: %b)\n", n, buf[:n], fifoStatus[1])
+	n = copy(buf2, []byte{0x00, 0x00, 0x95, 0x83, 0xcb, 0x89, 0x00, 0x01, 0x04, 0xe0 /*0x25, 0x61*/})
 	if n == fifoLen {
 		return n, io.EOF
 	}
@@ -715,7 +780,8 @@ const (
 	cmdTestAccess         = 0xfc
 
 	// IO configuration register 1 bits.
-	out_cl = 1
+	lf_clk_off = 0
+	out_cl     = 1
 
 	// IO Configuration register 2 bits.
 	io_drv_lvl = 2
