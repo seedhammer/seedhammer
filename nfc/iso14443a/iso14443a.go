@@ -19,10 +19,7 @@ type Tag struct {
 type Transceiver interface {
 	SetTxBits(bits int)
 	SetCRC(tx, rx bool)
-	// Transceive transmits tx and starts receiving.
-	Transceive(tx []byte) error
-	// Reader reads the response from a Transceive.
-	io.Reader
+	io.ReadWriter
 }
 
 func Open(t Transceiver) (*Tag, error) {
@@ -45,7 +42,7 @@ func (t *Tag) reqa() (uint16, error) {
 	t.bus.SetTxBits(7)
 	defer t.bus.SetTxBits(0)
 	t.bus.SetCRC(false, false)
-	if err := t.bus.Transceive(reqa); err != nil {
+	if _, err := t.bus.Write(reqa); err != nil {
 		return 0, fmt.Errorf("REQA: %w", err)
 	}
 	atqa := t.scratch[:2]
@@ -67,7 +64,7 @@ func (t *Tag) selectTag() error {
 		req[0] = cmd
 		req[1] = 0x20
 		t.bus.SetCRC(false, false)
-		if err := t.bus.Transceive(req); err != nil {
+		if _, err := t.bus.Write(req); err != nil {
 			return fmt.Errorf("select: %w", err)
 		}
 		req2, resp := t.scratch[:7], t.scratch[7:7+5]
@@ -89,7 +86,7 @@ func (t *Tag) selectTag() error {
 		}
 		req2[6] = bcc_calc
 		t.bus.SetCRC(true, true)
-		if err := t.bus.Transceive(req2); err != nil {
+		if _, err := t.bus.Write(req2); err != nil {
 			return fmt.Errorf("select: %w", err)
 		}
 		sakBuf := t.scratch[:1]
@@ -112,7 +109,7 @@ func (t *Tag) Read(rx []byte) (int, error) {
 	req := t.scratch[:2]
 	req[0] = cmdMifareRead
 	req[1] = t.page
-	if err := t.bus.Transceive(req); err != nil {
+	if _, err := t.bus.Write(req); err != nil {
 		return 0, fmt.Errorf("iso14443a: Read: %w", err)
 	}
 

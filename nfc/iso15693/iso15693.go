@@ -11,7 +11,7 @@ import (
 type Tag struct {
 	UID uint64
 
-	bus Transceiver
+	bus io.ReadWriter
 	// bufSize is the largest unmber of bytes to request
 	// from bus.
 	bufSize int
@@ -30,18 +30,10 @@ type Tag struct {
 	scratch      [14]byte
 }
 
-// Transceiver represents an NFC modem.
-type Transceiver interface {
-	// Transceive transmits tx and starts receiving.
-	Transceive(tx []byte) error
-	// Reader reads the response from a Transceive.
-	io.Reader
-}
-
 // Open a tag and read its UID.
 // Size is the maximum number of bytes to request from
 // the transceiver.
-func Open(bus Transceiver, size int) (*Tag, error) {
+func Open(bus io.ReadWriter, size int) (*Tag, error) {
 	tag := &Tag{
 		bus:     bus,
 		bufSize: size,
@@ -53,7 +45,7 @@ func Open(bus Transceiver, size int) (*Tag, error) {
 		flagNbSlots // 1 Slot
 	req[1] = cmdInventory
 	req[2] = maskLength
-	if err := tag.transceive(req); err != nil {
+	if err := tag.write(req); err != nil {
 		return nil, fmt.Errorf("iso15693: Inventory: %w", err)
 	}
 	dsfidUID := tag.scratch[:]
@@ -69,9 +61,10 @@ func Open(bus Transceiver, size int) (*Tag, error) {
 	return tag, nil
 }
 
-func (t *Tag) transceive(tx []byte) error {
+func (t *Tag) write(tx []byte) error {
 	t.seenResponse = false
-	return t.bus.Transceive(tx)
+	_, err := t.bus.Write(tx)
+	return err
 }
 
 // Read from the tag.
@@ -142,7 +135,7 @@ func (t *Tag) issueRead(nblocks int) error {
 	default:
 		return io.EOF
 	}
-	if err := t.bus.Transceive(req); err != nil {
+	if _, err := t.bus.Write(req); err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
 	t.blocksRem = nblocks

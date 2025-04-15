@@ -254,7 +254,7 @@ func (d *Device) Listen() error {
 				if err != nil && !errors.Is(err, io.EOF) {
 					return fmt.Errorf("st25r3916: listen: %w", err)
 				}
-				if err := d.Transceive(page0); err != nil {
+				if _, err := d.Write(page0); err != nil {
 					return fmt.Errorf("st25r3916: listen: %w", err)
 				}
 				n, err = d.Read(buf2)
@@ -262,7 +262,7 @@ func (d *Device) Listen() error {
 				if err != nil && !errors.Is(err, io.EOF) {
 					return fmt.Errorf("st25r3916: listen: %w", err)
 				}
-				if err := d.Transceive(page4); err != nil {
+				if _, err := d.Write(page4); err != nil {
 					return fmt.Errorf("st25r3916: listen: %w", err)
 				}
 				n, err = d.Read(buf3)
@@ -270,7 +270,7 @@ func (d *Device) Listen() error {
 				if err != nil && !errors.Is(err, io.EOF) {
 					return fmt.Errorf("st25r3916: listen: %w", err)
 				}
-				if err := d.Transceive(page8); err != nil {
+				if _, err := d.Write(page8); err != nil {
 					return fmt.Errorf("st25r3916: listen: %w", err)
 				}
 				fmt.Printf("buf1 %x\nbuf2 %x\nbuf3 %x\n", buf, buf2, buf3)
@@ -313,9 +313,9 @@ func (d *Device) RadioOn(prot Protocol) error {
 	return nil
 }
 
-func (d *Device) Transceive(tx []byte) error {
+func (d *Device) Write(tx []byte) (int, error) {
 	if err := d.command(cmdClearFIFO); err != nil {
-		return fmt.Errorf("st25r3916: transceive: %w", err)
+		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 	}
 	switch d.prot {
 	case ISO14443a:
@@ -324,7 +324,7 @@ func (d *Device) Transceive(tx []byte) error {
 		if len(tx) == 1 && tx[0] == reqa {
 			// Transmit REQA.
 			if err := d.command(cmdTransmitREQA); err != nil {
-				return fmt.Errorf("st25r3916: transceive: %w", err)
+				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 			}
 		} else {
 			aux := byte(0)
@@ -332,20 +332,20 @@ func (d *Device) Transceive(tx []byte) error {
 				aux = 0b1 << no_crc_rx
 			}
 			if err := d.writeReg(regAuxDef, aux); err != nil {
-				return fmt.Errorf("st25r3916: transceive: %w", err)
+				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 			}
 			if err := d.writeTXLen(len(tx), d.txBits); err != nil {
-				return fmt.Errorf("st25r3916: transceive: %w", err)
+				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 			}
 			if err := d.writeFIFO(tx); err != nil {
-				return fmt.Errorf("st25r3916: transceive: %w", err)
+				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 			}
 			cmd := byte(cmdTransmitWithCRC)
 			if !d.txCRC {
 				cmd = cmdTransmitWithoutCRC
 			}
 			if err := d.command(cmd); err != nil {
-				return fmt.Errorf("st25r3916: transceive: %w", err)
+				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 			}
 		}
 	case ISO15693:
@@ -355,7 +355,7 @@ func (d *Device) Transceive(tx []byte) error {
 		)
 		txlen := 1 + (len(tx)+2)*4 + 1 // SOF, data, CRC, EOF.
 		if err := d.writeTXLen(txlen, 0); err != nil {
-			return fmt.Errorf("st25r3916: transceive: %w", err)
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 		// dummy := []byte{0x21, 0x20, 0x08, 0x20, 0x02, 0x08, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x20, 0x08, 0x80, 0x80, 0x20, 0x20, 0x02, 0x02, 0x04}
 		// if err := d.writeTXLen(len(dummy), 0); err != nil {
@@ -372,7 +372,7 @@ func (d *Device) Transceive(tx []byte) error {
 		e.Encode(byte(crc), byte(crc>>8))
 		e.Write(eof1of4)
 		if err := e.Flush(); err != nil {
-			return fmt.Errorf("st25r3916: transceive: %w", err)
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 
 		// buf := make([]byte, 100)
@@ -405,28 +405,28 @@ func (d *Device) Transceive(tx []byte) error {
 		// 	}
 		// }
 		if err := d.command(cmdTransmitWithoutCRC); err != nil {
-			return fmt.Errorf("st25r3916: transceive: %w", err)
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 	}
 	for {
 		for d.Int.Get() {
 		}
 		if err := d.readError(); err != nil {
-			return fmt.Errorf("st25r3916: transceive: %w", err)
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 		req, intrs := d.scratch[:1], d.scratch[1:4]
 		req[0] = modeReadReg | regTimerNFCIntr
 		if err := d.Bus.Tx(i2cAddr, req, intrs); err != nil {
-			return fmt.Errorf("st25r3916: transceive: %w", err)
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 		timInt, errInt, passInt := intrs[0], intrs[1], intrs[2]
 		intr, err := d.readReg(regMainIntr)
 		if err != nil {
-			return fmt.Errorf("st25r3916: transceive: %w", err)
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 		opctrl, err := d.readReg(regOpCtrl)
 		if err != nil {
-			return fmt.Errorf("st25r3916: transceive: %w", err)
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 		fmt.Println(intr, timInt, errInt, passInt, opctrl)
 		if intr&(0b1<<i_txe) != 0 {
@@ -436,7 +436,7 @@ func (d *Device) Transceive(tx []byte) error {
 			break
 		}
 	}
-	return nil
+	return len(tx), nil
 }
 
 type encoder1of4 struct {
