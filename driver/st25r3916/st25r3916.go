@@ -22,7 +22,6 @@ type Device struct {
 	prot   Protocol
 
 	scratch [100]byte
-	enc     [100]byte
 }
 
 // FIFOSize is the number of bytes that can be
@@ -205,6 +204,7 @@ func (d *Device) Listen() error {
 	if err := d.command(cmdResetRXGain); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
+	d.prot = ISO14443a
 	// Start sensing.
 	if err := d.command(cmdGotoSense); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
@@ -334,9 +334,6 @@ func (d *Device) Write(tx []byte) (int, error) {
 			if err := d.writeReg(regAuxDef, aux); err != nil {
 				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 			}
-			if err := d.writeTXLen(len(tx), d.txBits); err != nil {
-				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-			}
 			if err := d.writeFIFO(tx); err != nil {
 				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 			}
@@ -349,39 +346,6 @@ func (d *Device) Write(tx []byte) (int, error) {
 			}
 		}
 	case ISO15693:
-		const (
-			sof1of4 = 0x21
-			eof1of4 = 0x04
-		)
-		txlen := 1 + (len(tx)+2)*4 + 1 // SOF, data, CRC, EOF.
-		if err := d.writeTXLen(txlen, 0); err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		}
-		// dummy := []byte{0x21, 0x20, 0x08, 0x20, 0x02, 0x08, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x20, 0x08, 0x80, 0x80, 0x20, 0x20, 0x02, 0x02, 0x04}
-		// if err := d.writeTXLen(len(dummy), 0); err != nil {
-		// 	return fmt.Errorf("st25r3916: transceive: %w", err)
-		// }
-		// if err := d.writeFIFO(dummy); err != nil {
-		// 	return fmt.Errorf("st25r3916: transceive: %w", err)
-		// }
-		crc := crcCITT(tx)
-		fmt.Printf("transceive len: %d crc %.4x %x %.8b\n", txlen, crc, tx, tx)
-		e := encoder1of4{Dev: d, Buf: d.enc[:0]}
-		e.Write(sof1of4)
-		e.Encode(tx...)
-		e.Encode(byte(crc), byte(crc>>8))
-		e.Write(eof1of4)
-		if err := e.Flush(); err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		}
-
-		// buf := make([]byte, 100)
-		// n, err := d.Read(buf)
-		// if err != nil && !errors.Is(err, io.EOF) {
-		// 	return err
-		// }
-		// fmt.Printf("FIFO     : (%d) %x\n", n, buf[:n])
-
 		// // Disable built-in CRC calculation.
 		// if err := d.writeReg(regAuxDef, 0b1<<no_crc_rx); err != nil {
 		// 	return fmt.Errorf("st25r3916: transceive: %w", err)
@@ -404,6 +368,9 @@ func (d *Device) Write(tx []byte) (int, error) {
 		// 		fmt.Printf("B%#.2x: %#.2x\n", i, v)
 		// 	}
 		// }
+		if err := d.writeFIFO(tx); err != nil {
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+		}
 		if err := d.command(cmdTransmitWithoutCRC); err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
@@ -437,56 +404,6 @@ func (d *Device) Write(tx []byte) (int, error) {
 		}
 	}
 	return len(tx), nil
-}
-
-type encoder1of4 struct {
-	Dev *Device
-	Buf []byte
-
-	err error
-}
-
-func (e *encoder1of4) Write(data ...byte) {
-	for len(data) > 0 {
-		if len(e.Buf) == cap(e.Buf) {
-			e.Flush()
-		}
-		n := min(len(data), cap(e.Buf)-len(e.Buf))
-		e.Buf = append(e.Buf, data[:n]...)
-		data = data[n:]
-	}
-}
-
-func (e *encoder1of4) Flush() error {
-	if e.err == nil {
-		e.err = e.Dev.writeFIFO(e.Buf)
-	}
-	e.Buf = e.Buf[:0]
-	return e.err
-}
-
-func (e *encoder1of4) Encode(data ...byte) {
-	if len(e.Buf)+4 > cap(e.Buf) {
-		e.Flush()
-	}
-	const (
-		data_00_1_4 = 0x02
-		data_01_1_4 = 0x08
-		data_10_1_4 = 0x20
-		data_11_1_4 = 0x80
-	)
-	encMap := [...]byte{
-		data_00_1_4,
-		data_01_1_4,
-		data_10_1_4,
-		data_11_1_4,
-	}
-	for _, b := range data {
-		for range 4 {
-			e.Buf = append(e.Buf, encMap[b&0b11])
-			b >>= 2
-		}
-	}
 }
 
 func (d *Device) configureProtocol(prot Protocol) error {
@@ -598,17 +515,16 @@ func (d *Device) Read(buf []byte) (int, error) {
 	if d.prot == ISO14443a && d.rxCRC {
 		fifoLen -= 2
 	}
-	buf2 := buf
-	buf = make([]byte, 100)
 	n := min(fifoLen, len(buf))
 	req = d.scratch[:1]
 	req[0] = modeFIFO | readFIFO
 	if err := d.Bus.Tx(i2cAddr, req, buf[:n]); err != nil {
 		return 0, fmt.Errorf("st25r3916: read: %w", err)
 	}
-	fmt.Printf("READ! %d %x (fifostatus2: %b)\n", n, buf[:n], fifoStatus[1])
-	n = copy(buf2, []byte{0x00, 0x00, 0x95, 0x83, 0xcb, 0x89, 0x00, 0x01, 0x04, 0xe0 /*0x25, 0x61*/})
-	if n == fifoLen {
+	switch {
+	case fifoStatus[1]&(0b1<<fifo_ovr) != 0:
+		return n, errors.New("st25r3916: FIFO overflow")
+	case n == fifoLen:
 		return n, io.EOF
 	}
 	return n, nil
@@ -635,7 +551,9 @@ func (d *Device) writeTXLen(bytes int, bits byte) error {
 }
 
 func (d *Device) writeFIFO(tx []byte) error {
-	fmt.Printf("writeFIFO: (%d) %x\n", len(tx), tx)
+	if err := d.writeTXLen(len(tx), d.txBits); err != nil {
+		return err
+	}
 	req := d.scratch[:]
 	req[0] = modeFIFO | loadFIFO
 	for len(tx) > 0 {
@@ -690,18 +608,6 @@ func (d *Device) command(cmd byte) error {
 	req := d.scratch[:1]
 	req[0] = modeCommand | cmd
 	return d.Bus.Tx(i2cAddr, req, nil)
-}
-
-func crcCITT(data []byte) uint16 {
-	crc := uint16(0xffff)
-	for _, b := range data {
-		b ^= byte(crc & 0xFF)
-		b ^= b << 4
-
-		b16 := uint16(b)
-		crc = (crc >> 8) ^ (b16 << 8) ^ (b16 << 3) ^ (b16 >> 4)
-	}
-	return ^crc
 }
 
 const (
@@ -863,4 +769,8 @@ const (
 
 	// EMD suppression configuration bits (table 38).
 	rx_start_emv = 6
+
+	// FIFO status 1 bits.
+	fifo_ovr = 4
+	fifo_unf = 5
 )

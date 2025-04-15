@@ -64,7 +64,8 @@ func run() error {
 	defer nfc.RadioOff()
 	fmt.Println("**** opening tag")
 	// tag, err := iso14443a.Open(nfc)
-	tag, err := iso15693.Open(nfc, st25r3916.FIFOSize)
+	trans := iso15693.NewTransceiver(nfc, st25r3916.FIFOSize)
+	tag, err := iso15693.Open(trans, trans.DecodedSize())
 	fmt.Println("***** tag opened", err)
 	if err != nil {
 		return err
