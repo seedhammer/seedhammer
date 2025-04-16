@@ -174,6 +174,22 @@ func (d *Device) Listen() error {
 	// 	//                        , ST25R3916_REG_UNDERSHOOT_CONF2, 0xFF, 0x00                                                                            /* Disable Undershoot Protection */
 	// 	//                        )
 	// }
+
+	// /* Disable GPT trigger source */
+	// st25r3916ChangeRegisterBits( ST25R3916_REG_TIMER_EMV_CONTROL, ST25R3916_REG_TIMER_EMV_CONTROL_gptc_mask, ST25R3916_REG_TIMER_EMV_CONTROL_gptc_no_trigger );
+
+	// /* On Bit Rate Detection Mode ST25R391x will filter incoming frames during MRT time starting on External Field On event, use 512/fc steps */
+	// st25r3916SetRegisterBits(ST25R3916_REG_TIMER_EMV_CONTROL, ST25R3916_REG_TIMER_EMV_CONTROL_mrt_step_512 );
+	// st25r3916WriteRegister( ST25R3916_REG_MASK_RX_TIMER, (uint8_t)rfalConv1fcTo512fc( RFAL_LM_GT ) );
+
+	// Notes:
+	// RATS/ATS response: search for RFAL_ISODEP_CMD_RATS
+	//   - check DID == 0?
+	//   - Check FSDI (maximum data size)
+	//   - Synthesize ATS response.
+
+	/* Compute ATS                                                                 */
+
 	if err := d.command(cmdStopAll); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
@@ -477,9 +493,6 @@ func (d *Device) readError() error {
 	if err != nil {
 		return err
 	}
-	if errIntr != 0 {
-		fmt.Println("errIntr", errIntr)
-	}
 	switch {
 	case errIntr&(0b1<<i_crc) != 0:
 		return errors.New("CRC error")
@@ -512,9 +525,10 @@ func (d *Device) Read(buf []byte) (int, error) {
 		return 0, err
 	}
 	fifoLen := int(fifoStatus[1]&0b1100_0000)<<2 | int(fifoStatus[0])
+	overflow := fifoStatus[1]&(0b1<<fifo_ovr) != 0
 	// Exclude the CRC bytes.
 	if d.prot == ISO14443a && d.rxCRC {
-		fifoLen -= 2
+		fifoLen = max(fifoLen-2, 0)
 	}
 	n := min(fifoLen, len(buf))
 	req = d.scratch[:1]
@@ -523,7 +537,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 		return 0, fmt.Errorf("st25r3916: read: %w", err)
 	}
 	switch {
-	case fifoStatus[1]&(0b1<<fifo_ovr) != 0:
+	case overflow:
 		return n, errors.New("st25r3916: FIFO overflow")
 	case n == fifoLen:
 		return n, io.EOF
@@ -751,6 +765,7 @@ const (
 
 	// Auxiliary definition bits.
 	dis_corr  = 2
+	nfc_id    = 4
 	no_crc_rx = 7
 
 	// NFCIP-1 passive target definition bits (table 32).
