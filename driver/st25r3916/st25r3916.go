@@ -6,6 +6,7 @@
 package st25r3916
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -197,19 +198,19 @@ func (d *Device) Listen() error {
 	req := []byte{
 		modeFIFO | loadPTMemory,
 		// UID.
-		0x04, 0xf7, 0x73, 0x7c, 0x8f, 0x61, 0x81, 0x00, 0x00, 0x00,
+		0x08, 0x09, 0x0a, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		// SENS_REQ.
-		0x44, 0x00,
-		// SEL1, SEL2, SEL3.
-		0x00, 0x00, 0x00,
-		// SEL1.
-		// 0x88, 0x04, 0xf7, 0x73, 0x08,
-		// // SEL2.
-		// 0x7c, 0x8f, 0x61, 0x81, 0x13,
+		0x02, 0x00,
+		// SEL_RES1, SEL_RES2, SEL_RES3.
+		0x20, 0x20, 0x20,
 	}
 	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
+	// // Set 7-byte UID mode.
+	// if err := d.writeReg(regAuxDef, 0b01<<nfc_id); err != nil {
+	// 	return fmt.Errorf("st25r3916: listen: %w", err)
+	// }
 	// Set listen, iso-14443a mode.
 	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
@@ -238,6 +239,7 @@ func (d *Device) Listen() error {
 	// page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
 	page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20}
 	page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
+	ATS := []byte{0x05, 0x78, 0x00, 0x80, 0x00}
 	for {
 		// if err != nil {
 		// 	return fmt.Errorf("st25r3916: %w", err)
@@ -271,8 +273,20 @@ func (d *Device) Listen() error {
 				if err != nil && !errors.Is(err, io.EOF) {
 					return fmt.Errorf("st25r3916: listen: %w", err)
 				}
-				if _, err := d.Write(page0); err != nil {
-					return fmt.Errorf("st25r3916: listen: %w", err)
+				switch {
+				case bytes.Equal(buf, []byte{0xe0, 0x80}):
+					// RATS
+					if _, err := d.Write(ATS); err != nil {
+						return fmt.Errorf("st25r3916: listen: %w", err)
+					}
+				case bytes.Equal(buf, []byte{0x50, 0x00}):
+					// HLTA
+					fmt.Printf("HLTA %x\n", buf)
+					continue
+				default:
+					if _, err := d.Write(page0); err != nil {
+						return fmt.Errorf("st25r3916: listen: %w", err)
+					}
 				}
 				n, err = d.Read(buf2)
 				buf2 = buf2[:n]
@@ -398,24 +412,24 @@ func (d *Device) Write(tx []byte) (int, error) {
 		if err := d.readError(); err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
-		req, intrs := d.scratch[:1], d.scratch[1:4]
-		req[0] = modeReadReg | regTimerNFCIntr
-		if err := d.Bus.Tx(i2cAddr, req, intrs); err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		}
-		timInt, errInt, passInt := intrs[0], intrs[1], intrs[2]
-		opctrl, err := d.readReg(regOpCtrl)
-		if err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		}
+		// req, intrs := d.scratch[:1], d.scratch[1:4]
+		// req[0] = modeReadReg | regTimerNFCIntr
+		// if err := d.Bus.Tx(i2cAddr, req, intrs); err != nil {
+		// 	return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+		// }
+		// timInt, errInt, passInt := intrs[0], intrs[1], intrs[2]
+		// opctrl, err := d.readReg(regOpCtrl)
+		// if err != nil {
+		// 	return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+		// }
 		intr, err := d.readReg(regMainIntr)
 		if err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
-		fmt.Println(intr, timInt, errInt, passInt, opctrl)
-		if intr&(0b1<<i_txe) != 0 {
-			fmt.Println("transceive done")
-		}
+		// fmt.Println(intr, timInt, errInt, passInt, opctrl)
+		// if intr&(0b1<<i_txe) != 0 {
+		// 	fmt.Println("transceive done")
+		// }
 		if intr&(0b1<<i_rxe) != 0 {
 			break
 		}
