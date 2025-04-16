@@ -14,16 +14,19 @@ import (
 
 type Device struct {
 	bus     *machine.I2C
+	intr    machine.Pin
 	scratch [1 + (nSPRs+nEPRs)*2]byte
 }
 
-func New(bus *machine.I2C) *Device {
+func New(bus *machine.I2C, intr machine.Pin) *Device {
 	return &Device{
-		bus: bus,
+		bus:  bus,
+		intr: intr,
 	}
 }
 
 func (d *Device) Configure() error {
+	d.intr.Configure(machine.PinConfig{Mode: machine.PinInput})
 	// Setup interrupt sources.
 	if err := d.writeReg(regMASK, maskREADY|maskSTARTED|maskNEWPDO); err != nil {
 		return fmt.Errorf("ap3372s: %w", err)

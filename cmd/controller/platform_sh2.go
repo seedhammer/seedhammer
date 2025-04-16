@@ -15,10 +15,10 @@ import (
 
 	"seedhammer.com/backup"
 	"seedhammer.com/driver/ap33772s"
-	"seedhammer.com/driver/clrc663"
 	"seedhammer.com/driver/ft6x36"
 	"seedhammer.com/driver/ili9488"
 	"seedhammer.com/driver/mjolnir2"
+	"seedhammer.com/driver/st25r3916"
 	"seedhammer.com/driver/tmc2209"
 	"seedhammer.com/engrave"
 	"seedhammer.com/gui"
@@ -58,16 +58,16 @@ type Platform struct {
 }
 
 const (
+	TOUCH_INT = machine.GPIO13
 	TOUCH_SDA = machine.GPIO14
 	TOUCH_SCL = machine.GPIO15
-	TOUCH_INT = machine.GPIO16
 
 	LCD_RS  = machine.NoPin
 	LCD_CS  = machine.NoPin
-	LCD_TE  = machine.GPIO13
-	LCD_DC  = machine.GPIO17
-	LCD_WRX = machine.GPIO18
-	LCD_DB0 = machine.GPIO19
+	LCD_TE  = machine.GPIO12
+	LCD_DC  = machine.GPIO16
+	LCD_WRX = machine.GPIO17
+	LCD_DB0 = machine.GPIO18
 
 	DRV_ENABLE = machine.GPIO10
 
@@ -87,7 +87,8 @@ const (
 	X_STEP = engraverBasePin + 4
 
 	NEEDLE_VREF = machine.GPIO11
-	DATA_INT    = machine.GPIO27
+	USBPD_INT   = machine.GPIO27
+	NFC_INT     = machine.GPIO26
 	DATA_SDA    = machine.GPIO28
 	DATA_SCL    = machine.GPIO29
 )
@@ -157,33 +158,20 @@ func Init() (*Platform, error) {
 	if err := dataI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: DATA_SDA, SCL: DATA_SCL}); err != nil {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
-	DATA_INT.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
-	nfc := clrc663.New(dataI2C)
+	nfc := &st25r3916.Device{Bus: dataI2C, Int: NFC_INT}
 	if err := nfc.Configure(); err != nil {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
-	nfc.SetPadEnable(0b1 << 4)
-	// for {
-	// 	for DATA_INT.Get() {
-	// 	}
-	// 	nfc.SetPadEnable(0b1 << 4)
-	// 	st, err := usbpd.ReadStatus()
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	println(st)
-	// 	nfc.SetPadEnable(0b0 << 4)
-	// }
-
 	// return nil, func() error {
 	// 	fmt.Println("******* Reading NFC tag ******")
-	// 	const prot = clrc663.ISO14443a
-	// 	// const prot = clrc663.ISO15693
+	// 	const prot = st25r3916.ISO14443a
+	// 	// const prot = st25r3916.ISO15693
 	// 	if err := nfc.RadioOn(prot); err != nil {
 	// 		return err
 	// 	}
 	// 	defer nfc.RadioOff()
-	// 	// tag, err := iso15693.Open(nfc, clrc663.FIFOSize)
+	// 	// trans := iso15693.NewTransceiver(nfc, st25r3916.FIFOSize)
+	// 	// tag, err := iso15693.Open(trans, trans.DecodedSize())
 	// 	tag, err := iso14443a.Open(nfc)
 	// 	if err != nil {
 	// 		return err
@@ -218,21 +206,9 @@ func Init() (*Platform, error) {
 	// 	// return fmt.Errorf("NFC done (%d): %v", len(all), all)
 	// 	return errors.New("not done yet?")
 	// }()
-	e, err := configEngraver()
-	if err != nil {
-		return nil, err
-	}
-	// Home and move needle to eject position.
-	go e.engrave(engrave.Commands(), nil)
-
-	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
-		return nil, fmt.Errorf("touch I2C: %w", err)
-	}
-
 	p := &Platform{
-		wakeups:  make(chan struct{}, 1),
-		timer:    time.NewTimer(0),
-		engraver: e,
+		wakeups: make(chan struct{}, 1),
+		timer:   time.NewTimer(0),
 	}
 	for i := range p.display.buffers {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
@@ -246,6 +222,18 @@ func Init() (*Platform, error) {
 		return nil, err
 	}
 	p.lcdDev = lcd
+	e, err := configEngraver()
+	if err != nil {
+		return nil, err
+	}
+	p.engraver = e
+	// Home and move needle to eject position.
+	go e.engrave(engrave.Commands(), nil)
+
+	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
+		return nil, fmt.Errorf("touch I2C: %w", err)
+	}
+
 	touch := ft6x36.New(touchI2C)
 	TOUCH_INT.Configure(machine.PinConfig{Mode: machine.PinInput})
 	TOUCH_INT.SetInterrupt(machine.PinFalling, p.touchInterrupt)
@@ -276,7 +264,7 @@ func configEngraver() (*engraver, error) {
 	}); err != nil {
 		panic(err)
 	}
-	usbpd := ap33772s.New(dataI2C)
+	usbpd := ap33772s.New(dataI2C, USBPD_INT)
 	// Compute duty cycle that corresponds to the limit.
 	duty := uint32(uint64(needleVREFPWM.Top()) * needleCurrentLimit / needleSenseScale)
 	needleVREFPWM.Set(vrefCh, duty)

@@ -36,6 +36,7 @@ const (
 )
 
 func (d *Device) Configure() error {
+	d.Int.Configure(machine.PinConfig{Mode: machine.PinInput})
 	// Reset.
 	if err := d.command(cmdSetDefault); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
@@ -90,7 +91,7 @@ func (d *Device) Configure() error {
 	}
 	// Wait for ready.
 	for {
-		if d.Int.Get() {
+		if !d.Int.Get() {
 			continue
 		}
 		intr, err := d.readReg(regMainIntr)
@@ -102,7 +103,7 @@ func (d *Device) Configure() error {
 		}
 	}
 	// Wait for interrupt line release.
-	for !d.Int.Get() {
+	for d.Int.Get() {
 	}
 	// // Measure supply
 	// for i := byte(0); i <= 4; i++ {
@@ -231,7 +232,7 @@ func (d *Device) Listen() error {
 		// 		fmt.Printf("state %.8b\n", state)
 		// 	}
 		// }
-		if d.Int.Get() {
+		if !d.Int.Get() {
 			continue
 		}
 		// state, err := d.readReg(regPassiveTarg)
@@ -247,7 +248,7 @@ func (d *Device) Listen() error {
 		}
 		act = act || passInt&(0b1<<i_wu_a) != 0
 		if act {
-			println("act!")
+			// println("act!")
 			if intr&(0b1<<i_rxe) != 0 {
 				n, err := d.Read(buf)
 				buf = buf[:n]
@@ -376,7 +377,7 @@ func (d *Device) Write(tx []byte) (int, error) {
 		}
 	}
 	for {
-		for d.Int.Get() {
+		for !d.Int.Get() {
 		}
 		if err := d.readError(); err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
@@ -387,11 +388,11 @@ func (d *Device) Write(tx []byte) (int, error) {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 		timInt, errInt, passInt := intrs[0], intrs[1], intrs[2]
-		intr, err := d.readReg(regMainIntr)
+		opctrl, err := d.readReg(regOpCtrl)
 		if err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
-		opctrl, err := d.readReg(regOpCtrl)
+		intr, err := d.readReg(regMainIntr)
 		if err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
@@ -449,21 +450,21 @@ func (d *Device) configureProtocol(prot Protocol) error {
 		regUndershootConf2, conf.undershoot[1],
 		regISO14443AConf, conf.iso14443a,
 
-		0x0f, 0x41, // TODO
-		// 0x11, 0x52,
-		0x12, 0x20,
-		0x13, 0x01,
-		0x14, 0x84,
-		0x16, 0x87,
-		0x17, 0xbf,
-		0x18, 0x0f,
-		0x19, 0xff,
-		0x23, 0xb0,
-		0x26, 0x82,
-		0x27, 0x82,
-		0x28, 0x70,
-		0x29, 0x5f,
-		0x2a, 0x11,
+		// 0x0f, 0x41, // TODO
+		// // 0x11, 0x52,
+		// 0x12, 0x20,
+		// 0x13, 0x01,
+		// 0x14, 0x84,
+		// 0x16, 0x87,
+		// 0x17, 0xbf,
+		// 0x18, 0x0f,
+		// 0x19, 0xff,
+		// 0x23, 0xb0,
+		// 0x26, 0x82,
+		// 0x27, 0x82,
+		// 0x28, 0x70,
+		// 0x29, 0x5f,
+		// 0x2a, 0x11,
 	); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
