@@ -7,6 +7,7 @@ import (
 	"io"
 	"machine"
 	"os"
+	"time"
 
 	"seedhammer.com/driver/st25r3916"
 	"seedhammer.com/nfc/iso15693"
@@ -43,10 +44,8 @@ func run() error {
 	// 	}
 	// }
 	fmt.Println("**** here we go! **** ")
+	time.Sleep(500 * time.Millisecond)
 	defer fmt.Println("**** all done! **** ")
-	if DATA_INT.Get() {
-		fmt.Println("data int high!")
-	}
 
 	nfc := &st25r3916.Device{
 		Bus: dataI2C,
@@ -55,8 +54,8 @@ func run() error {
 	if err := nfc.Configure(); err != nil {
 		return err
 	}
-	nfc.SetCRC(true, true)
-	return nfc.Listen()
+	// nfc.SetCRC(true, true)
+	// return nfc.Listen()
 	// prot := st25r3916.ISO14443a
 	prot := st25r3916.ISO15693
 	if err := nfc.RadioOn(prot); err != nil {

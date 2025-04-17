@@ -158,6 +158,40 @@ func Init() (*Platform, error) {
 	if err := dataI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: DATA_SDA, SCL: DATA_SCL}); err != nil {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
+	p := &Platform{
+		wakeups: make(chan struct{}, 1),
+		timer:   time.NewTimer(0),
+	}
+	for i := range p.display.buffers {
+		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
+	}
+
+	lcd, err := ili9488.New(LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0, LCD_TE, lcdPIO)
+	if err != nil {
+		return nil, err
+	}
+	if err := lcd.Configure(ili9488.Config{}); err != nil {
+		return nil, err
+	}
+	p.lcdDev = lcd
+	e, err := configEngraver()
+	if err != nil {
+		return nil, err
+	}
+	p.engraver = e
+	// Home and move needle to eject position.
+	go e.engrave(engrave.Commands(), nil)
+
+	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
+		return nil, fmt.Errorf("touch I2C: %w", err)
+	}
+
+	touch := ft6x36.New(touchI2C)
+	TOUCH_INT.Configure(machine.PinConfig{Mode: machine.PinInput})
+	TOUCH_INT.SetInterrupt(machine.PinFalling, p.touchInterrupt)
+	p.touch.ints = make(chan struct{}, 1)
+	p.touch.dev = touch
+
 	nfc := &st25r3916.Device{Bus: dataI2C, Int: NFC_INT}
 	if err := nfc.Configure(); err != nil {
 		return nil, fmt.Errorf("data I2C: %w", err)
@@ -206,40 +240,6 @@ func Init() (*Platform, error) {
 	// 	// return fmt.Errorf("NFC done (%d): %v", len(all), all)
 	// 	return errors.New("not done yet?")
 	// }()
-	p := &Platform{
-		wakeups: make(chan struct{}, 1),
-		timer:   time.NewTimer(0),
-	}
-	for i := range p.display.buffers {
-		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
-	}
-
-	lcd, err := ili9488.New(LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0, LCD_TE, lcdPIO)
-	if err != nil {
-		return nil, err
-	}
-	if err := lcd.Configure(ili9488.Config{}); err != nil {
-		return nil, err
-	}
-	p.lcdDev = lcd
-	e, err := configEngraver()
-	if err != nil {
-		return nil, err
-	}
-	p.engraver = e
-	// Home and move needle to eject position.
-	go e.engrave(engrave.Commands(), nil)
-
-	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
-		return nil, fmt.Errorf("touch I2C: %w", err)
-	}
-
-	touch := ft6x36.New(touchI2C)
-	TOUCH_INT.Configure(machine.PinConfig{Mode: machine.PinInput})
-	TOUCH_INT.SetInterrupt(machine.PinFalling, p.touchInterrupt)
-	p.touch.ints = make(chan struct{}, 1)
-	p.touch.dev = touch
-
 	return p, nil
 }
 
@@ -262,9 +262,12 @@ func configEngraver() (*engraver, error) {
 	if err := needleVREFPWM.Configure(machine.PWMConfig{
 		Period: uint64(time.Second / vrefPWMFreq),
 	}); err != nil {
-		panic(err)
+		return nil, err
 	}
 	usbpd := ap33772s.New(dataI2C, USBPD_INT)
+	if err := usbpd.Configure(); err != nil {
+		return nil, err
+	}
 	// Compute duty cycle that corresponds to the limit.
 	duty := uint32(uint64(needleVREFPWM.Top()) * needleCurrentLimit / needleSenseScale)
 	needleVREFPWM.Set(vrefCh, duty)

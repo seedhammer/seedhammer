@@ -15,12 +15,15 @@ import (
 )
 
 type Device struct {
-	Bus    *machine.I2C
-	Int    machine.Pin
-	txBits byte
-	txCRC  bool
-	rxCRC  bool
-	prot   Protocol
+	Bus        *machine.I2C
+	Int        machine.Pin
+	txBits     byte
+	txCRC      bool
+	rxCRC      bool
+	prot       Protocol
+	interrupts chan struct{}
+	eof        bool
+	timer      *time.Timer
 
 	scratch [100]byte
 }
@@ -36,8 +39,24 @@ const (
 	ISO14443a
 )
 
+// interrupts represent a set of interrupt statuses or
+// masks.
+type interrupts struct {
+	Main    byte
+	Timer   byte
+	Passive byte
+	Error   byte
+}
+
+// General timeout to guard for hangs, excessive
+// receive times etc.
+const timeout = 1 * time.Second
+
 func (d *Device) Configure() error {
+	d.timer = time.NewTimer(0)
+	d.interrupts = make(chan struct{}, 1)
 	d.Int.Configure(machine.PinConfig{Mode: machine.PinInput})
+	d.Int.SetInterrupt(machine.PinRising, d.handleInterrupt)
 	// Reset.
 	if err := d.command(cmdSetDefault); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
@@ -48,26 +67,29 @@ func (d *Device) Configure() error {
 	datasheetSetup[1] = 0x04
 	datasheetSetup[2] = 0x10
 	if err := d.Bus.Tx(i2cAddr, datasheetSetup, nil); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
 	if err := d.writeRegs(
-		regIOConf1, 0b11<<out_cl|0b1<<lf_clk_off, // Disable the MCU_CLK pin.
+		regIOConf1, 0b11<<out_cl|0b1<<lf_clk_off|0b01<<i2c_thd, // Disable the MCU_CLK pin, 400 kHz i2c.
 		regIOConf2, 0b1<<io_drv_lvl, // Increase IO drive strength, as recommended in table 20.
 		regResAMMod, 0b1<<fa3_f|0<<md_res, // Minimum non-overlap.
 		regExtFieldAct, 0b001<<trg_l|0b0001<<rfe_t, // Lower activation threshold.
 		regExtFieldDeact, 0b000<<trg_ld|0b000<<rfe_td, // Lower deactivation threshold.
-		regNFCIP1PassiveTarg, 5<<fdel, // Adjust fdel to 2 as suggested by the datasheet table 32.
+		regNFCIP1PassiveTarg, 5<<fdel| // Adjust fdel to 5 like the ST example code. Datasheet table 32 says minimum 2.
+			0b1<<d_212_424_1r|0b1<<d_ac_ap2p, // Disable unused passive detection modes.
 		regPassiveTargetMod, 0x5f, // Reduce RFO resistance in modulated state.
 		regEMDSupConf, 0b1<<rx_start_emv, // Enable start on first 4 bits.
 		regCapSensorCtrl, 0, // Reset capacitive sensor calibration.
 		regStreamModeDef, modeISO15693, // Setup streaming mode for iso15693.
+		regTimerEMVCtrl, 0b001<<gptc, // Start timer at end of rx.
 	); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
 	if err := d.command(cmdCalibrateCapSensor); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
-	// Calibration takes up to 3 ms.
+	// Calibration takes up to 3 ms. We can't wait for command complete
+	// interrupt because the oscillator is not yet running.
 	time.Sleep(3 * time.Millisecond)
 	// n, err := d.readReg(regCapSensor)
 	// if err != nil {
@@ -86,63 +108,18 @@ func (d *Device) Configure() error {
 	// 	fmt.Println("n", n)
 	// 	time.Sleep(300 * time.Millisecond)
 	// }
-	// Start oscillator.
-	if err := d.writeReg(regOpCtrl, 0b1<<en); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+	mask := interrupts{Main: 0b1 << i_osc}
+	if err := d.setInterruptMask(mask); err != nil {
+		return fmt.Errorf("st25r3916: configure: %w", err)
+	}
+	// Start oscillator, enable field detector.
+	if err := d.writeReg(regOpCtrl, 0b1<<en|0b01<<en_fd_c); err != nil {
+		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
 	// Wait for ready.
-	for {
-		if !d.Int.Get() {
-			continue
-		}
-		intr, err := d.readReg(regMainIntr)
-		if err != nil {
-			return fmt.Errorf("st25r3916: %w", err)
-		}
-		if intr&(0b1<<i_osc) != 0 {
-			break
-		}
+	if _, err := d.waitForInterrupt(mask); err != nil {
+		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
-	// Wait for interrupt line release.
-	for d.Int.Get() {
-	}
-	// // Measure supply
-	// for i := byte(0); i <= 4; i++ {
-	// 	if err := d.writeReg(regRegulatorCtrl, i<<mpsv); err != nil {
-	// 		return fmt.Errorf("st25r3916: %w", err)
-	// 	}
-	// 	regctrl := mustr(d.readReg(regRegulatorCtrl))
-	// 	fmt.Println("measuring, existing regctrl", regctrl)
-	// 	if err := d.command(cmdMeasureSupply); err != nil {
-	// 		return fmt.Errorf("st25r3916: %w", err)
-	// 	}
-	// 	{
-	// 		// Wait for ready.
-	// 		for {
-	// 			// if d.Int.Get() {
-	// 			// 	continue
-	// 			// }
-	// 			intr, err := d.readReg(regTimerNFCIntr)
-	// 			if err != nil {
-	// 				return fmt.Errorf("st25r3916: %w", err)
-	// 			}
-	// 			fmt.Println("measure intr", intr)
-	// 			if intr&(0b1<<i_dct) != 0 {
-	// 				break
-	// 			}
-	// 			time.Sleep(time.Second)
-	// 		}
-	// 		// Wait for interrupt line release.
-	// 		for !d.Int.Get() {
-	// 		}
-	// 	}
-	// 	meas, err := d.readReg(regADConvOut)
-	// 	if err != nil {
-	// 		return fmt.Errorf("st25r3916: %w", err)
-	// 	}
-	// 	fmt.Println(meas)
-	// }
-	//
 	// Adjust regulators.
 	if err := d.writeRegs(
 		// First, the reg_s bit must be cycled.
@@ -151,14 +128,40 @@ func (d *Device) Configure() error {
 	); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
-	// Then the adjust regulator command issues.
-	if err := d.command(cmdAdjustRegulator); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+	// Then issue the adjust regulator command.
+	if _, err := d.commandAndWait(cmdAdjustRegulator, interrupts{Timer: 0b1 << i_dct}); err != nil {
+		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
-	// Adjustment takes up to 5 milliseconds.
-	time.Sleep(5 * time.Millisecond)
+	// // Measure supply
+	// for i := byte(0); i <= 4; i++ {
+	// 	if err := d.writeReg(regRegulatorCtrl, i<<mpsv); err != nil {
+	// 		return fmt.Errorf("st25r3916: %w", err)
+	// 	}
+	// 	regctrl, err := d.readReg(regRegulatorCtrl)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	fmt.Println("measuring, existing regctrl", regctrl)
+	// 	if _, err := d.commandAndWait(cmdMeasureSupply,
+	// 		interrupts{Timer: 0b1 << i_dct}); err != nil {
+	// 		return fmt.Errorf("st25r3916: %w", err)
+	// 	}
+	// 	meas, err := d.readReg(regADConvOut)
+	// 	if err != nil {
+	// 		return fmt.Errorf("st25r3916: %w", err)
+	// 	}
+	// 	fmt.Println(meas)
+	// 	time.Sleep(time.Second)
+	// }
 
 	return nil
+}
+
+func (d *Device) handleInterrupt(machine.Pin) {
+	select {
+	case d.interrupts <- struct{}{}:
+	default:
+	}
 }
 
 func (d *Device) Listen() error {
@@ -202,7 +205,7 @@ func (d *Device) Listen() error {
 		// SENS_REQ.
 		0x02, 0x00,
 		// SEL_RES1, SEL_RES2, SEL_RES3.
-		0x20, 0x20, 0x20,
+		0x00, 0x00, 0x00,
 	}
 	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
@@ -219,9 +222,6 @@ func (d *Device) Listen() error {
 	if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<rx_en|0b11<<en_fd_c); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	if err := d.command(cmdResetRXGain); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
 	d.prot = ISO14443a
 	// Start sensing.
 	if err := d.command(cmdGotoSense); err != nil {
@@ -229,8 +229,6 @@ func (d *Device) Listen() error {
 	}
 	fmt.Println("waiting anxiously")
 	// oldstate := byte(0)
-	// Wait for ready.
-	act := false
 	buf := make([]byte, 100)
 	buf2 := make([]byte, 100)
 	buf3 := make([]byte, 100)
@@ -241,72 +239,58 @@ func (d *Device) Listen() error {
 	page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
 	ATS := []byte{0x05, 0x78, 0x00, 0x80, 0x00}
 	for {
-		// if err != nil {
-		// 	return fmt.Errorf("st25r3916: %w", err)
-		// }
-		// if oldstate != state {
-		// 	oldstate = state
-		// 	if state != 0 {
-		// 		fmt.Printf("state %.8b\n", state)
-		// 	}
-		// }
-		if !d.Int.Get() {
-			continue
+		mask := interrupts{
+			Main: 0b1 << i_rxe,
 		}
-		// state, err := d.readReg(regPassiveTarg)
-		req, intrs := d.scratch[:1], d.scratch[1:4]
-		req[0] = modeReadReg | regTimerNFCIntr
-		if err := d.Bus.Tx(i2cAddr, req, intrs); err != nil {
-			return fmt.Errorf("st25r3916: listen: %w", err)
+		if err := d.setInterruptMask(mask); err != nil {
+			return err
 		}
-		timInt, errInt, passInt := intrs[0], intrs[1], intrs[2]
-		intr, err := d.readReg(regMainIntr)
+		<-d.interrupts
+		intrs, err := d.interruptStatus()
 		if err != nil {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
-		act = act || passInt&(0b1<<i_wu_a) != 0
-		if act {
-			// println("act!")
-			if intr&(0b1<<i_rxe) != 0 {
-				n, err := d.Read(buf)
-				buf = buf[:n]
-				if err != nil && !errors.Is(err, io.EOF) {
-					return fmt.Errorf("st25r3916: listen: %w", err)
-				}
-				switch {
-				case bytes.Equal(buf, []byte{0xe0, 0x80}):
-					// RATS
-					if _, err := d.Write(ATS); err != nil {
-						return fmt.Errorf("st25r3916: listen: %w", err)
-					}
-				case bytes.Equal(buf, []byte{0x50, 0x00}):
-					// HLTA
-					fmt.Printf("HLTA %x\n", buf)
-					continue
-				default:
-					if _, err := d.Write(page0); err != nil {
-						return fmt.Errorf("st25r3916: listen: %w", err)
-					}
-				}
-				n, err = d.Read(buf2)
-				buf2 = buf2[:n]
-				if err != nil && !errors.Is(err, io.EOF) {
-					return fmt.Errorf("st25r3916: listen: %w", err)
-				}
-				if _, err := d.Write(page4); err != nil {
-					return fmt.Errorf("st25r3916: listen: %w", err)
-				}
-				n, err = d.Read(buf3)
-				buf3 = buf3[:n]
-				if err != nil && !errors.Is(err, io.EOF) {
-					return fmt.Errorf("st25r3916: listen: %w", err)
-				}
-				if _, err := d.Write(page8); err != nil {
-					return fmt.Errorf("st25r3916: listen: %w", err)
-				}
-				fmt.Printf("buf1 %x\nbuf2 %x\nbuf3 %x\n", buf, buf2, buf3)
-				fmt.Println("passIntr", passInt, "intr", intr, "errInt", errInt, "timInt", timInt /*"state", state*/)
+		if intrs.Main&(0b1<<i_rxe) != 0 {
+			// Pretend we just wrote.
+			d.eof = false
+			n, err := d.Read(buf)
+			buf = buf[:n]
+			if err != nil && !errors.Is(err, io.EOF) {
+				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
+			switch {
+			case bytes.Equal(buf, []byte{0xe0, 0x80}):
+				// RATS
+				if _, err := d.Write(ATS); err != nil {
+					return fmt.Errorf("st25r3916: listen: %w", err)
+				}
+			case bytes.Equal(buf, []byte{0x50, 0x00}):
+				// HLTA
+				fmt.Printf("HLTA %x\n", buf)
+				continue
+			default:
+				if _, err := d.Write(page0); err != nil {
+					return fmt.Errorf("st25r3916: listen: %w", err)
+				}
+			}
+			n, err = d.Read(buf2)
+			buf2 = buf2[:n]
+			if err != nil && !errors.Is(err, io.EOF) {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+			if _, err := d.Write(page4); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+			n, err = d.Read(buf3)
+			buf3 = buf3[:n]
+			if err != nil && !errors.Is(err, io.EOF) {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+			if _, err := d.Write(page8); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+			fmt.Printf("buf1 %x\nbuf2 %x\nbuf3 %x\n", buf, buf2, buf3)
+			// fmt.Println("passIntr", passInt, "intr", intr, "errInt", errInt, "timInt", timInt /*"state", state*/)
 		}
 	}
 	return nil
@@ -325,17 +309,21 @@ func (d *Device) RadioOff() error {
 
 func (d *Device) RadioOn(prot Protocol) error {
 	if err := d.command(cmdStopAll); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
 	if err := d.configureProtocol(prot); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
-	// Reset RX gain.
-	if err := d.command(cmdResetRXGain); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+	intrs, err := d.commandAndWait(cmdInitialFieldOn,
+		interrupts{Timer: 0b1<<i_cac | 0b1<<i_cat})
+	if err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
-	// Enable transmitter and receiver.
-	if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<tx_en|0b1<<rx_en); err != nil {
+	if intrs.Timer&(0b1<<i_cat) == 0 {
+		return fmt.Errorf("st25r3916: radio: field conflict", err)
+	}
+	// Enable receiver.
+	if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<rx_en|0b1<<tx_en|0b01<<en_fd_c); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
 
@@ -345,36 +333,34 @@ func (d *Device) RadioOn(prot Protocol) error {
 }
 
 func (d *Device) Write(tx []byte) (int, error) {
-	if err := d.command(cmdClearFIFO); err != nil {
+	if err := d.command(cmdStopAll); err != nil {
 		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 	}
+	if err := d.command(cmdResetRXGain); err != nil {
+		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+	}
+	var transmitCmd byte
 	switch d.prot {
 	case ISO14443a:
 		const reqa = 0x26
 		// Special case REQA.
 		if len(tx) == 1 && tx[0] == reqa {
-			// Transmit REQA.
-			if err := d.command(cmdTransmitREQA); err != nil {
-				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-			}
-		} else {
-			aux := byte(0)
-			if !d.rxCRC {
-				aux = 0b1 << no_crc_rx
-			}
-			if err := d.writeReg(regAuxDef, aux); err != nil {
-				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-			}
-			if err := d.writeFIFO(tx); err != nil {
-				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-			}
-			cmd := byte(cmdTransmitWithCRC)
-			if !d.txCRC {
-				cmd = cmdTransmitWithoutCRC
-			}
-			if err := d.command(cmd); err != nil {
-				return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-			}
+			transmitCmd = cmdTransmitREQA
+			break
+		}
+		aux := byte(0)
+		if !d.rxCRC {
+			aux = 0b1 << no_crc_rx
+		}
+		if err := d.writeReg(regAuxDef, aux); err != nil {
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+		}
+		if err := d.writeFIFO(tx); err != nil {
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+		}
+		transmitCmd = byte(cmdTransmitWithCRC)
+		if !d.txCRC {
+			transmitCmd = cmdTransmitWithoutCRC
 		}
 	case ISO15693:
 		// // Disable built-in CRC calculation.
@@ -402,68 +388,135 @@ func (d *Device) Write(tx []byte) (int, error) {
 		if err := d.writeFIFO(tx); err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
-		if err := d.command(cmdTransmitWithoutCRC); err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		}
+		transmitCmd = cmdTransmitWithoutCRC
 	}
-	for {
-		for !d.Int.Get() {
-		}
-		if err := d.readError(); err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		}
-		// req, intrs := d.scratch[:1], d.scratch[1:4]
-		// req[0] = modeReadReg | regTimerNFCIntr
-		// if err := d.Bus.Tx(i2cAddr, req, intrs); err != nil {
-		// 	return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		// }
-		// timInt, errInt, passInt := intrs[0], intrs[1], intrs[2]
-		// opctrl, err := d.readReg(regOpCtrl)
-		// if err != nil {
-		// 	return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		// }
-		intr, err := d.readReg(regMainIntr)
-		if err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		}
-		// fmt.Println(intr, timInt, errInt, passInt, opctrl)
-		// if intr&(0b1<<i_txe) != 0 {
-		// 	fmt.Println("transceive done")
-		// }
-		if intr&(0b1<<i_rxe) != 0 {
-			break
-		}
+	if err := d.command(transmitCmd); err != nil {
+		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 	}
+	d.eof = false
 	return len(tx), nil
+}
+
+func (d *Device) waitForInterrupt(mask interrupts) (interrupts, error) {
+	if !d.timer.Stop() {
+		select {
+		case <-d.timer.C:
+		default:
+		}
+	}
+	d.timer.Reset(timeout)
+	for {
+		select {
+		case <-d.interrupts:
+		case <-d.timer.C:
+			return interrupts{}, errors.New("timeout")
+		}
+		intrs, err := d.interruptStatus()
+		if err != nil {
+			return interrupts{}, err
+		}
+		if err != nil ||
+			intrs.Main&mask.Main != 0 ||
+			intrs.Timer&mask.Timer != 0 ||
+			intrs.Passive&mask.Passive != 0 ||
+			intrs.Error&mask.Error != 0 {
+			return intrs, err
+		}
+	}
+}
+
+func (d *Device) setInterruptMask(mask interrupts) error {
+	// Clear interrupt status.
+	if _, err := d.interruptStatus(); err != nil {
+		return err
+	}
+	select {
+	case <-d.interrupts:
+	default:
+	}
+	req := d.scratch[:5]
+	req[0] = regMaskMainIntr
+	req[regMaskMainIntr-regMaskMainIntr+1] = ^mask.Main
+	// Always respond to no response interrupts.
+	req[regMaskTimerNFCIntr-regMaskMainIntr+1] = ^(mask.Timer | 0b1<<i_nre)
+	// Interrupt on errors.
+	req[regMaskErrorWakeupIntr-regMaskMainIntr+1] =
+		^byte(mask.Error | 0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2)
+	req[regMaskPassiveTargIntr-regMaskMainIntr+1] = ^mask.Passive
+	return d.Bus.Tx(i2cAddr, req, nil)
+}
+
+func (d *Device) interruptStatus() (interrupts, error) {
+	req, resp := d.scratch[:1], d.scratch[1:4]
+	req[0] = modeReadReg | regTimerNFCIntr
+	if err := d.Bus.Tx(i2cAddr, req, resp); err != nil {
+		return interrupts{}, err
+	}
+	intrs := interrupts{
+		Timer:   resp[0],
+		Error:   resp[1],
+		Passive: resp[2],
+	}
+	// The main interrupt register is read last, because
+	// reading it also clears the error interrupt register.
+	intr, err := d.readReg(regMainIntr)
+	if err != nil {
+		return interrupts{}, err
+	}
+	intrs.Main = intr
+	switch {
+	case intrs.Error&(0b1<<i_crc) != 0:
+		err = errors.New("CRC error")
+	case intrs.Error&(0b1<<i_par) != 0:
+		err = errors.New("parity error")
+	case intrs.Error&(0b1<<i_err2) != 0:
+		err = errors.New("soft framing error")
+	case intrs.Error&(0b1<<i_err1) != 0:
+		err = errors.New("hard framing error")
+	case intrs.Main&(0b1<<i_col) != 0:
+		// We don't implement anti-collision loops yet,
+		// so for now treat collisions as errors.
+		err = errors.New("collision")
+	case intrs.Timer&(0b1<<i_nre) != 0:
+		err = errors.New("response timeout")
+	}
+	return intrs, err
 }
 
 func (d *Device) configureProtocol(prot Protocol) error {
 	type config struct {
-		opMode     byte
-		rxConf     [4]byte
-		corrConf   [2]byte
-		overshoot  [2]byte
-		undershoot [2]byte
-		iso14443a  byte
+		opMode      byte
+		rxConf      [4]byte
+		corrConf    [2]byte
+		overshoot   [2]byte
+		undershoot  [2]byte
+		maskReceive byte
+		nrt         uint16
+		iso14443a   byte
 	}
 	var conf config
 	switch prot {
 	case ISO14443a:
 		conf = config{
-			opMode:     omISO14443A,
-			rxConf:     [...]byte{0x08, 0x2d, 0x00, 0x00},
-			corrConf:   [...]byte{0x51, 0x00},
-			overshoot:  [...]byte{0x40, 0x03},
-			undershoot: [...]byte{0x40, 0x03},
-			iso14443a:  0,
+			opMode:      omISO14443A,
+			rxConf:      [...]byte{0x08, 0x2d, 0x00, 0x00},
+			corrConf:    [...]byte{0x51, 0x00},
+			overshoot:   [...]byte{0x40, 0x03},
+			undershoot:  [...]byte{0x40, 0x03},
+			maskReceive: 0x0e,
+			nrt:         0x23,
+			iso14443a:   0x00,
 		}
 	case ISO15693:
 		conf = config{
-			opMode: omISO15693,
-			// rxConf:    [...]byte{0x13, 0x2d, 0x00, 0x00}, // TODO: why?
-			rxConf:    [...]byte{0x13, 0x25, 0x00, 0x00},
-			corrConf:  [...]byte{0x13, 0x01},
-			iso14443a: 0b1<<no_tx_par | 0b1<<no_rx_par,
+			opMode:      omISO15693,
+			rxConf:      [...]byte{0x13, 0x25, 0x00, 0x00},
+			corrConf:    [...]byte{0x13, 0x01},
+			overshoot:   [...]byte{0x00, 0x00},
+			undershoot:  [...]byte{0x00, 0x00},
+			maskReceive: 0x41,
+			nrt:         0x52,
+			iso14443a:   0b1<<no_tx_par | 0b1<<no_rx_par,
 		}
 	}
 	if err := d.writeRegs(
@@ -478,45 +531,14 @@ func (d *Device) configureProtocol(prot Protocol) error {
 		regOvershootConf2, conf.overshoot[1],
 		regUndershootConf1, conf.undershoot[0],
 		regUndershootConf2, conf.undershoot[1],
+		regMaskRecieveTimer, conf.maskReceive,
+		regNoResponseTimer1, byte(conf.nrt>>8),
+		regNoResponseTimer2, byte(conf.nrt),
 		regISO14443AConf, conf.iso14443a,
-
-		// 0x0f, 0x41, // TODO
-		// // 0x11, 0x52,
-		// 0x12, 0x20,
-		// 0x13, 0x01,
-		// 0x14, 0x84,
-		// 0x16, 0x87,
-		// 0x17, 0xbf,
-		// 0x18, 0x0f,
-		// 0x19, 0xff,
-		// 0x23, 0xb0,
-		// 0x26, 0x82,
-		// 0x27, 0x82,
-		// 0x28, 0x70,
-		// 0x29, 0x5f,
-		// 0x2a, 0x11,
 	); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
 	d.prot = prot
-	return nil
-}
-
-func (d *Device) readError() error {
-	errIntr, err := d.readReg(regErrorWakeupIntr)
-	if err != nil {
-		return err
-	}
-	switch {
-	case errIntr&(0b1<<i_crc) != 0:
-		return errors.New("CRC error")
-	case errIntr&(0b1<<i_par) != 0:
-		return errors.New("parity error")
-	case errIntr&(0b1<<i_err2) != 0:
-		return errors.New("soft framing error")
-	case errIntr&(0b1<<i_err1) != 0:
-		return errors.New("hard framing error")
-	}
 	return nil
 }
 
@@ -533,6 +555,16 @@ func (d *Device) SetTxBits(bits int) {
 }
 
 func (d *Device) Read(buf []byte) (int, error) {
+	if !d.eof {
+		mask := interrupts{Main: 0b1 << i_rxe}
+		if err := d.setInterruptMask(mask); err != nil {
+			return 0, err
+		}
+		if _, err := d.waitForInterrupt(mask); err != nil {
+			return 0, fmt.Errorf("st25r3916: read: %w", err)
+		}
+		d.eof = true
+	}
 	req, fifoStatus := d.scratch[:1], d.scratch[1:3]
 	req[0] = modeReadReg | regFIFOStatus1
 	if err := d.Bus.Tx(i2cAddr, req, fifoStatus); err != nil {
@@ -540,7 +572,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 	}
 	fifoLen := int(fifoStatus[1]&0b1100_0000)<<2 | int(fifoStatus[0])
 	overflow := fifoStatus[1]&(0b1<<fifo_ovr) != 0
-	// Exclude the CRC bytes.
+	// Exclude the CRC bytes left in the FIFO.
 	if d.prot == ISO14443a && d.rxCRC {
 		fifoLen = max(fifoLen-2, 0)
 	}
@@ -550,13 +582,14 @@ func (d *Device) Read(buf []byte) (int, error) {
 	if err := d.Bus.Tx(i2cAddr, req, buf[:n]); err != nil {
 		return 0, fmt.Errorf("st25r3916: read: %w", err)
 	}
+	var err error
 	switch {
 	case overflow:
-		return n, errors.New("st25r3916: FIFO overflow")
+		err = errors.New("st25r3916: read: FIFO overflow")
 	case n == fifoLen:
-		return n, io.EOF
+		err = io.EOF
 	}
-	return n, nil
+	return n, err
 }
 
 func (d *Device) writeTXLen(bytes int, bits byte) error {
@@ -633,6 +666,16 @@ func (d *Device) writeReg(reg, val byte) error {
 	return d.Bus.Tx(i2cAddr, req, nil)
 }
 
+func (d *Device) commandAndWait(cmd byte, mask interrupts) (interrupts, error) {
+	if err := d.setInterruptMask(mask); err != nil {
+		return interrupts{}, err
+	}
+	if err := d.command(cmd); err != nil {
+		return interrupts{}, err
+	}
+	return d.waitForInterrupt(mask)
+}
+
 func (d *Device) command(cmd byte) error {
 	req := d.scratch[:1]
 	req[0] = modeCommand | cmd
@@ -641,6 +684,9 @@ func (d *Device) command(cmd byte) error {
 
 const (
 	i2cAddr = 0x50
+
+	txWaterLevel = 200
+	rxWaterLevel = 300
 
 	// Modes, see table 11 in the datasheet.
 	modeWriteReg = 0b00 << 6
@@ -654,46 +700,57 @@ const (
 
 	// Register addresses, space A. See table 17
 	// in the datasheet.
-	regIOConf1           = 0x00
-	regIOConf2           = 0x01
-	regOpCtrl            = 0x02
-	regModeDef           = 0x03
-	regBitRate           = 0x04
-	regISO14443AConf     = 0x05
-	regNFCIP1PassiveTarg = 0x08
-	regStreamModeDef     = 0x09
-	regAuxDef            = 0x0a
-	regRXConf1           = 0x0b
-	regRXConf2           = 0x0c
-	regRXConf3           = 0x0d
-	regRXConf4           = 0x0e
-	regMainIntr          = 0x1a
-	regTimerNFCIntr      = 0x1b
-	regErrorWakeupIntr   = 0x1c
-	regPassiveTargIntr   = 0x1d
-	regFIFOStatus1       = 0x1e
-	regFIFOStatus2       = 0x1f
-	regPassiveTarg       = 0x21
-	regNumTX1            = 0x22
-	regNumTX2            = 0x23
-	regADConvOut         = 0x25
-	regPassiveTargetMod  = 0x29
-	regExtFieldAct       = 0x2a
-	regExtFieldDeact     = 0x2b
-	regRegulatorCtrl     = 0x2c
-	regCapSensorCtrl     = 0x2f
-	regCapSensor         = 0x30
-	regICID              = 0x3f
+	regIOConf1             = 0x00
+	regIOConf2             = 0x01
+	regOpCtrl              = 0x02
+	regModeDef             = 0x03
+	regBitRate             = 0x04
+	regISO14443AConf       = 0x05
+	regNFCIP1PassiveTarg   = 0x08
+	regStreamModeDef       = 0x09
+	regAuxDef              = 0x0a
+	regRXConf1             = 0x0b
+	regRXConf2             = 0x0c
+	regRXConf3             = 0x0d
+	regRXConf4             = 0x0e
+	regMaskRecieveTimer    = 0x0f
+	regNoResponseTimer1    = 0x10
+	regNoResponseTimer2    = 0x11
+	regTimerEMVCtrl        = 0x12
+	regMaskMainIntr        = 0x16
+	regMaskTimerNFCIntr    = 0x17
+	regMaskErrorWakeupIntr = 0x18
+	regMaskPassiveTargIntr = 0x19
+	regMainIntr            = 0x1a
+	regTimerNFCIntr        = 0x1b
+	regErrorWakeupIntr     = 0x1c
+	regPassiveTargIntr     = 0x1d
+	regFIFOStatus1         = 0x1e
+	regFIFOStatus2         = 0x1f
+	regPassiveTarg         = 0x21
+	regNumTX1              = 0x22
+	regNumTX2              = 0x23
+	regADConvOut           = 0x25
+	regPassiveTargetMod    = 0x29
+	regExtFieldAct         = 0x2a
+	regExtFieldDeact       = 0x2b
+	regRegulatorCtrl       = 0x2c
+	regCapSensorCtrl       = 0x2f
+	regCapSensor           = 0x30
+	regICID                = 0x3f
 	// Register addresses, space B. See table 28.
-	spaceB             = 0b1 << 7
-	regEMDSupConf      = spaceB | 0x05
-	regCorrConf1       = spaceB | 0x0c
-	regCorrConf2       = spaceB | 0x0d
-	regResAMMod        = spaceB | 0x2a
-	regOvershootConf1  = spaceB | 0x30
-	regOvershootConf2  = spaceB | 0x31
-	regUndershootConf1 = spaceB | 0x32
-	regUndershootConf2 = spaceB | 0x33
+	spaceB              = 0b1 << 7
+	regEMDSupConf       = spaceB | 0x05
+	regCorrConf1        = spaceB | 0x0c
+	regCorrConf2        = spaceB | 0x0d
+	regFieldOnGuardTime = spaceB | 0x15
+	regAuxMod           = spaceB | 0x28
+	regResAMMod         = spaceB | 0x2a
+	regRegulatorDisp    = spaceB | 0x2c
+	regOvershootConf1   = spaceB | 0x30
+	regOvershootConf2   = spaceB | 0x31
+	regUndershootConf1  = spaceB | 0x32
+	regUndershootConf2  = spaceB | 0x33
 
 	// Commands, see table table 13.
 	// Note that the constant include the command mode prefix 0b11. For example,
@@ -703,6 +760,7 @@ const (
 	cmdTransmitWithCRC    = 0xc4
 	cmdTransmitWithoutCRC = 0xc5
 	cmdTransmitREQA       = 0xc6
+	cmdInitialFieldOn     = 0xc8
 	cmdGotoSense          = 0xcd
 	cmdGotoSleep          = 0xce
 	cmdResetRXGain        = 0xd5
@@ -717,8 +775,10 @@ const (
 	// IO configuration register 1 bits.
 	lf_clk_off = 0
 	out_cl     = 1
+	i2c_thd    = 4
 
 	// IO Configuration register 2 bits.
+	slow_up    = 0
 	io_drv_lvl = 2
 
 	// Mode definition bits.
@@ -750,8 +810,15 @@ const (
 	i_wl      = 6
 	i_osc     = 7
 
-	// Timer/NFC interrupt bits.
-	i_dct = 7
+	// Timer and NFC interrupt bits.
+	i_nfct = 0
+	i_cat  = 1
+	i_cac  = 2
+	i_eof  = 3
+	i_eon  = 4
+	i_gpe  = 5
+	i_nre  = 6
+	i_dct  = 7
 
 	// Error and wake-up interrupt bits.
 	i_wcap = 0
@@ -783,7 +850,10 @@ const (
 	no_crc_rx = 7
 
 	// NFCIP-1 passive target definition bits (table 32).
-	fdel = 4
+	d_106_ac_a   = 0
+	d_212_424_1r = 2
+	d_ac_ap2p    = 3
+	fdel         = 4
 
 	// Resistive AM modulation bits.
 	md_res = 0
@@ -803,4 +873,7 @@ const (
 	// FIFO status 1 bits.
 	fifo_ovr = 4
 	fifo_unf = 5
+
+	// Timer and EMV control bits.
+	gptc = 5
 )
