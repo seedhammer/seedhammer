@@ -48,9 +48,16 @@ type interrupts struct {
 	Error   byte
 }
 
-// General timeout to guard for hangs, excessive
-// receive times etc.
-const timeout = 1 * time.Second
+const (
+	// General timeout to guard for hangs, excessive
+	// receive times etc.
+	timeout = 1 * time.Second
+
+	// Card detection thresholds.
+	ampSens   = 2
+	phaseSens = 2
+	capSens   = 3
+)
 
 func (d *Device) Configure() error {
 	d.timer = time.NewTimer(0)
@@ -82,6 +89,10 @@ func (d *Device) Configure() error {
 		regCapSensorCtrl, 0, // Reset capacitive sensor calibration.
 		regStreamModeDef, modeISO15693, // Setup streaming mode for iso15693.
 		regTimerEMVCtrl, 0b001<<gptc, // Start timer at end of rx.
+		regWakeupCtrl, 0b100<<wut|0b1<<wur|0b1<<wam|0b1<<wph|0b1<<wcap, // Enable all card detection methods, set measure period.
+		regAmplitudeMeasCtrl, ampSens<<am_d|0b1<<am_ae|0b1<<am_aam|0b10<<am_aew, // Set amplitude measurement ∆am, auto-averaging reference.
+		regPhaseMeasCtrl, phaseSens<<pm_d|0b1<<pm_ae|0b1<<pm_aam|0b10<<pm_aew, // Set phase measurement ∆pm, auto-averaging reference.
+		regCapMeasCtrl, capSens<<cm_d|0b1<<cm_ae|0b1<<cm_aam|0b10<<cm_aew, // Set capacitance measurement ∆cm, auto-averaging reference.
 	); err != nil {
 		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
@@ -108,16 +119,7 @@ func (d *Device) Configure() error {
 	// 	fmt.Println("n", n)
 	// 	time.Sleep(300 * time.Millisecond)
 	// }
-	mask := interrupts{Main: 0b1 << i_osc}
-	if err := d.setInterruptMask(mask); err != nil {
-		return fmt.Errorf("st25r3916: configure: %w", err)
-	}
-	// Start oscillator, enable field detector.
-	if err := d.writeReg(regOpCtrl, 0b1<<en|0b01<<en_fd_c); err != nil {
-		return fmt.Errorf("st25r3916: configure: %w", err)
-	}
-	// Wait for ready.
-	if _, err := d.waitForInterrupt(mask); err != nil {
+	if err := d.enable(); err != nil {
 		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
 	// Adjust regulators.
@@ -131,6 +133,10 @@ func (d *Device) Configure() error {
 	// Then issue the adjust regulator command.
 	if _, err := d.commandAndWait(cmdAdjustRegulator, interrupts{Timer: 0b1 << i_dct}); err != nil {
 		return fmt.Errorf("st25r3916: configure: %w", err)
+	}
+	// Turn off.
+	if err := d.writeReg(regOpCtrl, 0); err != nil {
+		return fmt.Errorf("st25r3916: %w", err)
 	}
 	// // Measure supply
 	// for i := byte(0); i <= 4; i++ {
@@ -153,8 +159,29 @@ func (d *Device) Configure() error {
 	// 	fmt.Println(meas)
 	// 	time.Sleep(time.Second)
 	// }
-
 	return nil
+}
+
+func (d *Device) enable() error {
+	aux, err := d.readReg(regAuxDisp)
+	if err != nil {
+		return err
+	}
+	if aux&(0b1<<osc_ok) != 0 {
+		// Already enabled.
+		return nil
+	}
+	mask := interrupts{Main: 0b1 << i_osc}
+	if err := d.setInterruptMask(mask); err != nil {
+		return err
+	}
+	// Start oscillator.
+	if err := d.writeReg(regOpCtrl, 0b1<<en); err != nil {
+		return err
+	}
+	// Wait for oscillator stable.
+	_, err = d.waitForInterrupt(mask, timeout)
+	return err
 }
 
 func (d *Device) handleInterrupt(machine.Pin) {
@@ -296,22 +323,63 @@ func (d *Device) Listen() error {
 	return nil
 }
 
+func (d *Device) DetectCard() error {
+	if err := d.command(cmdStopAll); err != nil {
+		return fmt.Errorf("st25r3916: detect: %w", err)
+	}
+	if err := d.writeReg(regOpCtrl, 0b1<<wu); err != nil {
+		return fmt.Errorf("st25r3916: detect: %w", err)
+	}
+	mask := interrupts{Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph | 0b1<<wcap}
+	counter := 0
+	for {
+		if err := d.setInterruptMask(mask); err != nil {
+			return fmt.Errorf("st25r3916: detect: %w", err)
+		}
+		// wuCtrl, err := d.readReg(regWakeupCtrl)
+		// if err != nil {
+		// 	return fmt.Errorf("st25r3916: detect: %w", err)
+		// }
+		// fmt.Printf("wuCtrl %.8b\n", wuCtrl)
+		intrs, err := d.waitForInterrupt(mask, 0)
+		if err != nil {
+			return fmt.Errorf("st25r3916: detect: %w", err)
+		}
+		const startreg = 0x35
+		req, buf := d.scratch[:1], d.scratch[1:1+0x3e-startreg+1]
+		clear(buf)
+		req[0] = modeReadReg | startreg
+		if err := d.Bus.Tx(i2cAddr, req, buf); err != nil {
+			return fmt.Errorf("st25r3916: detect: %w", err)
+		}
+		fmt.Printf("%d: buf: %x intrs %.8b\n", counter, buf, intrs)
+		counter++
+	}
+	return nil
+}
+
 func (d *Device) RadioOff() error {
 	if err := d.command(cmdStopAll); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
-	// Disable transmitter and receiver.
-	if err := d.writeReg(regOpCtrl, 0b1<<en); err != nil {
+	// Turn off.
+	if err := d.writeReg(regOpCtrl, 0); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
 	return nil
 }
 
 func (d *Device) RadioOn(prot Protocol) error {
+	if err := d.enable(); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
 	if err := d.command(cmdStopAll); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
 	if err := d.configureProtocol(prot); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
+	if err := d.writeReg(regOpCtrl, 0b1<<en|0b01<<en_fd_c); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
 	intrs, err := d.commandAndWait(cmdInitialFieldOn,
@@ -326,9 +394,6 @@ func (d *Device) RadioOn(prot Protocol) error {
 	if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<rx_en|0b1<<tx_en|0b01<<en_fd_c); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
-
-	// Wait for the receiver to power up.
-	time.Sleep(5 * time.Millisecond)
 	return nil
 }
 
@@ -397,18 +462,23 @@ func (d *Device) Write(tx []byte) (int, error) {
 	return len(tx), nil
 }
 
-func (d *Device) waitForInterrupt(mask interrupts) (interrupts, error) {
+func (d *Device) waitForInterrupt(mask interrupts, timeout time.Duration) (interrupts, error) {
 	if !d.timer.Stop() {
 		select {
 		case <-d.timer.C:
 		default:
 		}
 	}
-	d.timer.Reset(timeout)
+	tim := d.timer.C
+	if timeout > 0 {
+		d.timer.Reset(timeout)
+	} else {
+		tim = nil
+	}
 	for {
 		select {
 		case <-d.interrupts:
-		case <-d.timer.C:
+		case <-tim:
 			return interrupts{}, errors.New("timeout")
 		}
 		intrs, err := d.interruptStatus()
@@ -560,7 +630,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 		if err := d.setInterruptMask(mask); err != nil {
 			return 0, err
 		}
-		if _, err := d.waitForInterrupt(mask); err != nil {
+		if _, err := d.waitForInterrupt(mask, timeout); err != nil {
 			return 0, fmt.Errorf("st25r3916: read: %w", err)
 		}
 		d.eof = true
@@ -673,7 +743,7 @@ func (d *Device) commandAndWait(cmd byte, mask interrupts) (interrupts, error) {
 	if err := d.command(cmd); err != nil {
 		return interrupts{}, err
 	}
-	return d.waitForInterrupt(mask)
+	return d.waitForInterrupt(mask, timeout)
 }
 
 func (d *Device) command(cmd byte) error {
@@ -737,6 +807,11 @@ const (
 	regRegulatorCtrl       = 0x2c
 	regCapSensorCtrl       = 0x2f
 	regCapSensor           = 0x30
+	regAuxDisp             = 0x31
+	regWakeupCtrl          = 0x32
+	regAmplitudeMeasCtrl   = 0x33
+	regPhaseMeasCtrl       = 0x37
+	regCapMeasCtrl         = 0x3b
 	regICID                = 0x3f
 	// Register addresses, space B. See table 28.
 	spaceB              = 0b1 << 7
@@ -769,6 +844,7 @@ const (
 	cmdCalibrateCapSensor = 0xdd
 	cmdMeasureCap         = 0xde
 	cmdMeasureSupply      = 0xdf
+	cmdStartWakeupTimer   = 0xe1
 	cmdSpaceBAccess       = 0xfb
 	cmdTestAccess         = 0xfc
 
@@ -876,4 +952,33 @@ const (
 
 	// Timer and EMV control bits.
 	gptc = 5
+
+	// Wakeup timer control bits.
+	wcap = 0
+	wph  = 1
+	wam  = 2
+	wto  = 3
+	wut  = 4
+	wur  = 7
+
+	// Amplitude measurement configuration bits (table 105).
+	am_ae  = 0
+	am_aew = 1
+	am_aam = 3
+	am_d   = 4
+
+	// Phase measurement configuration bits (table 109).
+	pm_ae  = 0
+	pm_aew = 1
+	pm_aam = 3
+	pm_d   = 4
+
+	// Capacitance measurement configuration bits (table 113).
+	cm_ae  = 0
+	cm_aew = 1
+	cm_aam = 3
+	cm_d   = 4
+
+	// Auxillary display bits (table 98).
+	osc_ok = 4
 )
