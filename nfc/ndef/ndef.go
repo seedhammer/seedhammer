@@ -41,25 +41,36 @@ func (r *Reader) Read(buf []byte) (int, error) {
 	if _, err := r.r.Discard(discard); err != nil {
 		return 0, fmt.Errorf("ndef: %w", err)
 	}
-	typ, err := r.r.ReadByte()
-	if err != nil {
-		return 0, fmt.Errorf("ndef: %w", err)
-	}
-	length8, err := r.r.ReadByte()
-	if err != nil {
-		return 0, fmt.Errorf("ndef: %w", err)
-	}
-	length := int(length8)
-	if length8 == 0xff {
-		// 2-byte length.
-		l16 := r.scratch[:2]
-		if _, err := io.ReadFull(r.r, l16); err != nil {
+	// Read until a NDEF message is reached.
+	var length int
+	for {
+		typ, err := r.r.ReadByte()
+		if err != nil {
 			return 0, fmt.Errorf("ndef: %w", err)
 		}
-		length = int(binary.BigEndian.Uint16(l16))
+		length8, err := r.r.ReadByte()
+		if err != nil {
+			return 0, fmt.Errorf("ndef: %w", err)
+		}
+		length = int(length8)
+		if length8 == 0xff {
+			// 2-byte length.
+			l16 := r.scratch[:2]
+			if _, err := io.ReadFull(r.r, l16); err != nil {
+				return 0, fmt.Errorf("ndef: %w", err)
+			}
+			length = int(binary.BigEndian.Uint16(l16))
+		}
+		if typ == ndefType {
+			break
+		}
+		// Skip record.
+		if _, err := r.r.Discard(length); err != nil {
+			return 0, fmt.Errorf("ndef: %w", err)
+		}
 	}
-	if typ != ndefType || length < 6 {
-		return 0, errors.New("ndef: unsupported type")
+	if length < 6 {
+		return 0, fmt.Errorf("ndef: record too short")
 	}
 	if len(buf) < length {
 		return 0, io.ErrShortBuffer
@@ -76,7 +87,7 @@ func (r *Reader) Read(buf []byte) (int, error) {
 	switch mimeType := msg[3]; mimeType {
 	case 'T':
 		header := payload[0]
-		if header&(0b1<<7) != 0 { // Only support UTF-8
+		if header&(0b1<<7) != 0 { // Don't bother with UTF-16.
 			return 0, errors.New("ndef: unsupported text encoding")
 		}
 		payload = payload[1:]

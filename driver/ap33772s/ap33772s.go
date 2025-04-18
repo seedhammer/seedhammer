@@ -13,13 +13,17 @@ import (
 )
 
 type Device struct {
-	bus        *machine.I2C
+	bus        Bus
 	intr       machine.Pin
 	interrupts chan struct{}
 	scratch    [1 + (nSPRs+nEPRs)*2]byte
 }
 
-func New(bus *machine.I2C, intr machine.Pin) *Device {
+type Bus interface {
+	Tx(addr uint16, w, r []byte) error
+}
+
+func New(bus Bus, intr machine.Pin) *Device {
 	return &Device{
 		bus:  bus,
 		intr: intr,

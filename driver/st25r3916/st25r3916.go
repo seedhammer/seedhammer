@@ -15,7 +15,7 @@ import (
 )
 
 type Device struct {
-	Bus        *machine.I2C
+	Bus        Bus
 	Int        machine.Pin
 	txBits     byte
 	txCRC      bool
@@ -28,6 +28,10 @@ type Device struct {
 	scratch [100]byte
 }
 
+type Bus interface {
+	Tx(addr uint16, w, r []byte) error
+}
+
 // FIFOSize is the number of bytes that can be
 // read without risking overflow
 const FIFOSize = 512 - 2 // Make room for the CRC bytes.
@@ -37,7 +41,7 @@ type Protocol int
 const (
 	ISO15693 Protocol = iota
 	ISO14443a
-	CardDetect
+	Detect
 )
 
 // interrupts represent a set of interrupt statuses or
@@ -135,8 +139,7 @@ func (d *Device) Configure() error {
 	if _, err := d.commandAndWait(cmdAdjustRegulator, interrupts{Timer: 0b1 << i_dct}); err != nil {
 		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
-	// Turn off.
-	if err := d.writeReg(regOpCtrl, 0); err != nil {
+	if err := d.RadioOff(); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
 	// // Measure supply
@@ -324,7 +327,7 @@ func (d *Device) Listen() error {
 	return nil
 }
 
-func (d *Device) DetectCard() error {
+func (d *Device) Detect() error {
 	if _, err := d.waitForInterrupt(0); err != nil {
 		return fmt.Errorf("st25r3916: detect: %w", err)
 	}
@@ -350,7 +353,7 @@ func (d *Device) RadioOn(prot Protocol) error {
 	d.SetTxBits(0)
 	d.prot = prot
 	switch d.prot {
-	case CardDetect:
+	case Detect:
 		if err := d.writeReg(regOpCtrl, 0b1<<wu); err != nil {
 			return fmt.Errorf("st25r3916: detect: %w", err)
 		}

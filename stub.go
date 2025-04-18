@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"seedhammer.com/bip39"
 	"seedhammer.com/driver/ap33772s"
 	"seedhammer.com/driver/st25r3916"
 	"seedhammer.com/nfc/iso14443a"
@@ -101,11 +102,11 @@ func run() error {
 	defer nfc.RadioOff()
 	contents := make([]byte, 8*1024)
 	for {
-		if err := nfc.RadioOn(st25r3916.CardDetect); err != nil {
+		if err := nfc.RadioOn(st25r3916.Detect); err != nil {
 			return err
 		}
 		for {
-			if err := nfc.DetectCard(); err != nil {
+			if err := nfc.Detect(); err != nil {
 				return err
 			}
 			now := time.Now()
@@ -145,6 +146,8 @@ func run() error {
 			continue
 		}
 		fmt.Println("Succes!", string(contents[:n]))
+		m, err := bip39.Parse(contents[:n])
+		fmt.Println(m)
 	}
 	return nil
 }

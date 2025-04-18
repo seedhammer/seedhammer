@@ -1578,13 +1578,6 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 					fmt.Println("quitting engraving")
 					close(quit)
 					quit = nil
-				} else {
-					quit = make(chan struct{})
-					go func() {
-						if err := DebugEngrave(ctx.Platform, quit); err != nil {
-							fmt.Println("engraver err:", err)
-						}
-					}()
 				}
 				continue
 				ws := &ConfirmWarningScreen{
@@ -1617,9 +1610,51 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 			e, ok := inp.Next(ctx,
 				ButtonFilter(Left),
 				ButtonFilter(Right),
+				ScanFilter(),
 			)
 			if !ok {
 				break
+			}
+			if e, ok := e.AsScanEvent(); ok {
+				switch seed := e.Content.(type) {
+				case bip39.Mnemonic:
+					if quit != nil {
+						break
+					}
+					quit = make(chan struct{})
+					go func() {
+						err := func() error {
+							mfp, err := masterFingerprintFor(seed, &chaincfg.MainNetParams)
+							if err != nil {
+								return err
+							}
+							params := ctx.Platform.EngraverParams()
+							const sz = backup.SquarePlate
+							keySide, err := backup.EngraveSeed(params, backup.Seed{
+								KeyIdx:            0,
+								Mnemonic:          seed,
+								Keys:              1,
+								MasterFingerprint: mfp,
+								Font:              constant.Font,
+								Size:              sz,
+							})
+							if err != nil {
+								return err
+							}
+							e, err := ctx.Platform.Engraver()
+							if err != nil {
+								return err
+							}
+							defer e.Close()
+							log.Println("opened engraver, engraving...")
+							defer log.Println("done engraving...")
+							return e.Engrave(sz, keySide, quit)
+						}()
+						if err != nil {
+							log.Printf("engrave error: %v", err)
+						}
+					}()
+				}
 			}
 			if e, ok := e.AsButton(); ok {
 				switch e.Button {

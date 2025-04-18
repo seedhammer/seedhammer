@@ -41,6 +41,7 @@ type Platform struct {
 
 	lcdDev   *ili9488.Device
 	engraver gui.Engraver
+	scans    chan any
 	touch    struct {
 		dev     *ft6x36.Device
 		ints    chan struct{}
@@ -109,7 +110,7 @@ const (
 	// The duration of a needle cycle turned on.
 	needleActivation = 5 * time.Millisecond
 	// needleCurrentLimit in millisamperes (mA).
-	needleCurrentLimit = 3_000
+	needleCurrentLimit = 13_000
 	// needleSenseScale is the current limit
 	// in milliamperes (mA) that corresponds to a
 	// 100% PWM duty cycle output to NEEDLE_VREF.
@@ -158,8 +159,13 @@ func Init() (*Platform, error) {
 	if err := dataI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: DATA_SDA, SCL: DATA_SCL}); err != nil {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
+	mi2c := &multiplexI2C{
+		Bus: make(chan *machine.I2C, 1),
+	}
+	mi2c.Bus <- dataI2C
 	p := &Platform{
 		wakeups: make(chan struct{}, 1),
+		scans:   make(chan any, 1),
 		timer:   time.NewTimer(0),
 	}
 	for i := range p.display.buffers {
@@ -174,7 +180,7 @@ func Init() (*Platform, error) {
 		return nil, err
 	}
 	p.lcdDev = lcd
-	e, err := configEngraver()
+	e, err := configEngraver(mi2c)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +189,7 @@ func Init() (*Platform, error) {
 	go e.engrave(engrave.Commands(), nil)
 
 	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
-		return nil, fmt.Errorf("touch I2C: %w", err)
+		return nil, fmt.Errorf("touch: %w", err)
 	}
 
 	touch := ft6x36.New(touchI2C)
@@ -192,58 +198,16 @@ func Init() (*Platform, error) {
 	p.touch.ints = make(chan struct{}, 1)
 	p.touch.dev = touch
 
-	nfc := &st25r3916.Device{Bus: dataI2C, Int: NFC_INT}
+	nfc := &st25r3916.Device{Bus: mi2c, Int: NFC_INT}
 	if err := nfc.Configure(); err != nil {
-		return nil, fmt.Errorf("data I2C: %w", err)
+		return nil, fmt.Errorf("nfc: %w", err)
 	}
-	// return nil, func() error {
-	// 	fmt.Println("******* Reading NFC tag ******")
-	// 	const prot = st25r3916.ISO14443a
-	// 	// const prot = st25r3916.ISO15693
-	// 	if err := nfc.RadioOn(prot); err != nil {
-	// 		return err
-	// 	}
-	// 	defer nfc.RadioOff()
-	// 	// trans := iso15693.NewTransceiver(nfc, st25r3916.FIFOSize)
-	// 	// tag, err := iso15693.Open(trans, trans.DecodedSize())
-	// 	tag, err := iso14443a.Open(nfc)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	// fmt.Println("tag.UID", tag.UID)
-	// 	// buf := make([]byte, 1024)
-	// 	// n, err := tag.Read(buf)
-	// 	// if err != nil && !errors.Is(err, io.EOF) {
-	// 	// 	return err
-	// 	// }
-	// 	// fmt.Println("data", n, buf[:n])
-	// 	contents := ndef.NewReader(tag)
-	// 	if err := contents.Next(); err != nil {
-	// 		return err
-	// 	}
-	// 	// buf := make([]byte, clrc663.FIFOSize)
-	// 	// // buf := make([]byte, 32)
-	// 	// accum := new(bytes.Buffer)
-	// 	// for {
-	// 	// 	n, err := tag.Read(buf)
-	// 	// 	if err != nil {
-	// 	// 		if errors.Is(err, io.EOF) {
-	// 	// 			break
-	// 	// 		}
-	// 	// 		log.Printf("nfcread : %v\n", err)
-	// 	// 		break
-	// 	// 	}
-	// 	// 	fmt.Println("data", n, buf[:n])
-	// 	// 	accum.Write(buf[:n])
-	// 	// }
-	// 	// all := accum.Bytes()
-	// 	// return fmt.Errorf("NFC done (%d): %v", len(all), all)
-	// 	return errors.New("not done yet?")
-	// }()
+	// Run NFC poller in the background.
+	go newNFCPoller(nfc, p.scans).Run()
 	return p, nil
 }
 
-func configEngraver() (*engraver, error) {
+func configEngraver(i2cbus *multiplexI2C) (*engraver, error) {
 	DRV_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	DRV_ENABLE.Set(true)
 	vrefCh, err := needleVREFPWM.Channel(NEEDLE_VREF)
@@ -264,7 +228,7 @@ func configEngraver() (*engraver, error) {
 	}); err != nil {
 		return nil, err
 	}
-	usbpd := ap33772s.New(dataI2C, USBPD_INT)
+	usbpd := ap33772s.New(i2cbus, USBPD_INT)
 	if err := usbpd.Configure(); err != nil {
 		return nil, err
 	}
@@ -349,6 +313,10 @@ func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Even
 	p.timer.Reset(time.Until(deadline))
 	for {
 		select {
+		case content := <-p.scans:
+			return append(evts, gui.ScanEvent{
+				Content: content,
+			}.Event())
 		case <-p.timer.C:
 			return evts
 		case <-p.wakeups:
@@ -516,4 +484,15 @@ func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
 	d.fb.Rect = image.Rect(d.minx, d.row, d.maxx, maxy)
 	d.row = maxy
 	return &d.fb, true
+}
+
+type multiplexI2C struct {
+	Bus chan *machine.I2C
+}
+
+func (m *multiplexI2C) Tx(addr uint16, tx, rx []byte) error {
+	bus := <-m.Bus
+	err := bus.Tx(addr, tx, rx)
+	m.Bus <- bus
+	return err
 }

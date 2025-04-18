@@ -50,6 +50,12 @@ func FrameFilter() Filter {
 	}
 }
 
+func ScanFilter() Filter {
+	return Filter{
+		typ: scanEvent,
+	}
+}
+
 func RuneFilter() Filter {
 	return Filter{
 		typ: runeEvent,
@@ -87,6 +93,10 @@ type PointerEvent struct {
 	Pos     image.Point
 }
 
+type ScanEvent struct {
+	Content any
+}
+
 type Event struct {
 	typ  eventKind
 	data [3]uint32
@@ -109,6 +119,7 @@ const (
 	frameEvent
 	runeEvent
 	pointerEvent
+	scanEvent
 )
 
 type ButtonEvent struct {
@@ -185,6 +196,12 @@ func (s SDCardEvent) Event() Event {
 	return e
 }
 
+func (s ScanEvent) Event() Event {
+	e := Event{typ: scanEvent}
+	e.refs[0] = s.Content
+	return e
+}
+
 const (
 	pressedBit = 0b1 << iota
 	enteredBit
@@ -244,6 +261,15 @@ func (e Event) AsSDCard() (SDCardEvent, bool) {
 	}
 	return SDCardEvent{
 		Inserted: e.data[0] != 0,
+	}, true
+}
+
+func (e Event) AsScanEvent() (ScanEvent, bool) {
+	if e.typ != scanEvent {
+		return ScanEvent{}, false
+	}
+	return ScanEvent{
+		Content: e.refs[0],
 	}, true
 }
 
