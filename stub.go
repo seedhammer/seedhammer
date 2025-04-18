@@ -3,6 +3,7 @@ package main
 
 import (
 	"device/rp"
+	"errors"
 	"fmt"
 	"io"
 	"machine"
@@ -138,12 +139,12 @@ func run() error {
 		// }
 		nr := ndef.NewReader(r)
 		n, err := nr.Read(contents)
-		if err != nil {
+		if err != nil && !errors.Is(err, io.EOF) {
 			// Ignore read errors.
 			fmt.Println("ndef", err)
 			continue
 		}
-		fmt.Println("Succes!", contents[:n])
+		fmt.Println("Succes!", string(contents[:n]))
 	}
 	return nil
 }

@@ -133,7 +133,7 @@ const (
 	// pageSize in bytes.
 	pageSize = 4
 	// The start page of user memory.
-	memStartPage = 4
+	memStartPage = 3
 
 	casLevel1 = 0x93
 	casLevel2 = 0x95
