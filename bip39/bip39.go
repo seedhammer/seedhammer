@@ -137,6 +137,17 @@ func (m Mnemonic) Entropy() []byte {
 	return ent
 }
 
+func (m Mnemonic) String() string {
+	s := new(strings.Builder)
+	for _, w := range m {
+		if s.Len() > 0 {
+			s.WriteByte(' ')
+		}
+		s.WriteString(LabelFor(w))
+	}
+	return s.String()
+}
+
 func splitMnemonic(m Mnemonic) (entropy []byte, checksum byte) {
 	ent := big.NewInt(0)
 	const wordBits = 11
@@ -189,20 +200,39 @@ func MnemonicSeed(m Mnemonic, password string) []byte {
 	return pbkdf2.Key([]byte(sentence.String()), []byte("mnemonic"+password), 2048, 64, sha512.New)
 }
 
+func Parse(buf []byte) (Mnemonic, error) {
+	var m Mnemonic
+	for w := range bytes.SplitSeq(buf, []byte(" ")) {
+		if len(m) == 24 {
+			return nil, fmt.Errorf("bip39: parse: mnemonic too long")
+		}
+		closest, valid := ClosestWord(string(w))
+		if !valid || len(w) < 3 ||
+			!bytes.HasPrefix([]byte(LabelFor(closest)), w) {
+			return nil, fmt.Errorf("bip39: parse: unknown word: %q", w)
+		}
+		m = append(m, closest)
+	}
+	if !m.Valid() {
+		return nil, ErrInvalidChecksum
+	}
+	return m, nil
+}
+
 func ParseMnemonic(mnemonic string) (Mnemonic, error) {
 	words := strings.Split(mnemonic, " ")
-	bip39s := make(Mnemonic, len(words))
+	m := make(Mnemonic, len(words))
 	for i, w := range words {
 		closest, valid := ClosestWord(w)
 		if !valid || LabelFor(closest) != w {
 			return nil, fmt.Errorf("bip39: unknown word: %q", w)
 		}
-		bip39s[i] = closest
+		m[i] = closest
 	}
-	if !bip39s.Valid() {
+	if !m.Valid() {
 		return nil, ErrInvalidChecksum
 	}
-	return bip39s, nil
+	return m, nil
 }
 
 func RandomWord() Word {

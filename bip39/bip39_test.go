@@ -3,6 +3,8 @@ package bip39
 import (
 	"bytes"
 	"encoding/hex"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -10,7 +12,7 @@ func TestVectors(t *testing.T) {
 	for _, v := range testVectors {
 		m, err := ParseMnemonic(v.mnemonic)
 		if err != nil {
-			t.Fatalf("mnemonic %q failed to parse: %v", v.mnemonic, err)
+			t.Fatalf("ParseMnemonic failed to parse %q: %v", v.mnemonic, err)
 		}
 		e, err := hex.DecodeString(v.entropy)
 		if err != nil {
@@ -27,6 +29,31 @@ func TestVectors(t *testing.T) {
 		if want := ChecksumWord(ent); want != checkWord {
 			t.Errorf("checksum word mismatch, got %d, want %d", checkWord, want)
 		}
+		m2, err := Parse([]byte(v.mnemonic))
+		if err != nil {
+			t.Fatalf("Parse failed to parse %q: %v", v.mnemonic, err)
+		}
+		if !reflect.DeepEqual(m, m2) {
+			t.Fatalf("Parse parsed differently than ParseMnemonic for %q", v.mnemonic)
+		}
+		shortWords := new(bytes.Buffer)
+		// Shorten words to 3 or 4 characters.
+		for w := range strings.SplitSeq(v.mnemonic, " ") {
+			if len(w) > 4 {
+				w = w[:4]
+			}
+			if shortWords.Len() > 0 {
+				shortWords.WriteByte(' ')
+			}
+			shortWords.WriteString(w)
+		}
+		m3, err := Parse(shortWords.Bytes())
+		if err != nil {
+			t.Fatalf("ParseMnemonic failed to parse %q: %v", v.mnemonic, err)
+		}
+		if !reflect.DeepEqual(m, m3) {
+			t.Fatalf("Parse parsed differently than ParseMnemonic for %q", v.mnemonic)
+		}
 	}
 }
 
@@ -35,9 +62,11 @@ func TestInvalidSeeds(t *testing.T) {
 		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon",
 	}
 	for _, test := range tests {
-		_, err := ParseMnemonic(test)
-		if err == nil {
-			t.Errorf("successfully parsed invalid seed %q", test)
+		if _, err := ParseMnemonic(test); err == nil {
+			t.Errorf("ParseMnemonic parsed invalid seed %q", test)
+		}
+		if _, err := Parse([]byte(test)); err == nil {
+			t.Errorf("Parse parsed invalid seed %q", test)
 		}
 	}
 }
