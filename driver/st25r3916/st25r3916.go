@@ -55,8 +55,8 @@ const (
 
 	// Card detection thresholds.
 	ampSens   = 2
-	phaseSens = 2
-	capSens   = 3
+	phaseSens = 1
+	// capSens   = 3
 )
 
 func (d *Device) Configure() error {
@@ -86,22 +86,22 @@ func (d *Device) Configure() error {
 			0b1<<d_212_424_1r|0b1<<d_ac_ap2p, // Disable unused passive detection modes.
 		regPassiveTargetMod, 0x5f, // Reduce RFO resistance in modulated state.
 		regEMDSupConf, 0b1<<rx_start_emv, // Enable start on first 4 bits.
-		regCapSensorCtrl, 0, // Reset capacitive sensor calibration.
+		// regCapSensorCtrl, 0, // Reset capacitive sensor calibration.
 		regStreamModeDef, modeISO15693, // Setup streaming mode for iso15693.
 		regTimerEMVCtrl, 0b001<<gptc, // Start timer at end of rx.
-		regWakeupCtrl, 0b100<<wut|0b1<<wur|0b1<<wam|0b1<<wph|0b1<<wcap, // Enable all card detection methods, set measure period.
+		regWakeupCtrl, 0b010<<wut|0b1<<wur|0b1<<wam|0b1<<wph, // Enable all card detection methods, set measure period.
 		regAmplitudeMeasCtrl, ampSens<<am_d|0b1<<am_ae|0b1<<am_aam|0b10<<am_aew, // Set amplitude measurement ∆am, auto-averaging reference.
 		regPhaseMeasCtrl, phaseSens<<pm_d|0b1<<pm_ae|0b1<<pm_aam|0b10<<pm_aew, // Set phase measurement ∆pm, auto-averaging reference.
-		regCapMeasCtrl, capSens<<cm_d|0b1<<cm_ae|0b1<<cm_aam|0b10<<cm_aew, // Set capacitance measurement ∆cm, auto-averaging reference.
+		// regCapMeasCtrl, capSens<<cm_d|0b1<<cm_ae|0b1<<cm_aam|0b10<<cm_aew, // Set capacitance measurement ∆cm, auto-averaging reference.
 	); err != nil {
 		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
-	if err := d.command(cmdCalibrateCapSensor); err != nil {
-		return fmt.Errorf("st25r3916: configure: %w", err)
-	}
-	// Calibration takes up to 3 ms. We can't wait for command complete
-	// interrupt because the oscillator is not yet running.
-	time.Sleep(3 * time.Millisecond)
+	// if err := d.command(cmdCalibrateCapSensor); err != nil {
+	// 	return fmt.Errorf("st25r3916: configure: %w", err)
+	// }
+	// // Calibration takes up to 3 ms. We can't wait for command complete
+	// // interrupt because the oscillator is not yet running.
+	// time.Sleep(3 * time.Millisecond)
 	// n, err := d.readReg(regCapSensor)
 	// if err != nil {
 	// 	panic(err)

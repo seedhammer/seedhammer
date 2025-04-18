@@ -8,6 +8,7 @@ import (
 	"io"
 	"machine"
 	"os"
+	"time"
 
 	"seedhammer.com/driver/ap33772s"
 	"seedhammer.com/driver/st25r3916"
@@ -91,13 +92,13 @@ func run() error {
 	if err := nfc.Configure(); err != nil {
 		return err
 	}
-	// for {
-	// 	if err := nfc.DetectCard(); err != nil {
-	// 		return err
-	// 	}
-	// 	fmt.Println("card detected")
-	// 	time.Sleep(500 * time.Millisecond)
-	// }
+	for {
+		if err := nfc.DetectCard(); err != nil {
+			return err
+		}
+		fmt.Println("card detected")
+		time.Sleep(500 * time.Millisecond)
+	}
 	// nfc.SetCRC(true, true)
 	// return nfc.Listen()
 	// prot := st25r3916.ISO14443a
