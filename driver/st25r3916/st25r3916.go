@@ -37,6 +37,7 @@ type Protocol int
 const (
 	ISO15693 Protocol = iota
 	ISO14443a
+	CardDetect
 )
 
 // interrupts represent a set of interrupt statuses or
@@ -51,11 +52,11 @@ type interrupts struct {
 const (
 	// General timeout to guard for hangs, excessive
 	// receive times etc.
-	timeout = 1 * time.Second
+	timeout = 500 * time.Millisecond
 
 	// Card detection thresholds.
 	ampSens   = 2
-	phaseSens = 1
+	phaseSens = 2
 	// capSens   = 3
 )
 
@@ -180,7 +181,7 @@ func (d *Device) enable() error {
 		return err
 	}
 	// Wait for oscillator stable.
-	_, err = d.waitForInterrupt(mask, timeout)
+	_, err = d.waitForInterrupt(timeout)
 	return err
 }
 
@@ -273,7 +274,7 @@ func (d *Device) Listen() error {
 			return err
 		}
 		<-d.interrupts
-		intrs, err := d.interruptStatus()
+		intrs, _, err := d.interruptStatus()
 		if err != nil {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
@@ -324,45 +325,20 @@ func (d *Device) Listen() error {
 }
 
 func (d *Device) DetectCard() error {
-	if err := d.command(cmdStopAll); err != nil {
+	if _, err := d.waitForInterrupt(0); err != nil {
 		return fmt.Errorf("st25r3916: detect: %w", err)
 	}
-	if err := d.writeReg(regOpCtrl, 0b1<<wu); err != nil {
-		return fmt.Errorf("st25r3916: detect: %w", err)
-	}
-	mask := interrupts{Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph | 0b1<<wcap}
-	counter := 0
-	for {
-		if err := d.setInterruptMask(mask); err != nil {
-			return fmt.Errorf("st25r3916: detect: %w", err)
-		}
-		// wuCtrl, err := d.readReg(regWakeupCtrl)
-		// if err != nil {
-		// 	return fmt.Errorf("st25r3916: detect: %w", err)
-		// }
-		// fmt.Printf("wuCtrl %.8b\n", wuCtrl)
-		intrs, err := d.waitForInterrupt(mask, 0)
-		if err != nil {
-			return fmt.Errorf("st25r3916: detect: %w", err)
-		}
-		const startreg = 0x35
-		req, buf := d.scratch[:1], d.scratch[1:1+0x3e-startreg+1]
-		clear(buf)
-		req[0] = modeReadReg | startreg
-		if err := d.Bus.Tx(i2cAddr, req, buf); err != nil {
-			return fmt.Errorf("st25r3916: detect: %w", err)
-		}
-		fmt.Printf("%d: buf: %x intrs %.8b\n", counter, buf, intrs)
-		counter++
-	}
+	// const startreg = 0x35
+	// req, buf := d.scratch[:1], d.scratch[1:1+0x3e-startreg+1]
+	// req[0] = modeReadReg | startreg
+	// if err := d.Bus.Tx(i2cAddr, req, buf); err != nil {
+	// 	return fmt.Errorf("st25r3916: detect: %w", err)
+	// }
+	// fmt.Printf("buf: %x intrs %.8b\n", buf, intrs)
 	return nil
 }
 
 func (d *Device) RadioOff() error {
-	if err := d.command(cmdStopAll); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
-	}
-	// Turn off.
 	if err := d.writeReg(regOpCtrl, 0); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
@@ -370,29 +346,43 @@ func (d *Device) RadioOff() error {
 }
 
 func (d *Device) RadioOn(prot Protocol) error {
-	if err := d.enable(); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
-	}
-	if err := d.command(cmdStopAll); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
-	}
-	if err := d.configureProtocol(prot); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
-	}
-	if err := d.writeReg(regOpCtrl, 0b1<<en|0b01<<en_fd_c); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
-	}
-	intrs, err := d.commandAndWait(cmdInitialFieldOn,
-		interrupts{Timer: 0b1<<i_cac | 0b1<<i_cat})
-	if err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
-	}
-	if intrs.Timer&(0b1<<i_cat) == 0 {
-		return fmt.Errorf("st25r3916: radio: field conflict", err)
-	}
-	// Enable receiver.
-	if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<rx_en|0b1<<tx_en|0b01<<en_fd_c); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+	d.SetCRC(true, true)
+	d.SetTxBits(0)
+	d.prot = prot
+	switch d.prot {
+	case CardDetect:
+		if err := d.writeReg(regOpCtrl, 0b1<<wu); err != nil {
+			return fmt.Errorf("st25r3916: detect: %w", err)
+		}
+		mask := interrupts{Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph | 0b1<<wcap}
+		if err := d.setInterruptMask(mask); err != nil {
+			return fmt.Errorf("st25r3916: detect: %w", err)
+		}
+	default:
+		if err := d.enable(); err != nil {
+			return fmt.Errorf("st25r3916: radio: %w", err)
+		}
+		if err := d.command(cmdStopAll); err != nil {
+			return fmt.Errorf("st25r3916: radio: %w", err)
+		}
+		if err := d.configureProtocol(prot); err != nil {
+			return fmt.Errorf("st25r3916: radio: %w", err)
+		}
+		if err := d.writeReg(regOpCtrl, 0b1<<en|0b01<<en_fd_c); err != nil {
+			return fmt.Errorf("st25r3916: radio: %w", err)
+		}
+		intrs, err := d.commandAndWait(cmdInitialFieldOn,
+			interrupts{Timer: 0b1<<i_cac | 0b1<<i_cat})
+		if err != nil {
+			return fmt.Errorf("st25r3916: radio: %w", err)
+		}
+		if intrs.Timer&(0b1<<i_cat) == 0 {
+			return fmt.Errorf("st25r3916: radio: field conflict", err)
+		}
+		// Enable receiver.
+		if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<rx_en|0b1<<tx_en|0b01<<en_fd_c); err != nil {
+			return fmt.Errorf("st25r3916: %w", err)
+		}
 	}
 	return nil
 }
@@ -455,6 +445,14 @@ func (d *Device) Write(tx []byte) (int, error) {
 		}
 		transmitCmd = cmdTransmitWithoutCRC
 	}
+	mask := interrupts{
+		Main:  0b1 << i_rxe,
+		Timer: 0b1 << i_nre,
+		Error: 0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
+	}
+	if err := d.setInterruptMask(mask); err != nil {
+		return 0, err
+	}
 	if err := d.command(transmitCmd); err != nil {
 		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 	}
@@ -462,7 +460,7 @@ func (d *Device) Write(tx []byte) (int, error) {
 	return len(tx), nil
 }
 
-func (d *Device) waitForInterrupt(mask interrupts, timeout time.Duration) (interrupts, error) {
+func (d *Device) waitForInterrupt(timeout time.Duration) (interrupts, error) {
 	if !d.timer.Stop() {
 		select {
 		case <-d.timer.C:
@@ -481,15 +479,31 @@ func (d *Device) waitForInterrupt(mask interrupts, timeout time.Duration) (inter
 		case <-tim:
 			return interrupts{}, errors.New("timeout")
 		}
-		intrs, err := d.interruptStatus()
+		intrs, mask, err := d.interruptStatus()
 		if err != nil {
 			return interrupts{}, err
 		}
-		if err != nil ||
-			intrs.Main&mask.Main != 0 ||
-			intrs.Timer&mask.Timer != 0 ||
-			intrs.Passive&mask.Passive != 0 ||
-			intrs.Error&mask.Error != 0 {
+		intrs.Main &= mask.Main
+		intrs.Timer &= mask.Timer
+		intrs.Passive &= mask.Passive
+		intrs.Error &= mask.Error
+		switch {
+		case intrs.Error&(0b1<<i_crc) != 0:
+			err = errors.New("CRC error")
+		case intrs.Error&(0b1<<i_par) != 0:
+			err = errors.New("parity error")
+		case intrs.Error&(0b1<<i_err2) != 0:
+			err = errors.New("soft framing error")
+		case intrs.Error&(0b1<<i_err1) != 0:
+			err = errors.New("hard framing error")
+		case intrs.Main&(0b1<<i_col) != 0:
+			// We don't implement anti-collision loops yet,
+			// so for now treat collisions as errors.
+			err = errors.New("collision")
+		case intrs.Timer&(0b1<<i_nre) != 0:
+			err = errors.New("response timeout")
+		}
+		if err != nil || intrs != (interrupts{}) {
 			return intrs, err
 		}
 	}
@@ -497,7 +511,7 @@ func (d *Device) waitForInterrupt(mask interrupts, timeout time.Duration) (inter
 
 func (d *Device) setInterruptMask(mask interrupts) error {
 	// Clear interrupt status.
-	if _, err := d.interruptStatus(); err != nil {
+	if _, _, err := d.interruptStatus(); err != nil {
 		return err
 	}
 	select {
@@ -507,50 +521,38 @@ func (d *Device) setInterruptMask(mask interrupts) error {
 	req := d.scratch[:5]
 	req[0] = regMaskMainIntr
 	req[regMaskMainIntr-regMaskMainIntr+1] = ^mask.Main
-	// Always respond to no response interrupts.
-	req[regMaskTimerNFCIntr-regMaskMainIntr+1] = ^(mask.Timer | 0b1<<i_nre)
-	// Interrupt on errors.
-	req[regMaskErrorWakeupIntr-regMaskMainIntr+1] =
-		^byte(mask.Error | 0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2)
+	req[regMaskTimerNFCIntr-regMaskMainIntr+1] = ^mask.Timer
+	req[regMaskErrorWakeupIntr-regMaskMainIntr+1] = ^mask.Error
 	req[regMaskPassiveTargIntr-regMaskMainIntr+1] = ^mask.Passive
 	return d.Bus.Tx(i2cAddr, req, nil)
 }
 
-func (d *Device) interruptStatus() (interrupts, error) {
+func (d *Device) interruptStatus() (intrs interrupts, mask interrupts, err error) {
 	req, resp := d.scratch[:1], d.scratch[1:4]
 	req[0] = modeReadReg | regTimerNFCIntr
 	if err := d.Bus.Tx(i2cAddr, req, resp); err != nil {
-		return interrupts{}, err
+		return interrupts{}, interrupts{}, err
 	}
-	intrs := interrupts{
+	intrs = interrupts{
 		Timer:   resp[0],
 		Error:   resp[1],
 		Passive: resp[2],
 	}
 	// The main interrupt register is read last, because
 	// reading it also clears the error interrupt register.
-	intr, err := d.readReg(regMainIntr)
-	if err != nil {
-		return interrupts{}, err
+	req, resp = d.scratch[:1], d.scratch[1:6]
+	req[0] = modeReadReg | regMaskMainIntr
+	if err := d.Bus.Tx(i2cAddr, req, resp); err != nil {
+		return interrupts{}, interrupts{}, err
 	}
-	intrs.Main = intr
-	switch {
-	case intrs.Error&(0b1<<i_crc) != 0:
-		err = errors.New("CRC error")
-	case intrs.Error&(0b1<<i_par) != 0:
-		err = errors.New("parity error")
-	case intrs.Error&(0b1<<i_err2) != 0:
-		err = errors.New("soft framing error")
-	case intrs.Error&(0b1<<i_err1) != 0:
-		err = errors.New("hard framing error")
-	case intrs.Main&(0b1<<i_col) != 0:
-		// We don't implement anti-collision loops yet,
-		// so for now treat collisions as errors.
-		err = errors.New("collision")
-	case intrs.Timer&(0b1<<i_nre) != 0:
-		err = errors.New("response timeout")
+	intrs.Main = resp[4]
+	mask = interrupts{
+		Main:    ^resp[0],
+		Timer:   ^resp[1],
+		Error:   ^resp[2],
+		Passive: ^resp[3],
 	}
-	return intrs, err
+	return intrs, mask, nil
 }
 
 func (d *Device) configureProtocol(prot Protocol) error {
@@ -626,11 +628,7 @@ func (d *Device) SetTxBits(bits int) {
 
 func (d *Device) Read(buf []byte) (int, error) {
 	if !d.eof {
-		mask := interrupts{Main: 0b1 << i_rxe}
-		if err := d.setInterruptMask(mask); err != nil {
-			return 0, err
-		}
-		if _, err := d.waitForInterrupt(mask, timeout); err != nil {
+		if _, err := d.waitForInterrupt(timeout); err != nil {
 			return 0, fmt.Errorf("st25r3916: read: %w", err)
 		}
 		d.eof = true
@@ -743,7 +741,7 @@ func (d *Device) commandAndWait(cmd byte, mask interrupts) (interrupts, error) {
 	if err := d.command(cmd); err != nil {
 		return interrupts{}, err
 	}
-	return d.waitForInterrupt(mask, timeout)
+	return d.waitForInterrupt(timeout)
 }
 
 func (d *Device) command(cmd byte) error {

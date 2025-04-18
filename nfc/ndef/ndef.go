@@ -3,6 +3,7 @@ package ndef
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -20,48 +21,55 @@ func NewReader(rd io.Reader) *Reader {
 	}
 }
 
-func (r *Reader) Next() error {
+func (r *Reader) Read(msg []byte) (int, error) {
 	typ, err := r.r.ReadByte()
 	if err != nil {
-		return fmt.Errorf("ndef: %w", err)
+		return 0, fmt.Errorf("ndef: %w", err)
 	}
 	length8, err := r.r.ReadByte()
 	if err != nil {
-		return fmt.Errorf("ndef: %w", err)
+		return 0, fmt.Errorf("ndef: %w", err)
 	}
-	length := uint16(length8)
+	length := int(length8)
 	if length8 == 0xff {
 		// 2-byte length.
 		l16 := r.scratch[:2]
 		if _, err := io.ReadFull(r.r, l16); err != nil {
-			return fmt.Errorf("ndef: %w", err)
+			return 0, fmt.Errorf("ndef: %w", err)
 		}
-		length = binary.BigEndian.Uint16(l16)
+		length = int(binary.BigEndian.Uint16(l16))
 	}
-	msg := make([]byte, length)
+	if len(msg) < length {
+		return 0, io.ErrShortBuffer
+	}
+	msg = msg[:length]
 	if _, err := io.ReadFull(r.r, msg); err != nil {
-		return fmt.Errorf("ndef: %w", err)
+		return 0, fmt.Errorf("ndef: %w", err)
 	}
 
 	fmt.Printf("NFC Scan result: %x %q\n", msg, string(msg))
-	const ndefType = 0x03
-	switch typ {
-	case ndefType:
-		header, tlen, plen := msg[0], msg[1], msg[2]
-		if header != 0b11010_001 || tlen != 1 { // TODO: do better
-			break
-		}
-		typ := msg[3]
-		if typ != 0x55 { // TODO: handle other well-known types.
-			break
-		}
-		fmt.Print("\n\nNFC result, parsed *****:    ")
-		payload := msg[4 : 4+plen]
-		switch payload[0] {
-		case 0x04:
-			fmt.Print("https://")
-		}
-		fmt.Println(string(payload[1:]), "\n\n")
+	if typ != ndefType || len(msg) < 6 {
+		return 0, errors.New("ndef: unsupported type")
 	}
-	return nil
+
+	header, tlen, plen := msg[0], msg[1], msg[2]
+	if header != 0b11010_001 || tlen != 1 { // TODO: do better
+		return 0, errors.New("ndef: unsupported type")
+	}
+	mimeType := msg[3]
+	if mimeType != 0x55 { // TODO: handle other well-known types.
+		return 0, errors.New("ndef: unsupported type")
+	}
+	fmt.Print("\n\nNFC result, parsed *****:    ")
+	payload := msg[4 : 4+plen]
+	switch payload[0] {
+	case 0x04:
+		fmt.Print("https://")
+	}
+	fmt.Println(string(payload[1:]), "\n\n")
+	return 0, errors.New("ndef: unsupported format")
 }
+
+const (
+	ndefType = 0x03
+)

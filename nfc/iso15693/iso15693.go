@@ -137,7 +137,6 @@ func (t *Tag) issueRead(nblocks int) error {
 	default:
 		return io.EOF
 	}
-	fmt.Printf("issueRead: %d blocks: %x\n", nblocks, req)
 	if _, err := t.bus.Write(req); err != nil {
 		return err
 	}

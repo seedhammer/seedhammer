@@ -3,7 +3,6 @@ package main
 
 import (
 	"device/rp"
-	"errors"
 	"fmt"
 	"io"
 	"machine"
@@ -12,6 +11,7 @@ import (
 
 	"seedhammer.com/driver/ap33772s"
 	"seedhammer.com/driver/st25r3916"
+	"seedhammer.com/nfc/iso14443a"
 	"seedhammer.com/nfc/iso15693"
 	"seedhammer.com/nfc/ndef"
 )
@@ -92,43 +92,79 @@ func run() error {
 	if err := nfc.Configure(); err != nil {
 		return err
 	}
-	for {
-		if err := nfc.DetectCard(); err != nil {
-			return err
-		}
-		fmt.Println("card detected")
-		time.Sleep(500 * time.Millisecond)
-	}
 	// nfc.SetCRC(true, true)
 	// return nfc.Listen()
-	// prot := st25r3916.ISO14443a
-	prot := st25r3916.ISO15693
-	if err := nfc.RadioOn(prot); err != nil {
-		return err
-	}
-	defer nfc.RadioOff()
-	fmt.Println("**** opening tag")
-	// tag, err := iso14443a.Open(nfc)
+	var lastPoll time.Time
+	const pollFrequency = 500 * time.Millisecond
 	trans := iso15693.NewTransceiver(nfc, st25r3916.FIFOSize)
-	tag, err := iso15693.Open(trans, trans.DecodedSize())
-	fmt.Println("***** tag opened", err)
-	if err != nil {
-		return err
-	}
-	buf := make([]byte, 512)
+	defer nfc.RadioOff()
+	contents := make([]byte, 8*1024)
 	for {
-		n, err := tag.Read(buf)
-		fmt.Printf("%s\n", buf[:n])
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
+		if err := nfc.RadioOn(st25r3916.CardDetect); err != nil {
+			return err
+		}
+		for {
+			if err := nfc.DetectCard(); err != nil {
 				return err
 			}
+			now := time.Now()
+			// Don't poll too often.
+			if now.Sub(lastPoll) < pollFrequency {
+				// But keep the detection loop running on the
+				// device.
+				continue
+			}
+			lastPoll = now
 			break
 		}
-	}
-	contents := ndef.NewReader(tag)
-	if err := contents.Next(); err != nil {
-		return err
+		fmt.Println("card detected, reading...")
+		r, err := poll(nfc, trans)
+		if err != nil {
+			return err
+		}
+		if r == nil {
+			continue
+		}
+		// buf := make([]byte, 512)
+		// for {
+		// 	n, err := r.Read(buf)
+		// 	fmt.Printf("%s\n", buf[:n])
+		// 	if err != nil {
+		// 		if !errors.Is(err, io.EOF) {
+		// 			return err
+		// 		}
+		// 		break
+		// 	}
+		// }
+		nr := ndef.NewReader(r)
+		n, err := nr.Read(contents)
+		if err != nil {
+			// Ignore read errors.
+			fmt.Println("ndef", err)
+			continue
+		}
+		fmt.Println("Succes!", contents[:n])
 	}
 	return nil
+}
+
+func poll(d *st25r3916.Device, trans *iso15693.Transceiver) (io.Reader, error) {
+	if err := d.RadioOn(st25r3916.ISO15693); err != nil {
+		return nil, err
+	}
+	tag15693, err := iso15693.Open(trans, trans.DecodedSize())
+	if err == nil {
+		return tag15693, nil
+	}
+	fmt.Println("iso15693", err)
+	if err := d.RadioOn(st25r3916.ISO14443a); err != nil {
+		return nil, err
+	}
+	tag14443, err := iso14443a.Open(d)
+	if err != nil {
+		fmt.Println("iso14443", err)
+		// Ignore read errors.
+		return nil, nil
+	}
+	return tag14443, nil
 }
