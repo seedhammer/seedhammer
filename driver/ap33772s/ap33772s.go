@@ -13,9 +13,10 @@ import (
 )
 
 type Device struct {
-	bus     *machine.I2C
-	intr    machine.Pin
-	scratch [1 + (nSPRs+nEPRs)*2]byte
+	bus        *machine.I2C
+	intr       machine.Pin
+	interrupts chan struct{}
+	scratch    [1 + (nSPRs+nEPRs)*2]byte
 }
 
 func New(bus *machine.I2C, intr machine.Pin) *Device {
@@ -26,12 +27,38 @@ func New(bus *machine.I2C, intr machine.Pin) *Device {
 }
 
 func (d *Device) Configure() error {
+	d.interrupts = make(chan struct{}, 1)
 	d.intr.Configure(machine.PinConfig{Mode: machine.PinInput})
-	// Setup interrupt sources.
-	if err := d.writeReg(regMASK, maskREADY|maskSTARTED|maskNEWPDO); err != nil {
+	d.intr.SetInterrupt(machine.PinRising, d.handleInterrupt)
+status:
+	for {
+		st, err := d.ReadStatus()
+		if err != nil {
+			return fmt.Errorf("ap3372s: %w", err)
+		}
+		switch {
+		case st == 0:
+			// When not even READY is set, the device was probably
+			// already initialized, and we've since reset (for example
+			// after a reflash).
+			fallthrough
+		case st&intREADY != 0:
+			break status
+		}
+		<-d.interrupts
+	}
+	// Set interrupt mask.
+	if err := d.writeReg(regMASK, intREADY|intSTARTED|intNEWPDO); err != nil {
 		return fmt.Errorf("ap3372s: %w", err)
 	}
 	return nil
+}
+
+func (d *Device) handleInterrupt(machine.Pin) {
+	select {
+	case d.interrupts <- struct{}{}:
+	default:
+	}
 }
 
 // ReadTemperature reads the temperature in degrees celcius (C)
@@ -219,8 +246,9 @@ const (
 	regPD_CMDMSG     = 0x32
 	regPD_MSGRLT     = 0x33
 
-	// Masks of the MASK register.
-	maskSTARTED = 0b1 << 0
-	maskREADY   = 0b1 << 1
-	maskNEWPDO  = 0b1 << 2
+	// Interrupt bits in the Mask and Status
+	// registers.
+	intSTARTED = 0b1 << 0
+	intREADY   = 0b1 << 1
+	intNEWPDO  = 0b1 << 2
 )
