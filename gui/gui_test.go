@@ -910,6 +910,10 @@ func (p *testPlatform) PlateSizes() []backup.PlateSize {
 	return plateSizes
 }
 
+func (p *testPlatform) NFCDevice() NFCDevice {
+	return nil
+}
+
 func (p *testPlatform) Engraver() (Engraver, error) {
 	if err := p.engrave.connErr; err != nil {
 		return nil, err

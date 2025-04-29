@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"io"
 	"log"
 	"math"
 	"runtime"
@@ -48,6 +49,10 @@ type Context struct {
 	RotateCamera   bool
 	LastDescriptor *bip380.Descriptor
 
+	// scan is the last scanned object (seed, descriptor
+	// etc.).
+	scan any
+
 	events  []Event
 	pointer struct {
 		hits       []BoundedTag
@@ -62,6 +67,15 @@ func NewContext(pl Platform) *Context {
 		Styles:   NewStyles(),
 	}
 	return c
+}
+
+func (c *Context) Scan() (any, bool) {
+	s := c.scan
+	if s == nil {
+		return nil, false
+	}
+	c.scan = nil
+	return s, true
 }
 
 func (c *Context) WakeupAt(t time.Time) {
@@ -1573,6 +1587,47 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 		dims := ctx.Platform.DisplaySize()
 	events:
 		for {
+			if scan, ok := ctx.Scan(); ok {
+				switch scan := scan.(type) {
+				case bip39.Mnemonic:
+					if quit != nil {
+						break
+					}
+					quit = make(chan struct{})
+					go func() {
+						err := func() error {
+							mfp, err := masterFingerprintFor(scan, &chaincfg.MainNetParams)
+							if err != nil {
+								return err
+							}
+							params := ctx.Platform.EngraverParams()
+							const sz = backup.SquarePlate
+							keySide, err := backup.EngraveSeed(params, backup.Seed{
+								KeyIdx:            0,
+								Mnemonic:          scan,
+								Keys:              1,
+								MasterFingerprint: mfp,
+								Font:              constant.Font,
+								Size:              sz,
+							})
+							if err != nil {
+								return err
+							}
+							e, err := ctx.Platform.Engraver()
+							if err != nil {
+								return err
+							}
+							defer e.Close()
+							log.Println("opened engraver, engraving...")
+							defer log.Println("done engraving...")
+							return e.Engrave(sz, keySide, quit)
+						}()
+						if err != nil {
+							log.Printf("engrave error: %v", err)
+						}
+					}()
+				}
+			}
 			if selectBtn.Clicked(ctx) {
 				if quit != nil {
 					fmt.Println("quitting engraving")
@@ -1610,51 +1665,9 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 			e, ok := inp.Next(ctx,
 				ButtonFilter(Left),
 				ButtonFilter(Right),
-				ScanFilter(),
 			)
 			if !ok {
 				break
-			}
-			if e, ok := e.AsScanEvent(); ok {
-				switch seed := e.Content.(type) {
-				case bip39.Mnemonic:
-					if quit != nil {
-						break
-					}
-					quit = make(chan struct{})
-					go func() {
-						err := func() error {
-							mfp, err := masterFingerprintFor(seed, &chaincfg.MainNetParams)
-							if err != nil {
-								return err
-							}
-							params := ctx.Platform.EngraverParams()
-							const sz = backup.SquarePlate
-							keySide, err := backup.EngraveSeed(params, backup.Seed{
-								KeyIdx:            0,
-								Mnemonic:          seed,
-								Keys:              1,
-								MasterFingerprint: mfp,
-								Font:              constant.Font,
-								Size:              sz,
-							})
-							if err != nil {
-								return err
-							}
-							e, err := ctx.Platform.Engraver()
-							if err != nil {
-								return err
-							}
-							defer e.Close()
-							log.Println("opened engraver, engraving...")
-							defer log.Println("done engraving...")
-							return e.Engrave(sz, keySide, quit)
-						}()
-						if err != nil {
-							log.Printf("engrave error: %v", err)
-						}
-					}()
-				}
 			}
 			if e, ok := e.AsButton(); ok {
 				switch e.Button {
@@ -2757,6 +2770,7 @@ type Platform interface {
 	Wakeup()
 	PlateSizes() []backup.PlateSize
 	Engraver() (Engraver, error)
+	NFCDevice() NFCDevice
 	EngraverParams() engrave.Params
 	CameraFrame(size image.Point)
 	Now() time.Time
@@ -2775,6 +2789,24 @@ type Engraver interface {
 	Close()
 }
 
+type NFCDevice interface {
+	Detect(quit <-chan struct{}) error
+	FIFOSize() int
+	RadioOn(mode NFCRadioMode) error
+	RadioOff() error
+	SetCRC(tx, rx bool)
+	SetTxBits(bits int)
+	io.ReadWriter
+}
+
+type NFCRadioMode int
+
+const (
+	ModeDetect NFCRadioMode = iota
+	ModeISO14443a
+	ModeISO15693
+)
+
 const idleTimeout = 3 * time.Second
 
 func Run(pl Platform, version string) func(yield func() bool) {
@@ -2792,6 +2824,18 @@ func Run(pl Platform, version string) func(yield func() bool) {
 			}
 		}{
 			ctx: ctx,
+		}
+		scans := make(chan any, 1)
+		quit := make(chan struct{})
+		defer close(quit)
+		if nfcdev := pl.NFCDevice(); nfcdev != nil {
+			wakeup := pl.Wakeup
+			go func() {
+				for scan := range Scan(nfcdev, quit) {
+					scans <- scan
+					wakeup()
+				}
+			}()
 		}
 		a.idle.start = pl.Now()
 
@@ -2843,7 +2887,6 @@ func Run(pl Platform, version string) func(yield func() bool) {
 				evts = a.ctx.Platform.AppendEvents(wakeup, evts[:0])
 				if len(evts) > 0 {
 					a.idle.start = a.ctx.Platform.Now()
-					wakeup = time.Time{}
 				}
 				a.ctx.Reset()
 				a.ctx.Events(&a.root, evts...)
@@ -2855,6 +2898,13 @@ func Run(pl Platform, version string) func(yield func() bool) {
 					if se, ok := e.AsSDCard(); ok {
 						a.ctx.EmptySDSlot = !se.Inserted
 					}
+				}
+				select {
+				case scan := <-scans:
+					a.ctx.scan = scan
+					a.idle.start = a.ctx.Platform.Now()
+				default:
+					a.ctx.scan = nil
 				}
 				idleWakeup := a.idle.start.Add(idleTimeout)
 				now := a.ctx.Platform.Now()

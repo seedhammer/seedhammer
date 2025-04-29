@@ -41,7 +41,7 @@ type Platform struct {
 
 	lcdDev   *ili9488.Device
 	engraver gui.Engraver
-	scans    chan any
+	nfc      gui.NFCDevice
 	touch    struct {
 		dev     *ft6x36.Device
 		ints    chan struct{}
@@ -165,7 +165,6 @@ func Init() (*Platform, error) {
 	mi2c.Bus <- dataI2C
 	p := &Platform{
 		wakeups: make(chan struct{}, 1),
-		scans:   make(chan any, 1),
 		timer:   time.NewTimer(0),
 	}
 	for i := range p.display.buffers {
@@ -202,9 +201,31 @@ func Init() (*Platform, error) {
 	if err := nfc.Configure(); err != nil {
 		return nil, fmt.Errorf("nfc: %w", err)
 	}
-	// Run NFC poller in the background.
-	go newNFCPoller(nfc, p.scans).Run()
+	p.nfc = &nfcDev{nfc}
 	return p, nil
+}
+
+type nfcDev struct {
+	*st25r3916.Device
+}
+
+func (d nfcDev) RadioOn(mode gui.NFCRadioMode) error {
+	var prot st25r3916.Protocol
+	switch mode {
+	case gui.ModeDetect:
+		prot = st25r3916.Detect
+	case gui.ModeISO14443a:
+		prot = st25r3916.ISO14443a
+	case gui.ModeISO15693:
+		prot = st25r3916.ISO15693
+	default:
+		panic("unsupported mode")
+	}
+	return d.Device.RadioOn(prot)
+}
+
+func (d nfcDev) FIFOSize() int {
+	return st25r3916.FIFOSize
 }
 
 func configEngraver(i2cbus *multiplexI2C) (*engraver, error) {
@@ -313,10 +334,6 @@ func (p *Platform) AppendEvents(deadline time.Time, evts []gui.Event) []gui.Even
 	p.timer.Reset(time.Until(deadline))
 	for {
 		select {
-		case content := <-p.scans:
-			return append(evts, gui.ScanEvent{
-				Content: content,
-			}.Event())
 		case <-p.timer.C:
 			return evts
 		case <-p.wakeups:
@@ -420,6 +437,10 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 		return err
 	}
 	return nil
+}
+
+func (p *Platform) NFCDevice() gui.NFCDevice {
+	return p.nfc
 }
 
 func (p *Platform) Engraver() (gui.Engraver, error) {

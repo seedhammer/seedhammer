@@ -1,59 +1,55 @@
-package main
+package gui
 
 import (
 	"errors"
 	"io"
+	"iter"
 	"log"
 	"time"
 
 	"seedhammer.com/bip39"
-	"seedhammer.com/driver/st25r3916"
 	"seedhammer.com/nfc/iso14443a"
 	"seedhammer.com/nfc/iso15693"
 	"seedhammer.com/nfc/ndef"
 )
 
 type nfcPoller struct {
-	scans chan<- any
-	dev   *st25r3916.Device
+	dev   NFCDevice
 	buf   []byte
 	trans *iso15693.Transceiver
 }
 
 const pollFrequency = 500 * time.Millisecond
 
-func newNFCPoller(d *st25r3916.Device, scans chan<- any) *nfcPoller {
-	return &nfcPoller{
-		scans: scans,
-		dev:   d,
-		buf:   make([]byte, 8*1024),
-		trans: iso15693.NewTransceiver(d, st25r3916.FIFOSize),
-	}
-}
-
-func (p *nfcPoller) Run() {
-	defer p.dev.RadioOff()
-	for {
-		content, err := p.poll()
-		if err != nil {
-			log.Printf("nfc poller failed: %v", err)
-			break
+func Scan(d NFCDevice, quit <-chan struct{}) iter.Seq[any] {
+	return func(yield func(any) bool) {
+		p := &nfcPoller{
+			dev:   d,
+			buf:   make([]byte, 8*1024),
+			trans: iso15693.NewTransceiver(d, d.FIFOSize()),
 		}
-		select {
-		case p.scans <- content:
-		default:
+		defer p.dev.RadioOff()
+		for {
+			content, err := p.poll(quit)
+			if err != nil {
+				log.Printf("nfc poller failed: %v", err)
+				break
+			}
+			if !yield(content) {
+				break
+			}
 		}
 	}
 }
 
-func (p *nfcPoller) poll() (any, error) {
+func (p *nfcPoller) poll(quit <-chan struct{}) (any, error) {
 	var lastPoll time.Time
 	for {
-		if err := p.dev.RadioOn(st25r3916.Detect); err != nil {
+		if err := p.dev.RadioOn(ModeDetect); err != nil {
 			return nil, err
 		}
 		for {
-			if err := p.dev.Detect(); err != nil {
+			if err := p.dev.Detect(quit); err != nil {
 				return nil, err
 			}
 			now := time.Now()
@@ -84,15 +80,15 @@ func (p *nfcPoller) poll() (any, error) {
 	}
 }
 
-func poll(d *st25r3916.Device, trans *iso15693.Transceiver) (io.Reader, error) {
-	if err := d.RadioOn(st25r3916.ISO15693); err != nil {
+func poll(d NFCDevice, trans *iso15693.Transceiver) (io.Reader, error) {
+	if err := d.RadioOn(ModeISO15693); err != nil {
 		return nil, err
 	}
 	tag15693, err := iso15693.Open(trans, trans.DecodedSize())
 	if err == nil {
 		return tag15693, nil
 	}
-	if err := d.RadioOn(st25r3916.ISO14443a); err != nil {
+	if err := d.RadioOn(ModeISO14443a); err != nil {
 		return nil, err
 	}
 	tag14443, err := iso14443a.Open(d)

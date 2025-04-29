@@ -137,7 +137,7 @@ func (d *Device) enable() error {
 		return err
 	}
 	// Wait for oscillator stable.
-	_, err = d.waitForInterrupt(timeout)
+	_, err = d.waitForInterrupt(timeout, nil)
 	return err
 }
 
@@ -280,8 +280,8 @@ func (d *Device) Listen() error {
 	return nil
 }
 
-func (d *Device) Detect() error {
-	if _, err := d.waitForInterrupt(0); err != nil {
+func (d *Device) Detect(quit <-chan struct{}) error {
+	if _, err := d.waitForInterrupt(0, quit); err != nil {
 		return fmt.Errorf("st25r3916: detect: %w", err)
 	}
 	return nil
@@ -387,7 +387,7 @@ func (d *Device) Write(tx []byte) (int, error) {
 	return len(tx), nil
 }
 
-func (d *Device) waitForInterrupt(timeout time.Duration) (interrupts, error) {
+func (d *Device) waitForInterrupt(timeout time.Duration, quit <-chan struct{}) (interrupts, error) {
 	if !d.timer.Stop() {
 		select {
 		case <-d.timer.C:
@@ -403,6 +403,8 @@ func (d *Device) waitForInterrupt(timeout time.Duration) (interrupts, error) {
 	for {
 		select {
 		case <-d.interrupts:
+		case <-quit:
+			return interrupts{}, errors.New("cancelled")
 		case <-tim:
 			return interrupts{}, errors.New("timeout")
 		}
@@ -555,7 +557,7 @@ func (d *Device) SetTxBits(bits int) {
 
 func (d *Device) Read(buf []byte) (int, error) {
 	if !d.eof {
-		if _, err := d.waitForInterrupt(timeout); err != nil {
+		if _, err := d.waitForInterrupt(timeout, nil); err != nil {
 			return 0, fmt.Errorf("st25r3916: read: %w", err)
 		}
 		d.eof = true
@@ -668,7 +670,7 @@ func (d *Device) commandAndWait(cmd byte, mask interrupts) (interrupts, error) {
 	if err := d.command(cmd); err != nil {
 		return interrupts{}, err
 	}
-	return d.waitForInterrupt(timeout)
+	return d.waitForInterrupt(timeout, nil)
 }
 
 func (d *Device) command(cmd byte) error {
