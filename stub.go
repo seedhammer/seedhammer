@@ -76,6 +76,14 @@ func run() error {
 		return fmt.Errorf("data I2C: %w", err)
 	}
 
+	go func() {
+		for {
+			before := time.Now()
+			for time.Since(before) < 100*time.Millisecond {
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
 	usbpd := ap33772s.New(dataI2C, USBPD_INT)
 	if err := usbpd.Configure(); err != nil {
 		return err
@@ -106,7 +114,7 @@ func run() error {
 			return err
 		}
 		for {
-			if err := nfc.Detect(); err != nil {
+			if err := nfc.Detect(nil); err != nil {
 				return err
 			}
 			now := time.Now()

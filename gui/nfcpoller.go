@@ -14,9 +14,8 @@ import (
 )
 
 type nfcPoller struct {
-	dev   NFCDevice
-	buf   []byte
-	trans *iso15693.Transceiver
+	dev NFCDevice
+	buf []byte
 }
 
 const pollFrequency = 500 * time.Millisecond
@@ -24,9 +23,8 @@ const pollFrequency = 500 * time.Millisecond
 func Scan(d NFCDevice, quit <-chan struct{}) iter.Seq[any] {
 	return func(yield func(any) bool) {
 		p := &nfcPoller{
-			dev:   d,
-			buf:   make([]byte, 8*1024),
-			trans: iso15693.NewTransceiver(d, d.FIFOSize()),
+			dev: d,
+			buf: make([]byte, 8*1024),
 		}
 		defer p.dev.RadioOff()
 		for {
@@ -62,7 +60,7 @@ func (p *nfcPoller) poll(quit <-chan struct{}) (any, error) {
 			lastPoll = now
 			break
 		}
-		r, err := poll(p.dev, p.trans)
+		r, err := poll(p.dev)
 		if err != nil {
 			return nil, err
 		}
@@ -76,15 +74,18 @@ func (p *nfcPoller) poll(quit <-chan struct{}) (any, error) {
 			continue
 		}
 		m, err := bip39.Parse(p.buf[:n])
+		if err != nil {
+			continue
+		}
 		return m, nil
 	}
 }
 
-func poll(d NFCDevice, trans *iso15693.Transceiver) (io.Reader, error) {
+func poll(d NFCDevice) (io.Reader, error) {
 	if err := d.RadioOn(ModeISO15693); err != nil {
 		return nil, err
 	}
-	tag15693, err := iso15693.Open(trans, trans.DecodedSize())
+	tag15693, err := iso15693.Open(d, d.FIFOSize())
 	if err == nil {
 		return tag15693, nil
 	}

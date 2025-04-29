@@ -23,6 +23,7 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/gui"
 	"seedhammer.com/image/rgb565"
+	"seedhammer.com/nfc/iso15693"
 )
 
 const (
@@ -201,15 +202,25 @@ func Init() (*Platform, error) {
 	if err := nfc.Configure(); err != nil {
 		return nil, fmt.Errorf("nfc: %w", err)
 	}
-	p.nfc = &nfcDev{nfc}
+	p.nfc = newNFCDevice(nfc)
 	return p, nil
 }
 
 type nfcDev struct {
 	*st25r3916.Device
+	trans    *iso15693.Transceiver
+	iso15693 bool
 }
 
-func (d nfcDev) RadioOn(mode gui.NFCRadioMode) error {
+func newNFCDevice(d *st25r3916.Device) *nfcDev {
+	return &nfcDev{
+		Device: d,
+		trans:  iso15693.NewTransceiver(d, st25r3916.FIFOSize),
+	}
+}
+
+func (d *nfcDev) RadioOn(mode gui.NFCRadioMode) error {
+	d.iso15693 = false
 	var prot st25r3916.Protocol
 	switch mode {
 	case gui.ModeDetect:
@@ -217,6 +228,7 @@ func (d nfcDev) RadioOn(mode gui.NFCRadioMode) error {
 	case gui.ModeISO14443a:
 		prot = st25r3916.ISO14443a
 	case gui.ModeISO15693:
+		d.iso15693 = true
 		prot = st25r3916.ISO15693
 	default:
 		panic("unsupported mode")
@@ -224,7 +236,24 @@ func (d nfcDev) RadioOn(mode gui.NFCRadioMode) error {
 	return d.Device.RadioOn(prot)
 }
 
+func (d *nfcDev) Write(buf []byte) (int, error) {
+	if d.iso15693 {
+		return d.trans.Write(buf)
+	}
+	return d.Device.Write(buf)
+}
+
+func (d *nfcDev) Read(buf []byte) (int, error) {
+	if d.iso15693 {
+		return d.trans.Read(buf)
+	}
+	return d.Device.Read(buf)
+}
+
 func (d nfcDev) FIFOSize() int {
+	if d.iso15693 {
+		return d.trans.DecodedSize()
+	}
 	return st25r3916.FIFOSize
 }
 
