@@ -61,7 +61,6 @@ const (
 	// Card detection thresholds.
 	ampSens   = 2
 	phaseSens = 2
-	// capSens   = 3
 )
 
 func (d *Device) Configure() error {
@@ -91,39 +90,14 @@ func (d *Device) Configure() error {
 			0b1<<d_212_424_1r|0b1<<d_ac_ap2p, // Disable unused passive detection modes.
 		regPassiveTargetMod, 0x5f, // Reduce RFO resistance in modulated state.
 		regEMDSupConf, 0b1<<rx_start_emv, // Enable start on first 4 bits.
-		// regCapSensorCtrl, 0, // Reset capacitive sensor calibration.
 		regStreamModeDef, modeISO15693, // Setup streaming mode for iso15693.
 		regTimerEMVCtrl, 0b001<<gptc, // Start timer at end of rx.
 		regWakeupCtrl, 0b010<<wut|0b1<<wur|0b1<<wam|0b1<<wph, // Enable all card detection methods, set measure period.
 		regAmplitudeMeasCtrl, ampSens<<am_d|0b1<<am_ae|0b1<<am_aam|0b10<<am_aew, // Set amplitude measurement ∆am, auto-averaging reference.
 		regPhaseMeasCtrl, phaseSens<<pm_d|0b1<<pm_ae|0b1<<pm_aam|0b10<<pm_aew, // Set phase measurement ∆pm, auto-averaging reference.
-		// regCapMeasCtrl, capSens<<cm_d|0b1<<cm_ae|0b1<<cm_aam|0b10<<cm_aew, // Set capacitance measurement ∆cm, auto-averaging reference.
 	); err != nil {
 		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
-	// if err := d.command(cmdCalibrateCapSensor); err != nil {
-	// 	return fmt.Errorf("st25r3916: configure: %w", err)
-	// }
-	// // Calibration takes up to 3 ms. We can't wait for command complete
-	// // interrupt because the oscillator is not yet running.
-	// time.Sleep(3 * time.Millisecond)
-	// n, err := d.readReg(regCapSensor)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// fmt.Println("cal", n)
-	// for {
-	// 	if err := d.command(cmdMeasureCap); err != nil {
-	// 		return fmt.Errorf("st25r3916: %w", err)
-	// 	}
-	// 	time.Sleep(1 * time.Millisecond)
-	// 	n, err := d.readReg(regADConvOut)
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	fmt.Println("n", n)
-	// 	time.Sleep(300 * time.Millisecond)
-	// }
 	if err := d.enable(); err != nil {
 		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
@@ -142,27 +116,6 @@ func (d *Device) Configure() error {
 	if err := d.RadioOff(); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
-	// // Measure supply
-	// for i := byte(0); i <= 4; i++ {
-	// 	if err := d.writeReg(regRegulatorCtrl, i<<mpsv); err != nil {
-	// 		return fmt.Errorf("st25r3916: %w", err)
-	// 	}
-	// 	regctrl, err := d.readReg(regRegulatorCtrl)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	fmt.Println("measuring, existing regctrl", regctrl)
-	// 	if _, err := d.commandAndWait(cmdMeasureSupply,
-	// 		interrupts{Timer: 0b1 << i_dct}); err != nil {
-	// 		return fmt.Errorf("st25r3916: %w", err)
-	// 	}
-	// 	meas, err := d.readReg(regADConvOut)
-	// 	if err != nil {
-	// 		return fmt.Errorf("st25r3916: %w", err)
-	// 	}
-	// 	fmt.Println(meas)
-	// 	time.Sleep(time.Second)
-	// }
 	return nil
 }
 
@@ -331,13 +284,6 @@ func (d *Device) Detect() error {
 	if _, err := d.waitForInterrupt(0); err != nil {
 		return fmt.Errorf("st25r3916: detect: %w", err)
 	}
-	// const startreg = 0x35
-	// req, buf := d.scratch[:1], d.scratch[1:1+0x3e-startreg+1]
-	// req[0] = modeReadReg | startreg
-	// if err := d.Bus.Tx(i2cAddr, req, buf); err != nil {
-	// 	return fmt.Errorf("st25r3916: detect: %w", err)
-	// }
-	// fmt.Printf("buf: %x intrs %.8b\n", buf, intrs)
 	return nil
 }
 
@@ -357,7 +303,7 @@ func (d *Device) RadioOn(prot Protocol) error {
 		if err := d.writeReg(regOpCtrl, 0b1<<wu); err != nil {
 			return fmt.Errorf("st25r3916: detect: %w", err)
 		}
-		mask := interrupts{Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph | 0b1<<wcap}
+		mask := interrupts{Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph}
 		if err := d.setInterruptMask(mask); err != nil {
 			return fmt.Errorf("st25r3916: detect: %w", err)
 		}
@@ -421,28 +367,6 @@ func (d *Device) Write(tx []byte) (int, error) {
 			transmitCmd = cmdTransmitWithoutCRC
 		}
 	case ISO15693:
-		// // Disable built-in CRC calculation.
-		// if err := d.writeReg(regAuxDef, 0b1<<no_crc_rx); err != nil {
-		// 	return fmt.Errorf("st25r3916: transceive: %w", err)
-		// }
-		// for i := range byte(0x3F) {
-		// 	v, err := d.readReg(i)
-		// 	if err != nil {
-		// 		return fmt.Errorf("st25r3916: transceive: %w", err)
-		// 	}
-		// 	if v != 0 {
-		// 		fmt.Printf("A%#.2x: %#.2x\n", i, v)
-		// 	}
-		// }
-		// for i := range byte(0x3F) {
-		// 	v, err := d.readReg(spaceB | i)
-		// 	if err != nil {
-		// 		return fmt.Errorf("st25r3916: transceive: %w", err)
-		// 	}
-		// 	if v != 0 {
-		// 		fmt.Printf("B%#.2x: %#.2x\n", i, v)
-		// 	}
-		// }
 		if err := d.writeFIFO(tx); err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
