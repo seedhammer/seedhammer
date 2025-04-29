@@ -34,23 +34,6 @@ func (d *Device) Configure() error {
 	d.interrupts = make(chan struct{}, 1)
 	d.intr.Configure(machine.PinConfig{Mode: machine.PinInput})
 	d.intr.SetInterrupt(machine.PinRising, d.handleInterrupt)
-status:
-	for {
-		st, err := d.ReadStatus()
-		if err != nil {
-			return fmt.Errorf("ap3372s: %w", err)
-		}
-		switch {
-		case st == 0:
-			// When not even READY is set, the device was probably
-			// already initialized, and we've since reset (for example
-			// after a reflash).
-			fallthrough
-		case st&intREADY != 0:
-			break status
-		}
-		<-d.interrupts
-	}
 	// Set interrupt mask.
 	if err := d.writeReg(regMASK, intREADY|intSTARTED|intNEWPDO); err != nil {
 		return fmt.Errorf("ap3372s: %w", err)
