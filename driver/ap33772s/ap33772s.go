@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"machine"
-	"time"
 )
 
 type Device struct {
@@ -48,9 +47,9 @@ func (d *Device) handleInterrupt(machine.Pin) {
 	}
 }
 
-// ReadTemperature reads the temperature in degrees celcius (C)
+// MeasureTemperature reads the temperature in degrees celcius (C)
 // off the connected thermistor.
-func (d *Device) ReadTemperature() (int, error) {
+func (d *Device) MeasureTemperature() (int, error) {
 	v, err := d.readReg(regTEMP)
 	if err != nil {
 		return 0, fmt.Errorf("ap3372s: %w", err)
@@ -58,8 +57,8 @@ func (d *Device) ReadTemperature() (int, error) {
 	return int(v), nil
 }
 
-// ReadCurrent reads the current in milliamperes (mA).
-func (d *Device) ReadCurrent() (int, error) {
+// MeasureCurrent reads the current in milliamperes (mA).
+func (d *Device) MeasureCurrent() (int, error) {
 	v, err := d.readReg(regCURRENT)
 	if err != nil {
 		return 0, fmt.Errorf("ap3372s: %w", err)
@@ -68,8 +67,8 @@ func (d *Device) ReadCurrent() (int, error) {
 	return int(v) * milliAmperesPerUnit, nil
 }
 
-// ReadCurrent reads the voltage in millivolts (mV).
-func (d *Device) ReadVoltage() (int, error) {
+// MeasureVoltage reads the voltage in millivolts (mV).
+func (d *Device) MeasureVoltage() (int, error) {
 	v, err := d.readReg(regVOLTAGE)
 	if err != nil {
 		return 0, fmt.Errorf("ap3372s: %w", err)
@@ -112,12 +111,13 @@ func (d *Device) LimitCurrent(limitmA int) error {
 	return nil
 }
 
-// AdjustVoltage negotiates the highest voltage in the range.
-func (d *Device) AdjustVoltage(minVoltagemV, maxVoltagemV int) error {
+// AdjustVoltage negotiates the highest voltage in the range and returns
+// it.
+func (d *Device) AdjustVoltage(minVoltagemV, maxVoltagemV int) (int, error) {
 	req, pdos := d.scratch[:1], d.scratch[1:1+(nSPRs+nEPRs)*2]
 	req[0] = regSRCPDO
 	if err := d.bus.Tx(ap33772sAddr, req, pdos); err != nil {
-		return fmt.Errorf("ap3372s: %w", err)
+		return 0, fmt.Errorf("ap3372s: %w", err)
 	}
 	bestPDO := -1
 	bestVoltage := uint16(0)
@@ -148,7 +148,7 @@ func (d *Device) AdjustVoltage(minVoltagemV, maxVoltagemV int) error {
 		}
 	}
 	if bestPDO == -1 {
-		return errors.New("ap3372s: no suitable voltage found")
+		return 0, errors.New("ap3372s: no suitable voltage found")
 	}
 	pdoReq := uint16(
 		uint16(bestPDO+1)<<12 | // PDOs are 1-indexed
@@ -159,21 +159,29 @@ func (d *Device) AdjustVoltage(minVoltagemV, maxVoltagemV int) error {
 	req[0] = regPD_REQMSG
 	bo.PutUint16(req[1:], pdoReq)
 	if err := d.bus.Tx(ap33772sAddr, req, nil); err != nil {
-		return fmt.Errorf("ap3372s: %w", err)
+		return 0, fmt.Errorf("ap3372s: %w", err)
 	}
-	for range 5 {
-		time.Sleep(100 * time.Millisecond)
-		req, resp := d.scratch[:1], d.scratch[1:3]
-		req[0] = regVREQ
-		if err := d.bus.Tx(ap33772sAddr, req, resp); err != nil {
-			return fmt.Errorf("ap3372s: %w", err)
-		}
-		mV := int(bo.Uint16(resp)) * 50
-		if mV == bestVoltagemV {
-			return nil
-		}
+	return bestVoltagemV, nil
+}
+
+func (d *Device) Voltage() (int, error) {
+	req, resp := d.scratch[:1], d.scratch[1:3]
+	req[0] = regVREQ
+	if err := d.bus.Tx(ap33772sAddr, req, resp); err != nil {
+		return 0, fmt.Errorf("ap3372s: %w", err)
 	}
-	return errors.New("ap33772s: power negotiation timed out")
+	const mV = 50
+	return int(binary.LittleEndian.Uint16(resp)) * mV, nil
+}
+
+func (d *Device) Current() (int, error) {
+	req, resp := d.scratch[:1], d.scratch[1:3]
+	req[0] = regIREQ
+	if err := d.bus.Tx(ap33772sAddr, req, resp); err != nil {
+		return 0, fmt.Errorf("ap3372s: %w", err)
+	}
+	const mA = 10
+	return int(binary.LittleEndian.Uint16(resp)) * mA, nil
 }
 
 func (d *Device) writeReg(reg, val uint8) error {

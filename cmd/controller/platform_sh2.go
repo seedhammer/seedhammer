@@ -401,15 +401,38 @@ func (e *engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan st
 	return e.engrave(plan, quit)
 }
 
+func (e *engraver) adjustVoltage(minmV, maxmV int) error {
+	const retries = 3
+	for range retries {
+		mV, err := e.PD.AdjustVoltage(minmV, maxmV)
+		if err != nil {
+			return err
+		}
+		// Allow the new contract to settle.
+		time.Sleep(100 * time.Millisecond)
+		gotmV, err := e.PD.Voltage()
+		if err != nil {
+			return err
+		}
+		if gotmV == mV {
+			return nil
+		}
+		// Contract switches immediately after a previous switch
+		// are ignored. Sleep a little and try again.
+		time.Sleep(500 * time.Millisecond)
+	}
+	return errors.New("power negotiation timed out")
+}
+
 func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 	<-e.ready
 	defer func() {
 		e.ready <- struct{}{}
 	}()
-	if err := e.PD.AdjustVoltage(minVoltage*1000, maxVoltage*1000); err != nil {
+	if err := e.adjustVoltage(minVoltage*1000, maxVoltage*1000); err != nil {
 		return err
 	}
-	defer e.PD.AdjustVoltage(idleVoltage*1000, idleVoltage*1000)
+	defer e.adjustVoltage(idleVoltage*1000, idleVoltage*1000)
 	if err := e.PD.LimitCurrent(currentLimit); err != nil {
 		return err
 	}
