@@ -340,7 +340,7 @@ func (d *Device) Write(tx []byte) (int, error) {
 		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 	}
 	d.excludeCRC = true
-	var transmitCmd, aux byte
+	var transmitCmd byte
 	switch d.prot {
 	case ISO14443a:
 		const reqa = 0x26
@@ -350,21 +350,22 @@ func (d *Device) Write(tx []byte) (int, error) {
 			transmitCmd = cmdTransmitREQA
 			break
 		}
+		var conf byte
 		transmitCmd = byte(cmdTransmitWithCRC)
 		// Simple detection of anti-collision frame.
 		anticol := len(tx) == 2 && tx[1] == 0x20 &&
 			(tx[0] == casLevel1 || tx[0] == casLevel2 || tx[0] == casLevel3)
 		if anticol {
-			aux = 0b1 << no_crc_rx
 			transmitCmd = cmdTransmitWithoutCRC
 			d.excludeCRC = false
+			conf = 0b1 << antcl
+		}
+		if err := d.writeReg(regISO14443AConf, conf); err != nil {
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 	case ISO15693:
 		d.excludeCRC = false
 		transmitCmd = cmdTransmitWithoutCRC
-	}
-	if err := d.writeReg(regAuxDef, aux); err != nil {
-		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 	}
 	if err := d.writeFIFO(tx, 0); err != nil {
 		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
