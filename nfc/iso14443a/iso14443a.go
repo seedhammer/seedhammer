@@ -17,7 +17,6 @@ type Tag struct {
 
 // Transceiver represents an NFC modem.
 type Transceiver interface {
-	SetTxBits(bits int)
 	SetCRC(tx, rx bool)
 	io.ReadWriter
 }
@@ -39,8 +38,6 @@ func Open(t Transceiver) (*Tag, error) {
 func (t *Tag) reqa() (uint16, error) {
 	reqa := t.scratch[:1]
 	reqa[0] = cmdREQA
-	t.bus.SetTxBits(7)
-	defer t.bus.SetTxBits(0)
 	t.bus.SetCRC(false, false)
 	if _, err := t.bus.Write(reqa); err != nil {
 		return 0, fmt.Errorf("REQA: %w", err)

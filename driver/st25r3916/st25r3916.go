@@ -359,7 +359,7 @@ func (d *Device) Write(tx []byte) (int, error) {
 		if err := d.writeReg(regAuxDef, aux); err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
-		if err := d.writeFIFO(tx); err != nil {
+		if err := d.writeFIFO(tx, 0); err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 		transmitCmd = byte(cmdTransmitWithCRC)
@@ -367,7 +367,7 @@ func (d *Device) Write(tx []byte) (int, error) {
 			transmitCmd = cmdTransmitWithoutCRC
 		}
 	case ISO15693:
-		if err := d.writeFIFO(tx); err != nil {
+		if err := d.writeFIFO(tx, 0); err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 		transmitCmd = cmdTransmitWithoutCRC
@@ -609,8 +609,8 @@ func (d *Device) writeTXLen(bytes int, bits byte) error {
 	return d.Bus.Tx(i2cAddr, req, nil)
 }
 
-func (d *Device) writeFIFO(tx []byte) error {
-	if err := d.writeTXLen(len(tx), d.txBits); err != nil {
+func (d *Device) writeFIFO(tx []byte, txBits byte) error {
+	if err := d.writeTXLen(len(tx), txBits); err != nil {
 		return err
 	}
 	req := d.scratch[:]
