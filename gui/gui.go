@@ -2794,8 +2794,6 @@ type NFCDevice interface {
 	FIFOSize() int
 	RadioOn(mode NFCRadioMode) error
 	RadioOff() error
-	SetCRC(tx, rx bool)
-	SetTxBits(bits int)
 	io.ReadWriter
 }
 

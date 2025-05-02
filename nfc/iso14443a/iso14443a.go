@@ -10,20 +10,14 @@ import (
 )
 
 type Tag struct {
-	bus     Transceiver
+	bus     io.ReadWriter
 	page    uint8
 	scratch [12]byte
 }
 
-// Transceiver represents an NFC modem.
-type Transceiver interface {
-	SetCRC(tx, rx bool)
-	io.ReadWriter
-}
-
-func Open(t Transceiver) (*Tag, error) {
+func Open(d io.ReadWriter) (*Tag, error) {
 	tag := &Tag{
-		bus:  t,
+		bus:  d,
 		page: memStartPage,
 	}
 	if _, err := tag.reqa(); err != nil {
@@ -38,7 +32,6 @@ func Open(t Transceiver) (*Tag, error) {
 func (t *Tag) reqa() (uint16, error) {
 	reqa := t.scratch[:1]
 	reqa[0] = cmdREQA
-	t.bus.SetCRC(false, false)
 	if _, err := t.bus.Write(reqa); err != nil {
 		return 0, fmt.Errorf("REQA: %w", err)
 	}
@@ -60,7 +53,6 @@ func (t *Tag) selectTag() error {
 		req := t.scratch[:2]
 		req[0] = cmd
 		req[1] = 0x20
-		t.bus.SetCRC(false, false)
 		if _, err := t.bus.Write(req); err != nil {
 			return fmt.Errorf("select: %w", err)
 		}
@@ -82,7 +74,6 @@ func (t *Tag) selectTag() error {
 			return errors.New("select: BCC mismatch")
 		}
 		req2[6] = bcc_calc
-		t.bus.SetCRC(true, true)
 		if _, err := t.bus.Write(req2); err != nil {
 			return fmt.Errorf("select: %w", err)
 		}

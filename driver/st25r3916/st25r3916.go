@@ -17,13 +17,11 @@ import (
 type Device struct {
 	Bus        Bus
 	Int        machine.Pin
-	txBits     byte
-	txCRC      bool
-	rxCRC      bool
 	prot       Protocol
 	interrupts chan struct{}
 	eof        bool
 	timer      *time.Timer
+	excludeCRC bool
 
 	scratch [100]byte
 }
@@ -295,8 +293,6 @@ func (d *Device) RadioOff() error {
 }
 
 func (d *Device) RadioOn(prot Protocol) error {
-	d.SetCRC(true, true)
-	d.SetTxBits(0)
 	d.prot = prot
 	switch d.prot {
 	case Detect:
@@ -343,34 +339,35 @@ func (d *Device) Write(tx []byte) (int, error) {
 	if err := d.command(cmdResetRXGain); err != nil {
 		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 	}
-	var transmitCmd byte
+	d.excludeCRC = true
+	var transmitCmd, aux byte
 	switch d.prot {
 	case ISO14443a:
 		const reqa = 0x26
 		// Special case REQA.
 		if len(tx) == 1 && tx[0] == reqa {
+			d.excludeCRC = false
 			transmitCmd = cmdTransmitREQA
 			break
 		}
-		aux := byte(0)
-		if !d.rxCRC {
-			aux = 0b1 << no_crc_rx
-		}
-		if err := d.writeReg(regAuxDef, aux); err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		}
-		if err := d.writeFIFO(tx, 0); err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		}
 		transmitCmd = byte(cmdTransmitWithCRC)
-		if !d.txCRC {
+		// Simple detection of anti-collision frame.
+		anticol := len(tx) == 2 && tx[1] == 0x20 &&
+			(tx[0] == casLevel1 || tx[0] == casLevel2 || tx[0] == casLevel3)
+		if anticol {
+			aux = 0b1 << no_crc_rx
 			transmitCmd = cmdTransmitWithoutCRC
+			d.excludeCRC = false
 		}
 	case ISO15693:
-		if err := d.writeFIFO(tx, 0); err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
-		}
+		d.excludeCRC = false
 		transmitCmd = cmdTransmitWithoutCRC
+	}
+	if err := d.writeReg(regAuxDef, aux); err != nil {
+		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+	}
+	if err := d.writeFIFO(tx, 0); err != nil {
+		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 	}
 	mask := interrupts{
 		Main:  0b1 << i_rxe,
@@ -543,18 +540,6 @@ func (d *Device) configureProtocol(prot Protocol) error {
 	return nil
 }
 
-func (d *Device) SetCRC(tx, rx bool) {
-	d.txCRC = tx
-	d.rxCRC = rx
-}
-
-func (d *Device) SetTxBits(bits int) {
-	if bits < 0 || 7 < bits {
-		panic("invalid tx bits")
-	}
-	d.txBits = byte(bits)
-}
-
 func (d *Device) Read(buf []byte) (int, error) {
 	if !d.eof {
 		if _, err := d.waitForInterrupt(timeout, nil); err != nil {
@@ -570,7 +555,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 	fifoLen := int(fifoStatus[1]&0b1100_0000)<<2 | int(fifoStatus[0])
 	overflow := fifoStatus[1]&(0b1<<fifo_ovr) != 0
 	// Exclude the CRC bytes left in the FIFO.
-	if d.prot == ISO14443a && d.rxCRC {
+	if d.excludeCRC {
 		fifoLen = max(fifoLen-2, 0)
 	}
 	n := min(fifoLen, len(buf))
@@ -908,4 +893,9 @@ const (
 
 	// Auxillary display bits (table 98).
 	osc_ok = 4
+
+	// iso14443a collision avoidance loop commands.
+	casLevel1 = 0x93
+	casLevel2 = 0x95
+	casLevel3 = 0x97
 )
