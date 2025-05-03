@@ -164,9 +164,17 @@ func Init() (*Platform, error) {
 		Bus: make(chan *machine.I2C, 1),
 	}
 	mi2c.Bus <- dataI2C
+	e, err := configEngraver(mi2c)
+	if err != nil {
+		return nil, err
+	}
+	// Home and move needle to eject position.
+	go e.engrave(engrave.Commands(), nil)
+
 	p := &Platform{
-		wakeups: make(chan struct{}, 1),
-		timer:   time.NewTimer(0),
+		wakeups:  make(chan struct{}, 1),
+		timer:    time.NewTimer(0),
+		engraver: e,
 	}
 	for i := range p.display.buffers {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
@@ -180,14 +188,6 @@ func Init() (*Platform, error) {
 		return nil, err
 	}
 	p.lcdDev = lcd
-	e, err := configEngraver(mi2c)
-	if err != nil {
-		return nil, err
-	}
-	p.engraver = e
-	// Home and move needle to eject position.
-	go e.engrave(engrave.Commands(), nil)
-
 	if err := touchI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: TOUCH_SDA, SCL: TOUCH_SCL}); err != nil {
 		return nil, fmt.Errorf("touch: %w", err)
 	}
@@ -257,7 +257,7 @@ func (d nfcDev) FIFOSize() int {
 	return st25r3916.FIFOSize
 }
 
-func configEngraver(i2cbus *multiplexI2C) (*engraver, error) {
+func configEngraver(bus *multiplexI2C) (*engraver, error) {
 	DRV_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	DRV_ENABLE.Set(true)
 	vrefCh, err := needleVREFPWM.Channel(NEEDLE_VREF)
@@ -278,7 +278,7 @@ func configEngraver(i2cbus *multiplexI2C) (*engraver, error) {
 	}); err != nil {
 		return nil, err
 	}
-	usbpd := ap33772s.New(i2cbus, USBPD_INT)
+	usbpd := ap33772s.New(bus, USBPD_INT)
 	if err := usbpd.Configure(); err != nil {
 		return nil, err
 	}
