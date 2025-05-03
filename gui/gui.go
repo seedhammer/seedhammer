@@ -608,9 +608,12 @@ type ConfirmWarningScreen struct {
 	Body  string
 	Icon  image.RGBA64Image
 
-	warning Warning
-	confirm ConfirmDelay
-	inp     InputTracker
+	cancelBtn  Clickable
+	confirmBtn Clickable
+	pressed    bool
+	warning    Warning
+	confirm    ConfirmDelay
+	inp        InputTracker
 }
 
 type Warning struct {
@@ -713,35 +716,32 @@ func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point,
 }
 
 func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) ConfirmResult {
-	var progress float32
+	cancelBtn := s.cancelBtn.For(Button1)
+	confirmBtn := s.confirmBtn.For(Button3, Center)
+	if cancelBtn.Clicked(ctx) {
+		return ConfirmNo
+	}
 	for {
-		progress = s.confirm.Progress(ctx)
-		if progress == 1 {
-			return ConfirmYes
-		}
-		e, ok := s.inp.Next(ctx, ButtonFilter(Button3), ButtonFilter(Button1))
-		if !ok {
+		if _, ok := confirmBtn.Next(ctx); !ok {
 			break
 		}
-		if e, ok := e.AsButton(); ok {
-			switch e.Button {
-			case Button1:
-				if s.inp.Clicked(e.Button) {
-					return ConfirmNo
-				}
-			case Button3:
-				if e.Pressed {
-					s.confirm.Start(ctx, confirmDelay)
-				} else {
-					s.confirm = ConfirmDelay{}
-				}
+		if confirmBtn.Pressed != s.pressed {
+			s.pressed = confirmBtn.Pressed
+			if s.pressed {
+				s.confirm.Start(ctx, confirmDelay)
+			} else {
+				s.confirm = ConfirmDelay{}
 			}
 		}
 	}
+	progress := s.confirm.Progress(ctx)
+	if progress == 1 {
+		return ConfirmYes
+	}
 	s.warning.Layout(ctx, ops, th, dims, s.Title, s.Body)
 	layoutNavigation(&s.inp, ops, th, dims, []NavButton{
-		{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-		{Button: Button3, Style: StylePrimary, Icon: s.Icon, Progress: progress},
+		{Clickable: cancelBtn, Style: StyleSecondary, Icon: assets.IconBack},
+		{Clickable: confirmBtn, Style: StylePrimary, Icon: s.Icon, Progress: progress},
 	}...)
 	return ConfirmNone
 }
@@ -1098,38 +1098,27 @@ var scrollMask = op.RegisterParameterizedImage(func(args op.ImageArguments, x, y
 func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic, selected int) {
 	kbd := NewKeyboard(ctx)
 	inp := new(InputTracker)
+	backBtn := &Clickable{Button: Button1}
+	okBtn := &Clickable{Button: Button2}
 	for {
-		for {
-			kbd.Update(ctx)
-			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button2))
-			if !ok {
-				break
+		kbd.Update(ctx)
+		if backBtn.Clicked(ctx) {
+			return
+		}
+		for okBtn.Clicked(ctx) {
+			w, complete := kbd.Complete()
+			if !complete {
+				continue
 			}
-			if e, ok := e.AsButton(); ok {
-				switch e.Button {
-				case Button1:
-					if inp.Clicked(e.Button) {
-						return
-					}
-				case Button2:
-					if !inp.Clicked(e.Button) {
-						break
-					}
-					w, complete := kbd.Complete()
-					if !complete {
-						break
-					}
-					kbd.Clear()
-					mnemonic[selected] = w
-					for {
-						selected++
-						if selected == len(mnemonic) {
-							return
-						}
-						if mnemonic[selected] == -1 {
-							break
-						}
-					}
+			kbd.Clear()
+			mnemonic[selected] = w
+			for {
+				selected++
+				if selected == len(mnemonic) {
+					return
+				}
+				if mnemonic[selected] == -1 {
+					break
 				}
 			}
 		}
@@ -1165,9 +1154,9 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 		top, _ := content.CutBottom(kbdsz.Y)
 		op.Position(ops, ops.End(), top.Center(longest))
 
-		layoutNavigation(inp, ops, th, dims, []NavButton{{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack}}...)
+		layoutNavigation(inp, ops, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
 		if complete {
-			layoutNavigation(inp, ops, th, dims, []NavButton{{Button: Button2, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
+			layoutNavigation(inp, ops, th, dims, []NavButton{{Clickable: okBtn, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
 		}
 		ctx.Frame()
 	}
@@ -1184,6 +1173,7 @@ type Keyboard struct {
 
 	nvalid    int
 	positions [len(kbdKeys)][]image.Point
+	keys      [len(kbdKeys)][]Clickable
 	widest    image.Point
 	backspace image.Point
 	size      image.Point
@@ -1222,6 +1212,7 @@ func NewKeyboard(ctx *Context) *Keyboard {
 			pos = pos.Add(off)
 			pos = pos.Sub(bgbnds.Min)
 			k.positions[i] = append(k.positions[i], pos)
+			k.keys[i] = append(k.keys[i], Clickable{})
 		}
 	}
 	k.size = image.Point{
@@ -1296,6 +1287,17 @@ func (k *Keyboard) Valid(r rune) bool {
 }
 
 func (k *Keyboard) Update(ctx *Context) {
+	for i := range k.keys {
+		for j := range k.keys[i] {
+			key := &k.keys[i][j]
+			for key.Clicked(ctx) {
+				r := kbdKeys[i][j]
+				k.row = i
+				k.col = j
+				k.rune(r)
+			}
+		}
+	}
 	for {
 		e, ok := k.inp.Next(ctx, ButtonFilter(Left), ButtonFilter(Right), ButtonFilter(Up), ButtonFilter(Down), ButtonFilter(Center), RuneFilter(), ButtonFilter(Button3))
 		if !ok {
@@ -1463,7 +1465,9 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 				sz = widget.Labelf(ops.Begin(), style, col, string(key))
 			}
 			key := ops.End()
-			bg.Add(ops.Begin(), image.Rectangle{Max: bgsz}, true)
+			op.ClipOp{Max: bgsz}.Add(ops.Begin())
+			op.InputOp(ops, &k.keys[i][j])
+			bg.Add(ops, image.Rectangle{Max: bgsz}, true)
 			op.ColorOp(ops, bgcol)
 			op.Position(ops, key, bgsz.Sub(sz).Div(2))
 			op.Position(ops, ops.End(), k.positions[i][j])
@@ -1473,30 +1477,43 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 }
 
 type ChoiceScreen struct {
-	Title   string
-	Lead    string
-	Choices []string
-	choice  int
+	Title    string
+	Lead     string
+	Choices  []string
+	children []Choice
+	choice   int
+}
+
+type Choice struct {
+	Size  image.Point
+	W     op.CallOp
+	click Clickable
 }
 
 func (s *ChoiceScreen) Choose(ctx *Context, ops op.Ctx, th *Colors) (int, bool) {
 	inp := new(InputTracker)
+	cancelBtn := &Clickable{Button: Button1}
+	chooseBtn := &Clickable{Button: Button3, AltButton: Center}
 	for {
+		switch {
+		case cancelBtn.Clicked(ctx):
+			return 0, false
+		case chooseBtn.Clicked(ctx):
+			return s.choice, true
+		}
+		for i := range s.children {
+			c := &s.children[i]
+			if c.click.Clicked(ctx) {
+				s.choice = i
+			}
+		}
 		for {
-			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button3), ButtonFilter(Center), ButtonFilter(Up), ButtonFilter(Down))
+			e, ok := inp.Next(ctx, ButtonFilter(Up), ButtonFilter(Down))
 			if !ok {
 				break
 			}
 			if e, ok := e.AsButton(); ok {
 				switch e.Button {
-				case Button1:
-					if inp.Clicked(e.Button) {
-						return 0, false
-					}
-				case Button3, Center:
-					if inp.Clicked(e.Button) {
-						return s.choice, true
-					}
 				case Up:
 					if e.Pressed {
 						if s.choice > 0 {
@@ -1517,8 +1534,8 @@ func (s *ChoiceScreen) Choose(ctx *Context, ops op.Ctx, th *Colors) (int, bool) 
 		s.Draw(ctx, ops, th, dims)
 
 		layoutNavigation(inp, ops, th, dims, []NavButton{
-			{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-			{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
+			{Clickable: cancelBtn, Style: StyleSecondary, Icon: assets.IconBack},
+			{Clickable: chooseBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		}...)
 		ctx.Frame()
 	}
@@ -1537,10 +1554,9 @@ func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 
 	content = content.Shrink(16, 0, 16, 0)
 
-	children := make([]struct {
-		Size image.Point
-		W    op.CallOp
-	}, len(s.Choices))
+	if len(s.children) != len(s.Choices) {
+		s.children = make([]Choice, len(s.Choices))
+	}
 	maxW := 0
 	for i, c := range s.Choices {
 		style := ctx.Styles.button
@@ -1550,8 +1566,8 @@ func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 		}
 		sz := widget.Labelf(ops.Begin(), style, col, c)
 		ch := ops.End()
-		children[i].Size = sz
-		children[i].W = ch
+		s.children[i].Size = sz
+		s.children[i].W = ch
 		if sz.X > maxW {
 			maxW = sz.X
 		}
@@ -1559,19 +1575,24 @@ func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 
 	inner := ops.Begin()
 	h := 0
-	for i, c := range children {
+	focusBg := assets.ButtonFocused
+	for i := range s.children {
+		c := &s.children[i]
 		xoff := (maxW - c.Size.X) / 2
 		pos := image.Pt(xoff, h)
 		txt := c.W
+		bg := image.Rectangle{Max: c.Size}
+		bg.Min.X -= xoff
+		bg.Max.X += xoff
 		if i == s.choice {
-			bg := image.Rectangle{Max: c.Size}
-			bg.Min.X -= xoff
-			bg.Max.X += xoff
-			assets.ButtonFocused.Add(inner.Begin(), bg, true)
+			focusBg.Add(inner.Begin(), bg, true)
 			op.ColorOp(inner, th.Text)
 			txt.Add(inner)
 			txt = inner.End()
 		}
+		op.Offset(inner, pos)
+		op.ClipOp(focusBg.Bounds(bg)).Add(inner)
+		op.InputOp(inner, &c.click)
 		op.Position(inner, txt, pos)
 		h += c.Size.Y
 	}
@@ -1584,84 +1605,58 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 	selectBtn := &Clickable{Button: Button3, AltButton: Center}
 	var quit chan struct{}
 	for {
-		dims := ctx.Platform.DisplaySize()
-	events:
-		for {
-			if scan, ok := ctx.Scan(); ok {
-				switch scan := scan.(type) {
-				case bip39.Mnemonic:
-					if quit != nil {
-						break
-					}
-					quit = make(chan struct{})
-					go func() {
-						err := func() error {
-							mfp, err := masterFingerprintFor(scan, &chaincfg.MainNetParams)
-							if err != nil {
-								return err
-							}
-							params := ctx.Platform.EngraverParams()
-							const sz = backup.SquarePlate
-							keySide, err := backup.EngraveSeed(params, backup.Seed{
-								KeyIdx:            0,
-								Mnemonic:          scan,
-								Keys:              1,
-								MasterFingerprint: mfp,
-								Font:              constant.Font,
-								Size:              sz,
-							})
-							if err != nil {
-								return err
-							}
-							e, err := ctx.Platform.Engraver()
-							if err != nil {
-								return err
-							}
-							defer e.Close()
-							log.Println("opened engraver, engraving...")
-							defer log.Println("done engraving...")
-							return e.Engrave(sz, keySide, quit)
-						}()
-						if err != nil {
-							log.Printf("engrave error: %v", err)
-						}
-					}()
-				}
+		for selectBtn.Clicked(ctx) {
+			if quit != nil {
+				fmt.Println("quitting engraving")
+				close(quit)
+				quit = nil
+				continue
 			}
-			if selectBtn.Clicked(ctx) {
+			mainSelectedFlow(ctx, ops, page)
+			continue
+		}
+		if scan, ok := ctx.Scan(); ok {
+			switch scan := scan.(type) {
+			case bip39.Mnemonic:
 				if quit != nil {
-					fmt.Println("quitting engraving")
-					close(quit)
-					quit = nil
+					break
 				}
-				continue
-				ws := &ConfirmWarningScreen{
-					Title: "Remove SD card",
-					Body:  "Remove SD card to continue.\n\nHold button to ignore this warning.",
-					Icon:  assets.IconRight,
-				}
-				th := mainScreenTheme(page)
-			loop:
-				for !ctx.EmptySDSlot {
-					res := ws.Layout(ctx, ops.Begin(), th, dims)
-					dialog := ops.End()
-					switch res {
-					case ConfirmYes:
-						break loop
-					case ConfirmNo:
-						continue events
+				quit = make(chan struct{})
+				go func() {
+					err := func() error {
+						mfp, err := masterFingerprintFor(scan, &chaincfg.MainNetParams)
+						if err != nil {
+							return err
+						}
+						params := ctx.Platform.EngraverParams()
+						const sz = backup.SquarePlate
+						keySide, err := backup.EngraveSeed(params, backup.Seed{
+							KeyIdx:            0,
+							Mnemonic:          scan,
+							Keys:              1,
+							MasterFingerprint: mfp,
+							Font:              constant.Font,
+							Size:              sz,
+						})
+						if err != nil {
+							return err
+						}
+						e, err := ctx.Platform.Engraver()
+						if err != nil {
+							return err
+						}
+						defer e.Close()
+						log.Println("opened engraver, engraving...")
+						defer log.Println("done engraving...")
+						return e.Engrave(sz, keySide, quit)
+					}()
+					if err != nil {
+						log.Printf("engrave error: %v", err)
 					}
-					drawMainScreen(ctx, ops, dims, page)
-					dialog.Add(ops)
-					ctx.Frame()
-				}
-				ctx.EmptySDSlot = true
-				switch page {
-				case backupWallet:
-					backupWalletFlow(ctx, ops, th)
-				}
-				continue
+				}()
 			}
+		}
+		for {
 			e, ok := inp.Next(ctx,
 				ButtonFilter(Left),
 				ButtonFilter(Right),
@@ -1690,9 +1685,10 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 				}
 			}
 		}
+		dims := ctx.Platform.DisplaySize()
 		drawMainScreen(ctx, ops, dims, page)
 		layoutNavigation(inp, ops, mainScreenTheme(page), dims,
-			NavButton{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark, Tag: selectBtn},
+			NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		)
 		ctx.Frame()
 	}
@@ -1753,11 +1749,11 @@ const (
 )
 
 type NavButton struct {
-	Button   Button
-	Style    ButtonStyle
-	Icon     image.Image
-	Tag      op.Tag
-	Progress float32
+	Button    Button
+	Clickable *Clickable
+	Style     ButtonStyle
+	Icon      image.Image
+	Progress  float32
 }
 
 func navButtonTag(inp *InputTracker, b Button) op.Tag {
@@ -1810,7 +1806,13 @@ func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Poin
 	var r image.Rectangle
 	for _, b := range btns {
 		idx := int(b.Button - Button1)
-		button(ops.Begin(), b, b.Tag, inp.Pressed[b.Button])
+		pressed := inp.Pressed[b.Button]
+		clk := b.Clickable
+		if clk != nil {
+			idx = int(clk.Button - Button1)
+			pressed = clk.Pressed && clk.Entered
+		}
+		button(ops.Begin(), b, clk, pressed)
 		y := ys[idx]
 		pos := image.Pt(dims.X-btnsz.X, y)
 		op.Position(ops, ops.End(), pos)
@@ -1877,6 +1879,35 @@ func layoutMainPager(ops op.Ctx, th *Colors, page program) image.Point {
 		op.ColorOp(ops, th.Text)
 	}
 	return image.Pt((sz.X+space)*npages-space, sz.Y)
+}
+
+func mainSelectedFlow(ctx *Context, ops op.Ctx, page program) {
+	ws := &ConfirmWarningScreen{
+		Title: "Remove SD card",
+		Body:  "Remove SD card to continue.\n\nHold button to ignore this warning.",
+		Icon:  assets.IconRight,
+	}
+	th := mainScreenTheme(page)
+loop:
+	for !ctx.EmptySDSlot {
+		dims := ctx.Platform.DisplaySize()
+		res := ws.Layout(ctx, ops.Begin(), th, dims)
+		dialog := ops.End()
+		switch res {
+		case ConfirmYes:
+			ctx.EmptySDSlot = true
+			break loop
+		case ConfirmNo:
+			return
+		}
+		drawMainScreen(ctx, ops, dims, page)
+		dialog.Add(ops)
+		ctx.Frame()
+	}
+	switch page {
+	case backupWallet:
+		backupWalletFlow(ctx, ops, th)
+	}
 }
 
 func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors) {
@@ -2027,89 +2058,88 @@ type SeedScreen struct {
 
 func (s *SeedScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) bool {
 	inp := new(InputTracker)
+	backBtn := &Clickable{Button: Button1}
+	editBtn := &Clickable{Button: Button2, AltButton: Center}
+	confirmBtn := &Clickable{Button: Button3}
+events:
 	for {
-	events:
+		for backBtn.Clicked(ctx) {
+			if isEmptyMnemonic(mnemonic) {
+				return false
+			}
+			confirm := &ConfirmWarningScreen{
+				Title: "Discard Seed?",
+				Body:  "Going back will discard the seed.\n\nHold button to confirm.",
+				Icon:  assets.IconDiscard,
+			}
+			for {
+				dims := ctx.Platform.DisplaySize()
+				res := confirm.Layout(ctx, ops.Begin(), th, dims)
+				d := ops.End()
+				switch res {
+				case ConfirmNo:
+					continue events
+				case ConfirmYes:
+					return false
+				}
+				s.Draw(ctx, ops, th, dims, mnemonic)
+				d.Add(ops)
+				ctx.Frame()
+			}
+		}
+		for editBtn.Clicked(ctx) {
+			inputWordsFlow(ctx, ops, th, mnemonic, s.selected)
+			continue
+		}
+		for confirmBtn.Clicked(ctx) {
+			if !isMnemonicComplete(mnemonic) {
+				continue
+			}
+			showErr := func(scr *ErrorScreen) {
+				for {
+					dims := ctx.Platform.DisplaySize()
+					dismissed := scr.Layout(ctx, ops.Begin(), th, dims)
+					d := ops.End()
+					if dismissed {
+						break
+					}
+					s.Draw(ctx, ops, th, dims, mnemonic)
+					d.Add(ops)
+					ctx.Frame()
+				}
+			}
+			if !mnemonic.Valid() {
+				scr := &ErrorScreen{
+					Title: "Invalid Seed",
+				}
+				var words []string
+				for _, w := range mnemonic {
+					words = append(words, bip39.LabelFor(w))
+				}
+				if nonstandard.ElectrumSeed(strings.Join(words, " ")) {
+					scr.Body = "Electrum seeds are not supported."
+				} else {
+					scr.Body = "The seed phrase is invalid.\n\nCheck the words and try again."
+				}
+				showErr(scr)
+				continue
+			}
+			if _, ok := deriveMasterKey(mnemonic, &chaincfg.MainNetParams); !ok {
+				showErr(&ErrorScreen{
+					Title: "Invalid Seed",
+					Body:  "The seed is invalid.",
+				})
+				continue
+			}
+			return true
+		}
 		for {
-			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button2), ButtonFilter(Center), ButtonFilter(Button3), ButtonFilter(Up), ButtonFilter(Down))
+			e, ok := inp.Next(ctx, ButtonFilter(Up), ButtonFilter(Down))
 			if !ok {
 				break
 			}
 			if e, ok := e.AsButton(); ok {
 				switch e.Button {
-				case Button1:
-					if !inp.Clicked(e.Button) {
-						break
-					}
-					if isEmptyMnemonic(mnemonic) {
-						return false
-					}
-					confirm := &ConfirmWarningScreen{
-						Title: "Discard Seed?",
-						Body:  "Going back will discard the seed.\n\nHold button to confirm.",
-						Icon:  assets.IconDiscard,
-					}
-					for {
-						dims := ctx.Platform.DisplaySize()
-						res := confirm.Layout(ctx, ops.Begin(), th, dims)
-						d := ops.End()
-						switch res {
-						case ConfirmNo:
-							continue events
-						case ConfirmYes:
-							return false
-						}
-						s.Draw(ctx, ops, th, dims, mnemonic)
-						d.Add(ops)
-						ctx.Frame()
-					}
-				case Button2, Center:
-					if !inp.Clicked(e.Button) {
-						break
-					}
-					inputWordsFlow(ctx, ops, th, mnemonic, s.selected)
-					continue
-				case Button3:
-					if !inp.Clicked(e.Button) || !isMnemonicComplete(mnemonic) {
-						break
-					}
-					showErr := func(scr *ErrorScreen) {
-						for {
-							dims := ctx.Platform.DisplaySize()
-							dismissed := scr.Layout(ctx, ops.Begin(), th, dims)
-							d := ops.End()
-							if dismissed {
-								break
-							}
-							s.Draw(ctx, ops, th, dims, mnemonic)
-							d.Add(ops)
-							ctx.Frame()
-						}
-					}
-					if !mnemonic.Valid() {
-						scr := &ErrorScreen{
-							Title: "Invalid Seed",
-						}
-						var words []string
-						for _, w := range mnemonic {
-							words = append(words, bip39.LabelFor(w))
-						}
-						if nonstandard.ElectrumSeed(strings.Join(words, " ")) {
-							scr.Body = "Electrum seeds are not supported."
-						} else {
-							scr.Body = "The seed phrase is invalid.\n\nCheck the words and try again."
-						}
-						showErr(scr)
-						break
-					}
-					_, ok = deriveMasterKey(mnemonic, &chaincfg.MainNetParams)
-					if !ok {
-						showErr(&ErrorScreen{
-							Title: "Invalid Seed",
-							Body:  "The seed is invalid.",
-						})
-						break
-					}
-					return true
 				case Down:
 					if e.Pressed && s.selected < len(mnemonic)-1 {
 						s.selected++
@@ -2126,12 +2156,12 @@ func (s *SeedScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip3
 		s.Draw(ctx, ops, th, dims, mnemonic)
 
 		layoutNavigation(inp, ops, th, dims, []NavButton{
-			{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-			{Button: Button2, Style: StyleSecondary, Icon: assets.IconEdit},
+			{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack},
+			{Clickable: editBtn, Style: StyleSecondary, Icon: assets.IconEdit},
 		}...)
 		if isMnemonicComplete(mnemonic) {
 			layoutNavigation(inp, ops, th, dims, []NavButton{
-				{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
+				{Clickable: confirmBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 			}...)
 		}
 		ctx.Frame()
@@ -2805,7 +2835,7 @@ const (
 	ModeISO15693
 )
 
-const idleTimeout = 3 * time.Second
+const idleTimeout = 3 * time.Minute
 
 func Run(pl Platform, version string) func(yield func() bool) {
 	return func(yield func() bool) {

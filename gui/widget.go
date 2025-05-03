@@ -18,7 +18,34 @@ type Clickable struct {
 const repeatStartDelay = 400 * time.Millisecond
 const repeatDelay = 100 * time.Millisecond
 
+type ClickableEvent struct {
+	Clicked bool
+}
+
+func (c *Clickable) For(btns ...Button) *Clickable {
+	if len(btns) > 0 {
+		c.Button = btns[0]
+	}
+	if len(btns) > 1 {
+		c.AltButton = btns[1]
+	}
+	return c
+}
+
 func (c *Clickable) Clicked(ctx *Context) bool {
+	for {
+		e, ok := c.Next(ctx)
+		if !ok {
+			break
+		}
+		if e.Clicked {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Clickable) Next(ctx *Context) (ClickableEvent, bool) {
 	now := ctx.Platform.Now()
 	switch c.Button {
 	case Up, Down, Right, Left:
@@ -36,14 +63,14 @@ func (c *Clickable) Clicked(ctx *Context) bool {
 		c.repeat = wakeup
 		ctx.WakeupAt(wakeup)
 		if repeat {
-			return true
+			return ClickableEvent{Clicked: true}, true
 		}
 	}
 
 	for {
 		e, ok := ctx.Next(ButtonFilter(c.Button), ButtonFilter(c.AltButton), PointerFilter(c))
 		if !ok {
-			return false
+			return ClickableEvent{}, false
 		}
 		clicked := false
 		if e, ok := e.AsButton(); ok {
@@ -58,8 +85,6 @@ func (c *Clickable) Clicked(ctx *Context) bool {
 		if !c.Pressed {
 			c.repeat = time.Time{}
 		}
-		if clicked {
-			return true
-		}
+		return ClickableEvent{Clicked: clicked}, true
 	}
 }
