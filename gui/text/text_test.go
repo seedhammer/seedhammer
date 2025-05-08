@@ -11,8 +11,10 @@ import (
 )
 
 func BenchmarkLayout(b *testing.B) {
+	bytes := any([]byte{'a', 'b'})
 	for range b.N {
-		args := []any{120, "Hi", 0xcafe}
+		format := "₿ %.2d%% %s %.8x %c %s %.32b"
+		args := []any{120, "Hi", 0xcafe, 'B', bytes, 0b11101100}
 		l := &Layout{
 			MaxWidth: 100,
 			Style: Style{
@@ -20,7 +22,7 @@ func BenchmarkLayout(b *testing.B) {
 			},
 		}
 		for {
-			if _, ok := l.Next("₿ %.2d%% %s %.8x", args...); !ok {
+			if _, ok := l.Next(format, args...); !ok {
 				break
 			}
 		}
@@ -28,9 +30,11 @@ func BenchmarkLayout(b *testing.B) {
 }
 
 func TestAllocs(t *testing.T) {
-	allocs := testing.Benchmark(BenchmarkLayout).AllocsPerOp()
-	if allocs > 0 {
-		t.Errorf("Layout allocates %d, expected %d", allocs, 0)
+	res := testing.Benchmark(BenchmarkLayout)
+	allocs := res.AllocsPerOp()
+	bytes := res.AllocedBytesPerOp()
+	if allocs > 0 || bytes > 0 {
+		t.Errorf("Layout allocates %d (%d bytes), expected none", allocs, bytes)
 	}
 }
 
@@ -50,12 +54,16 @@ func TestLayout(t *testing.T) {
 			[]line{{"Hello World", 90}},
 		},
 		{
+			"%c", []any{'P'}, 100,
+			[]line{{"P", 9}},
+		},
+		{
 			"Hello %s", []any{"Format"}, 100,
 			[]line{{"Hello Format", 100}},
 		},
 		{
-			"₿ %.2g%% %f %g %.8x %2d", []any{12.345, 12.345, 12.345, 0xcafe, 9}, 1000,
-			[]line{{"₿ 12% 12.345000 12.345 0000cafe  9", 258}},
+			"₿ %.2g%% %f %g %.8x %2d %d %c %s", []any{12.345, 12.345, 12.345, 0xcafe, uint64(9), int64(-12), '₿', []byte("abc")}, 1000,
+			[]line{{"₿ 12% 12.345000 12.345 0000cafe  9 -12 ₿ abc", 325}},
 		},
 		{
 			"Hello Aligned World", nil, 70,

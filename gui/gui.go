@@ -2883,6 +2883,7 @@ func Run(pl Platform, version string) func(yield func() bool) {
 		}
 		startTime := time.Now()
 		var evts []Event
+		stats := new(runtimeStats)
 		for range it {
 			dirty := a.root.Clip(image.Rectangle{Max: a.ctx.Platform.DisplaySize()})
 			layoutTime := time.Since(startTime)
@@ -2902,10 +2903,7 @@ func Run(pl Platform, version string) func(yield func() bool) {
 			}
 			drawTime := time.Since(startTime)
 			if a.ctx.Platform.Debug() {
-				var mem runtime.MemStats
-				runtime.ReadMemStats(&mem)
-				log.Printf("frame: %v layout: %v draw: %v %v mem %d allocs %d",
-					drawTime, layoutTime, drawTime-layoutTime, dirty, mem.HeapInuse, mem.Mallocs-mem.Frees)
+				stats.Dump(drawTime, layoutTime, dirty)
 			}
 			for {
 				if !yield() {
@@ -2961,6 +2959,32 @@ func Run(pl Platform, version string) func(yield func() bool) {
 			startTime = time.Now()
 		}
 	}
+}
+
+type runtimeStats struct {
+	mallocs uint64
+	buf     [200]byte
+}
+
+func (r *runtimeStats) Dump(drawTime, layoutTime time.Duration, dirty image.Rectangle) {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	dm := mem.Mallocs - r.mallocs
+	r.mallocs = mem.Mallocs
+	format := "frame: %dms layout: %dms draw: %dms (%d,%d)-(%d,%d) mem %d allocs %d total %d\n"
+	// Cast values to int to avoid a TinyGo allocation for larger integers.
+	args := []any{int(drawTime.Milliseconds()), int(layoutTime.Milliseconds()), int((drawTime - layoutTime).Milliseconds()),
+		dirty.Min.X, dirty.Min.Y, dirty.Max.X, dirty.Max.Y, uint(mem.HeapInuse), uint(mem.Mallocs - mem.Frees), uint(dm)}
+	f := new(text.Formatter)
+	buf := r.buf[:0]
+	for {
+		r, ok := f.Next(format, args...)
+		if !ok {
+			break
+		}
+		buf = utf8.AppendRune(buf, r)
+	}
+	log.Writer().Write(buf)
 }
 
 func rgb(c uint32) color.NRGBA {

@@ -64,12 +64,15 @@ func (s Style) Measure(maxWidth int, format string, args ...any) image.Point {
 	return dims
 }
 
-// formatter is a simpler fmt.Sprintf that doesn't allocate.
-type formatter struct {
+// Formatter is a poor man's fmt.Sprintf that doesn't allocate.
+// TODO: It can be replaced when something like
+// https://github.com/golang/go/issues/62653 is implemented in
+// the Go implementation.
+type Formatter struct {
 	idx    int
 	auxIdx int
 	argIdx int
-	buf    [20]byte
+	buf    [65]byte
 	bufLen int
 	state  formatterState
 }
@@ -82,13 +85,13 @@ const (
 	formatBuf
 )
 
-func (f *formatter) next(format string) rune {
+func (f *Formatter) next(format string) rune {
 	c, n := utf8.DecodeRuneInString(format[f.idx:])
 	f.idx += n
 	return c
 }
 
-func (f *formatter) doFloat(r byte, prec int, args []any) {
+func (f *Formatter) doFloat(r byte, prec int, args []any) {
 	switch arg := args[f.argIdx].(type) {
 	case float32:
 		f.bufLen = len(strconv.AppendFloat(buf[:0], float64(arg), r, prec, 32))
@@ -108,21 +111,58 @@ func (f *formatter) doFloat(r byte, prec int, args []any) {
 
 // TODO: get rid of this hack when TinyGo can eliminate the
 // allocation for strconv.Append* functions.
-var buf [20]byte
+var buf [65]byte
 
-func (f *formatter) doInt(r byte, prec, pad int, args []any) {
+func (f *Formatter) doChar(arg any) {
+	var r rune
+	switch arg := arg.(type) {
+	case rune:
+		r = arg
+	case uint:
+		r = rune(arg)
+	case uint32:
+		r = rune(arg)
+	case uint64:
+		r = rune(arg)
+	case int64:
+		r = rune(arg)
+	default:
+		panic("unsupported argument type")
+	}
+	buf := utf8.AppendRune(buf[:0], r)
+	if len(buf) > len(f.buf) {
+		panic("float format string overflows buffer")
+	}
+	f.bufLen = len(buf)
+	copy(f.buf[:], buf)
+	f.state = formatBuf
+	f.auxIdx = 0
+	f.argIdx++
+}
+
+func (f *Formatter) doInt(r byte, prec, pad int, args []any) {
 	base := 2
 	switch r {
 	case 'x':
 		base = 16
 	case 'd':
 		base = 10
+	case 'b':
+		base = 2
 	}
 	switch arg := args[f.argIdx].(type) {
 	case int:
 		f.bufLen = len(strconv.AppendInt(buf[:0], int64(arg), base))
+	case uint:
+		f.bufLen = len(strconv.AppendUint(buf[:0], uint64(arg), base))
 	case uint32:
 		f.bufLen = len(strconv.AppendUint(buf[:0], uint64(arg), base))
+	case int32:
+		f.bufLen = len(strconv.AppendInt(buf[:0], int64(arg), base))
+	case uint64:
+		f.bufLen = len(strconv.AppendUint(buf[:0], arg, base))
+	case int64:
+		f.bufLen = len(strconv.AppendInt(buf[:0], arg, base))
 	default:
 		panic("unsupported argument type")
 	}
@@ -155,7 +195,7 @@ func (f *formatter) doInt(r byte, prec, pad int, args []any) {
 	f.auxIdx = 0
 }
 
-func (f *formatter) Next(format string, args ...any) (rune, bool) {
+func (f *Formatter) Next(format string, args ...any) (rune, bool) {
 	for {
 		switch f.state {
 		case formatFormat:
@@ -212,18 +252,27 @@ func (f *formatter) Next(format string, args ...any) (rune, bool) {
 			case 's':
 				f.state = formatArg
 				f.auxIdx = 0
+			case 'c':
+				f.doChar(args[f.argIdx])
 			default:
 				panic("unsupported format verb")
 			}
 		case formatArg:
-			a := args[f.argIdx].(string)
-			a = a[f.auxIdx:]
-			if len(a) == 0 {
+			var r rune
+			var n int
+			switch arg := args[f.argIdx].(type) {
+			case string:
+				r, n = utf8.DecodeRuneInString(arg[f.auxIdx:])
+			case []byte:
+				r, n = utf8.DecodeRune(arg[f.auxIdx:])
+			default:
+				panic("unsupported string type")
+			}
+			if n == 0 {
 				f.argIdx++
 				f.state = formatFormat
 				continue
 			}
-			r, n := utf8.DecodeRuneInString(a)
 			f.auxIdx += n
 			return r, true
 		case formatBuf:
@@ -369,7 +418,7 @@ func (l2 *Layout) init(format string, args []any) {
 
 type state struct {
 	prevR     rune
-	formatter formatter
+	formatter Formatter
 }
 
 func (s *state) next(l Style, format string, args []any) (rune, fixed.Int26_6, bool) {
