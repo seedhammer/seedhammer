@@ -266,7 +266,9 @@ const (
 )
 
 // TODO: Convert to iterator when TinyGo can move its allocations to the stack.
-func (l *Layout) Next(format string, args ...any) (Glyph, bool) {
+func (l2 *Layout) Next(format string, args ...any) (Glyph, bool) {
+	l := *l2 // Hack around TinyGo escape analysis
+
 	// Enable printf vet warnings.
 	if false {
 		_ = fmt.Sprintf(format, args...)
@@ -291,9 +293,11 @@ func (l *Layout) Next(format string, args ...any) (Glyph, bool) {
 				Advance: a,
 			}
 			l.dot += a
+			*l2 = l
 			return g, true
 		case layoutEOL:
 			if l.eof {
+				*l2 = l
 				return Glyph{}, false
 			}
 			g := Glyph{
@@ -308,12 +312,15 @@ func (l *Layout) Next(format string, args ...any) (Glyph, bool) {
 			}
 			l.prevCur = l.cursor
 			l.state = layoutInit
+			*l2 = l
 			return g, true
 		}
 	}
 }
 
-func (l *Layout) init(format string, args []any) {
+func (l2 *Layout) init(format string, args []any) {
+	l := *l2 // Hack around TinyGo escape analysis
+
 	// Compute line extent in runes and width.
 	l.lineRunes = 0
 	l.lineWidth = fixed.I(0)
@@ -357,6 +364,7 @@ func (l *Layout) init(format string, args []any) {
 		l.dot = fixed.I(l.MaxWidth) - l.lineWidth
 	}
 	l.state = layoutRunes
+	*l2 = l
 }
 
 type state struct {
