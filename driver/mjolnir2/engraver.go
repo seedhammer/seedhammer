@@ -4,6 +4,7 @@ import (
 	"errors"
 	"image"
 	"iter"
+	"runtime"
 	"time"
 
 	"seedhammer.com/engrave"
@@ -386,6 +387,8 @@ func (e *engravingDriver) swapBuffers() []uint32 {
 }
 
 func (e *engravingDriver) engrave(transfer func([]uint32), diag <-chan axis, conf engraving, quit <-chan struct{}, homing bool, plan engrave.Plan) error {
+	// Keep the DMA buffers alive.
+	defer runtime.KeepAlive(e)
 	e.reset(transfer, conf)
 	cmds, c := iter.Pull(iter.Seq[engrave.Command](plan))
 	defer c()

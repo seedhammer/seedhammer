@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/draw"
 	"machine"
+	"runtime"
 	"slices"
 	"time"
 	"unsafe"
@@ -544,6 +545,8 @@ func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
 		}
 	}
 	if d.remaining == 0 {
+		// Keep DMA buffers alive.
+		runtime.KeepAlive(d)
 		return nil, false
 	}
 	d.buffered = true
