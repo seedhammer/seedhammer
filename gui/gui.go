@@ -690,7 +690,7 @@ func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point,
 	op.ColorOp(ops, th.Text)
 
 	btnOff := assets.NavBtnPrimary.Bounds().Dx() + btnMargin
-	titlesz := widget.Labelwf(ops.Begin(), ctx.Styles.warning, dims.X-btnOff*2, th.Text, strings.ToTitle(title))
+	titlesz := widget.Labelwf(ops.Begin(), ctx.Styles.warning, dims.X-btnOff*2, th.Text, title)
 	titlew := ops.End()
 	op.Position(ops, titlew, image.Pt((dims.X-titlesz.X)/2, r.Min.Y))
 
@@ -1883,7 +1883,7 @@ func layoutMainPager(ops op.Ctx, th *Colors, page program) image.Point {
 
 func mainSelectedFlow(ctx *Context, ops op.Ctx, page program) {
 	ws := &ConfirmWarningScreen{
-		Title: "Remove SD card",
+		Title: strings.ToTitle("Remove SD card"),
 		Body:  "Remove SD card to continue.\n\nHold button to ignore this warning.",
 		Icon:  assets.IconRight,
 	}
@@ -2068,7 +2068,7 @@ events:
 				return false
 			}
 			confirm := &ConfirmWarningScreen{
-				Title: "Discard Seed?",
+				Title: strings.ToTitle("Discard Seed?"),
 				Body:  "Going back will discard the seed.\n\nHold button to confirm.",
 				Icon:  assets.IconDiscard,
 			}
@@ -2357,7 +2357,7 @@ func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (int, b
 						// belongs to.
 						if len(s.Descriptor.Keys) == 1 {
 							confirm := &ConfirmWarningScreen{
-								Title: "Unknown Wallet",
+								Title: strings.ToTitle("Unknown Wallet"),
 								Body:  "The wallet does not match the seed.\n\nIf it is passphrase protected, long press to confirm.",
 								Icon:  assets.IconCheckmark,
 							}
@@ -2644,7 +2644,7 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 						s.step--
 					} else {
 						confirm := &ConfirmWarningScreen{
-							Title: "Cancel?",
+							Title: strings.ToTitle("Cancel?"),
 							Body:  "This will cancel the engraving process.\n\nHold button to confirm.",
 							Icon:  assets.IconDiscard,
 						}
