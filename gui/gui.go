@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
@@ -1100,6 +1101,11 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 	inp := new(InputTracker)
 	backBtn := &Clickable{Button: Button1}
 	okBtn := &Clickable{Button: Button2}
+	layoutWord := func(ops op.Ctx, n int, word string) image.Point {
+		style := ctx.Styles.word
+		return widget.Labelf(ops, style, th.Background, "%2d: %s", n, word)
+	}
+	longest := layoutWord(op.Ctx{}, 24, longestWord)
 	for {
 		kbd.Update(ctx)
 		if backBtn.Clicked(ctx) {
@@ -1123,7 +1129,6 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 			}
 		}
 		dims := ctx.Platform.DisplaySize()
-		completedWord, complete := kbd.Complete()
 		op.ColorOp(ops, th.Background)
 		layoutTitle(ctx, ops, dims.X, th.Text, "Input Words")
 
@@ -1134,17 +1139,7 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 		kbdsz := kbd.Layout(ctx, ops.Begin(), th)
 		op.Position(ops, ops.End(), content.S(kbdsz))
 
-		layoutWord := func(ops op.Ctx, n int, word string) image.Point {
-			style := ctx.Styles.word
-			return widget.Labelf(ops, style, th.Background, "%2d: %s", n, word)
-		}
-
-		longest := layoutWord(op.Ctx{}, 24, longestWord)
-		hint := kbd.Word
-		if complete {
-			hint = strings.ToUpper(bip39.LabelFor(completedWord))
-		}
-		layoutWord(ops.Begin(), selected+1, hint)
+		layoutWord(ops.Begin(), selected+1, kbd.WordLabel)
 		word := ops.End()
 		r := image.Rectangle{Max: longest}
 		r.Min.Y -= 3
@@ -1155,7 +1150,7 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 		op.Position(ops, ops.End(), top.Center(longest))
 
 		layoutNavigation(inp, ops, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
-		if complete {
+		if _, complete := kbd.Complete(); complete {
 			layoutNavigation(inp, ops, th, dims, []NavButton{{Clickable: okBtn, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
 		}
 		ctx.Frame()
@@ -1163,17 +1158,19 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 }
 
 var kbdKeys = [...][]rune{
-	[]rune("QWERTYUIOP"),
-	[]rune("ASDFGHJKL"),
-	[]rune("ZXCVBNM⌫"),
+	[]rune("qwertyuiop"),
+	[]rune("asdfghjkl"),
+	[]rune("zxcvbnm⌫"),
 }
 
+const nkeys = 27
+
 type Keyboard struct {
-	Word string
+	Word      string
+	WordLabel string
 
 	nvalid    int
-	positions [len(kbdKeys)][]image.Point
-	keys      [len(kbdKeys)][]Clickable
+	keys      [len(kbdKeys)][]keyboardKey
 	widest    image.Point
 	backspace image.Point
 	size      image.Point
@@ -1181,6 +1178,13 @@ type Keyboard struct {
 	mask     uint32
 	row, col int
 	inp      InputTracker
+
+	allKeys [nkeys]keyboardKey
+}
+
+type keyboardKey struct {
+	pos image.Point
+	clk Clickable
 }
 
 func NewKeyboard(ctx *Context) *Keyboard {
@@ -1199,6 +1203,7 @@ func NewKeyboard(ctx *Context) *Keyboard {
 		}
 	}
 	maxw := longest*bgsz.X - margin
+	allKeys := k.allKeys[:]
 	for i, row := range kbdKeys {
 		n := len(row)
 		if i == len(kbdKeys)-1 {
@@ -1207,12 +1212,13 @@ func NewKeyboard(ctx *Context) *Keyboard {
 		}
 		w := bgsz.X*n - margin
 		off := image.Pt((maxw-w)/2, 0)
+		k.keys[i] = allKeys[:len(row)]
+		allKeys = allKeys[len(row):]
 		for j := range row {
 			pos := image.Pt(j*bgsz.X, i*bgsz.Y)
 			pos = pos.Add(off)
 			pos = pos.Sub(bgbnds.Min)
-			k.positions[i] = append(k.positions[i], pos)
-			k.keys[i] = append(k.keys[i], Clickable{})
+			k.keys[i][j].pos = pos
 		}
 	}
 	k.size = image.Point{
@@ -1224,7 +1230,7 @@ func NewKeyboard(ctx *Context) *Keyboard {
 }
 
 func (k *Keyboard) Complete() (bip39.Word, bool) {
-	word := strings.ToLower(k.Word)
+	word := k.Word
 	w, ok := bip39.ClosestWord(word)
 	if !ok {
 		return -1, false
@@ -1235,6 +1241,7 @@ func (k *Keyboard) Complete() (bip39.Word, bool) {
 
 func (k *Keyboard) Clear() {
 	k.Word = ""
+	k.WordLabel = ""
 	k.updateMask()
 	k.row = len(kbdKeys) / 2
 	k.col = len(kbdKeys[k.row]) / 2
@@ -1243,7 +1250,7 @@ func (k *Keyboard) Clear() {
 
 func (k *Keyboard) updateMask() {
 	k.mask = ^uint32(0)
-	word := strings.ToLower(k.Word)
+	word := k.Word
 	w, valid := bip39.ClosestWord(word)
 	if !valid {
 		return
@@ -1257,8 +1264,7 @@ func (k *Keyboard) updateMask() {
 		k.nvalid++
 		suffix := bip39w[len(word):]
 		if len(suffix) > 0 {
-			r := rune(strings.ToUpper(suffix)[0])
-			idx, valid := k.idxForRune(r)
+			idx, valid := k.idxForRune(rune(suffix[0]))
 			if !valid {
 				panic("valid by construction")
 			}
@@ -1271,7 +1277,7 @@ func (k *Keyboard) updateMask() {
 }
 
 func (k *Keyboard) idxForRune(r rune) (int, bool) {
-	idx := int(r - 'A')
+	idx := int(r - 'a')
 	if idx < 0 || idx >= 32 {
 		return 0, false
 	}
@@ -1289,7 +1295,7 @@ func (k *Keyboard) Valid(r rune) bool {
 func (k *Keyboard) Update(ctx *Context) {
 	for i := range k.keys {
 		for j := range k.keys[i] {
-			key := &k.keys[i][j]
+			key := &k.keys[i][j].clk
 			for key.Clicked(ctx) {
 				r := kbdKeys[i][j]
 				k.row = i
@@ -1362,7 +1368,7 @@ func (k *Keyboard) Update(ctx *Context) {
 			}
 		}
 		if e, ok := e.AsRune(); ok {
-			k.rune(e.Rune)
+			k.rune(unicode.ToLower(e.Rune))
 		}
 	}
 }
@@ -1379,12 +1385,17 @@ func (k *Keyboard) rune(r rune) {
 	}
 	k.updateMask()
 	k.adjust(r == '⌫')
+	k.WordLabel = k.Word
+	if completedWord, complete := k.Complete(); complete {
+		k.WordLabel = bip39.LabelFor(completedWord)
+	}
+	k.WordLabel = strings.ToUpper(k.WordLabel)
 }
 
 // adjust resets the row and column to the nearest valid key, if any.
 func (k *Keyboard) adjust(allowBackspace bool) {
 	dist := int(1e6)
-	current := k.positions[k.row][k.col]
+	current := k.keys[k.row][k.col].pos
 	found := false
 	for i, row := range kbdKeys {
 		j := 0
@@ -1393,7 +1404,7 @@ func (k *Keyboard) adjust(allowBackspace bool) {
 				j++
 				continue
 			}
-			p := k.positions[i][j]
+			p := k.keys[i][j].pos
 			d := p.Sub(current)
 			d2 := d.X*d.X + d.Y*d.Y
 			if d2 < dist {
@@ -1406,8 +1417,8 @@ func (k *Keyboard) adjust(allowBackspace bool) {
 	}
 	// Only if no other key was found, select backspace.
 	if !found {
-		k.row = len(k.positions) - 1
-		k.col = len(k.positions[k.row]) - 1
+		k.row = len(k.keys) - 1
+		k.col = len(k.keys[k.row]) - 1
 	}
 }
 
@@ -1415,12 +1426,12 @@ func (k *Keyboard) adjust(allowBackspace bool) {
 func (k *Keyboard) adjustCol(row int) bool {
 	dist := int(1e6)
 	found := false
-	x := k.positions[k.row][k.col].X
+	x := k.keys[k.row][k.col].pos.X
 	for i, r := range kbdKeys[row] {
 		if !k.Valid(r) {
 			continue
 		}
-		p := k.positions[row][i]
+		p := k.keys[row][i].pos
 		found = true
 		k.row = row
 		d := p.X - x
@@ -1462,15 +1473,16 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 				op.ImageOp(ops.Begin(), icn, true)
 				op.ColorOp(ops, col)
 			} else {
-				sz = widget.Labelf(ops.Begin(), style, col, string(key))
+				sz = widget.Labelf(ops.Begin(), style, col, "%c", unicode.ToUpper(key))
 			}
 			key := ops.End()
-			op.ClipOp{Max: bgsz}.Add(ops.Begin())
-			op.InputOp(ops, &k.keys[i][j])
-			bg.Add(ops, image.Rectangle{Max: bgsz}, true)
+			bgr := image.Rectangle{Max: bgsz}
+			op.ClipOp(bg.Bounds(bgr)).Add(ops.Begin())
+			op.InputOp(ops, &k.keys[i][j].clk)
+			bg.Add(ops, bgr, true)
 			op.ColorOp(ops, bgcol)
 			op.Position(ops, key, bgsz.Sub(sz).Div(2))
-			op.Position(ops, ops.End(), k.positions[i][j])
+			op.Position(ops, ops.End(), k.keys[i][j].pos)
 		}
 	}
 	return k.size
