@@ -2896,9 +2896,11 @@ func Run(pl Platform, version string) func(yield func() bool) {
 					break
 				}
 				fbdims := fb.Bounds().Size()
-				if a.mask == nil || fbdims != a.mask.Bounds().Size() {
+				npix := fbdims.X * fbdims.Y
+				if a.mask == nil || len(a.mask.Pix) < npix {
 					a.mask = image.NewAlpha(image.Rectangle{Max: fbdims})
 				}
+				a.mask.Rect = image.Rectangle{Max: fbdims}
 				a.root.Draw(fb, a.mask)
 			}
 			drawTime := time.Since(startTime)
