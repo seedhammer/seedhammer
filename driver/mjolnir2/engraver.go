@@ -114,7 +114,7 @@ type engraving struct {
 type phase int
 
 const (
-	startPhase phase = iota
+	delayPhase phase = iota
 	accelPhase
 	movePhase
 	decelPhase
@@ -136,27 +136,36 @@ func (c engravingConfig) New() engraving {
 // Command resets the engraver to step through a command.
 // Call [Step] to step through it.
 func (e *engraving) Command(cmd engrave.Command) {
-	e.phase = startPhase
-	e.engrave = cmd.Line
 	dist := cmd.Coord.Sub(e.pen)
 	e.pen = cmd.Coord
 	dirx, diry, steps := e.line.Reset(dist)
 	e.steps = steps
 	e.step = step(0).WithDirs(dirx, diry)
+
 	e.s = 0
 	e.Δs = 0
 	e.t = 0
 	e.sd = 0
-	e.tneedle = 0
+	// Quarter cycle delay.
+	e.ta = e.needlePeriod / 4
+	// However, no delay seems better.
+	e.ta = 0
+	e.phase = delayPhase
+	if cmd.Line == e.engrave {
+		// Middle of engraving, or moving.
+		// Don't delay.
+		e.t = e.ta
+	}
+	e.engrave = cmd.Line
 }
 
 // Step computes the pins for the next pio step
 // in the current command. Step returns false if
 // there are no more steps.
 func (st *engraving) Step() (step, bool) {
-	// Complete a needle cycle of engraving to ensure
-	// there's a dot at the beginning.
-	if st.phase == startPhase && (!st.engrave || st.tneedle == st.needlePeriod-1) {
+	// Delay engraving to ensure there's a dot at the
+	// beginning and end of a line.
+	if st.phase == delayPhase && st.t == st.ta {
 		st.phase++
 		st.t = 0
 		st.ta = st.speed

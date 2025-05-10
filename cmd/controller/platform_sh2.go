@@ -112,7 +112,7 @@ const (
 	// The duration of a needle cycle turned on.
 	needleActivation = 5 * time.Millisecond
 	// needleCurrentLimit in millisamperes (mA).
-	needleCurrentLimit = 13_000
+	needleCurrentLimit = 32_500
 	// needleSenseScale is the current limit
 	// in milliamperes (mA) that corresponds to a
 	// 100% PWM duty cycle output to NEEDLE_VREF.
