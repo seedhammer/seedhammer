@@ -1619,7 +1619,7 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 	for {
 		for selectBtn.Clicked(ctx) {
 			if quit != nil {
-				fmt.Println("quitting engraving")
+				log.Println("quitting engraving")
 				close(quit)
 				quit = nil
 				continue
@@ -2988,7 +2988,7 @@ func (r *runtimeStats) Dump(drawTime, layoutTime time.Duration, dirty image.Rect
 	format := "frame: %dms layout: %dms draw: %dms (%d,%d)-(%d,%d) mem %d allocs %d total %d\n"
 	// Cast values to int to avoid a TinyGo allocation for larger integers.
 	args := []any{int(drawTime.Milliseconds()), int(layoutTime.Milliseconds()), int((drawTime - layoutTime).Milliseconds()),
-		dirty.Min.X, dirty.Min.Y, dirty.Max.X, dirty.Max.Y, uint(mem.HeapInuse), uint(mem.Mallocs - mem.Frees), uint(dm)}
+		dirty.Min.X, dirty.Min.Y, dirty.Max.X, dirty.Max.Y, uint(mem.HeapInuse), uint(dm), uint(mem.Mallocs - mem.Frees)}
 	f := new(text.Formatter)
 	buf := r.buf[:0]
 	for {
@@ -3010,8 +3010,8 @@ func argb(c uint32) color.NRGBA {
 }
 
 func DebugEngrave(p Platform, quit <-chan struct{}) error {
-	fmt.Println("***** test engrave ****")
-	defer fmt.Println("***** test engrave done ****")
+	log.Println("***** test engrave ****")
+	defer log.Println("***** test engrave done ****")
 
 	const sz = backup.SquarePlate
 	desc := urtypes.OutputDescriptor{
@@ -3070,7 +3070,7 @@ func DebugEngrave(p Platform, quit <-chan struct{}) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println("opened engraver, engraving...")
+		log.Println("opened engraver, engraving...")
 		if false {
 			margin := image.Pt(10, 10).Mul(params.Millimeter)
 			dims := sz.Dims().Mul(params.Millimeter)
@@ -3090,7 +3090,7 @@ func DebugEngrave(p Platform, quit <-chan struct{}) error {
 			return err
 		}
 		e.Close()
-		fmt.Println("done in", time.Since(before))
+		log.Println("done in", time.Since(before))
 		break
 	}
 	return nil
