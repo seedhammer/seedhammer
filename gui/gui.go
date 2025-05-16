@@ -2956,7 +2956,7 @@ func Run(pl Platform, version string) func(yield func() bool) {
 					} else {
 						// The screen saver has invalidated the cached
 						// frame content.
-						a.root = op.Ops{}
+						a.root.Reset()
 					}
 				}
 				if a.idle.active {
