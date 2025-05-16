@@ -72,12 +72,12 @@ type Formatter struct {
 	idx    int
 	auxIdx int
 	argIdx int
-	buf    [65]byte
-	bufLen int
+	buf    [33]byte
+	bufLen uint8
 	state  formatterState
 }
 
-type formatterState int
+type formatterState uint8
 
 const (
 	formatFormat formatterState = iota
@@ -92,18 +92,20 @@ func (f *Formatter) next(format string) rune {
 }
 
 func (f *Formatter) doFloat(r byte, prec int, args []any) {
+	var n int
 	switch arg := args[f.argIdx].(type) {
 	case float32:
-		f.bufLen = len(strconv.AppendFloat(buf[:0], float64(arg), r, prec, 32))
+		n = len(strconv.AppendFloat(buf[:0], float64(arg), r, prec, 32))
 	case float64:
-		f.bufLen = len(strconv.AppendFloat(buf[:0], arg, r, prec, 64))
+		n = len(strconv.AppendFloat(buf[:0], arg, r, prec, 64))
 	default:
 		panic("unsupported argument type")
 	}
-	if f.bufLen > len(f.buf) {
+	if n > len(f.buf) {
 		panic("float format string overflows buffer")
 	}
-	copy(f.buf[:], buf[:f.bufLen])
+	copy(f.buf[:], buf[:n])
+	f.bufLen = uint8(n)
 	f.argIdx++
 	f.state = formatBuf
 	f.auxIdx = 0
@@ -133,7 +135,7 @@ func (f *Formatter) doChar(arg any) {
 	if len(buf) > len(f.buf) {
 		panic("float format string overflows buffer")
 	}
-	f.bufLen = len(buf)
+	f.bufLen = uint8(len(buf))
 	copy(f.buf[:], buf)
 	f.state = formatBuf
 	f.auxIdx = 0
@@ -150,47 +152,49 @@ func (f *Formatter) doInt(r byte, prec, pad int, args []any) {
 	case 'b':
 		base = 2
 	}
+	var bufLen int
 	switch arg := args[f.argIdx].(type) {
 	case int:
-		f.bufLen = len(strconv.AppendInt(buf[:0], int64(arg), base))
+		bufLen = len(strconv.AppendInt(buf[:0], int64(arg), base))
 	case uint:
-		f.bufLen = len(strconv.AppendUint(buf[:0], uint64(arg), base))
+		bufLen = len(strconv.AppendUint(buf[:0], uint64(arg), base))
 	case uint32:
-		f.bufLen = len(strconv.AppendUint(buf[:0], uint64(arg), base))
+		bufLen = len(strconv.AppendUint(buf[:0], uint64(arg), base))
 	case int32:
-		f.bufLen = len(strconv.AppendInt(buf[:0], int64(arg), base))
+		bufLen = len(strconv.AppendInt(buf[:0], int64(arg), base))
 	case uint64:
-		f.bufLen = len(strconv.AppendUint(buf[:0], arg, base))
+		bufLen = len(strconv.AppendUint(buf[:0], arg, base))
 	case int64:
-		f.bufLen = len(strconv.AppendInt(buf[:0], arg, base))
+		bufLen = len(strconv.AppendInt(buf[:0], arg, base))
 	default:
 		panic("unsupported argument type")
 	}
-	if f.bufLen > len(f.buf) {
+	if bufLen > len(f.buf) {
 		panic("float format string overflows buffer")
 	}
-	copy(f.buf[:], buf[:f.bufLen])
+	copy(f.buf[:], buf[:bufLen])
 	f.argIdx++
 	// Extend with zeroes.
-	if prec != -1 && f.bufLen < prec {
-		n := prec - f.bufLen
+	if prec != -1 && bufLen < prec {
+		n := prec - bufLen
 		buf := f.buf[:prec]
-		copy(buf[n:], buf[:f.bufLen])
+		copy(buf[n:], buf[:bufLen])
 		for i := range n {
 			buf[i] = '0'
 		}
-		f.bufLen = prec
+		bufLen = prec
 	}
 	// Pad with spaces.
-	if pad != -1 && f.bufLen < pad {
-		n := pad - f.bufLen
+	if pad != -1 && bufLen < pad {
+		n := pad - bufLen
 		buf := f.buf[:pad]
-		copy(buf[n:], buf[:f.bufLen])
+		copy(buf[n:], buf[:bufLen])
 		for i := range n {
 			buf[i] = ' '
 		}
-		f.bufLen = pad
+		bufLen = pad
 	}
+	f.bufLen = uint8(bufLen)
 	f.state = formatBuf
 	f.auxIdx = 0
 }
@@ -294,7 +298,6 @@ type Layout struct {
 
 	state      layoutState
 	cursor     state
-	prevCur    state
 	checkpoint state
 	width      fixed.Int26_6
 	runes      int
@@ -315,9 +318,7 @@ const (
 )
 
 // TODO: Convert to iterator when TinyGo can move its allocations to the stack.
-func (l2 *Layout) Next(format string, args ...any) (Glyph, bool) {
-	l := *l2 // Hack around TinyGo escape analysis
-
+func (l *Layout) Next(format string, args ...any) (Glyph, bool) {
 	// Enable printf vet warnings.
 	if false {
 		_ = fmt.Sprintf(format, args...)
@@ -342,11 +343,9 @@ func (l2 *Layout) Next(format string, args ...any) (Glyph, bool) {
 				Advance: a,
 			}
 			l.dot += a
-			*l2 = l
 			return g, true
 		case layoutEOL:
 			if l.eof {
-				*l2 = l
 				return Glyph{}, false
 			}
 			g := Glyph{
@@ -359,28 +358,23 @@ func (l2 *Layout) Next(format string, args ...any) (Glyph, bool) {
 				l.width -= l.breakWidth
 				l.cursor.next(l.Style, format, args)
 			}
-			l.prevCur = l.cursor
 			l.state = layoutInit
-			*l2 = l
 			return g, true
 		}
 	}
 }
 
-func (l2 *Layout) init(format string, args []any) {
-	l := *l2 // Hack around TinyGo escape analysis
-
+func (l *Layout) init(format string, args []any) {
 	// Compute line extent in runes and width.
 	l.lineRunes = 0
 	l.lineWidth = fixed.I(0)
-	l.cursor = l.checkpoint
 	l.spaceBreak = false
 	l.breakWidth = fixed.I(0)
 	for {
 		if l.runes > 0 && l.width.Ceil() > l.MaxWidth {
 			break
 		}
-		r, a, ok := l.cursor.next(l.Style, format, args)
+		r, a, ok := l.checkpoint.next(l.Style, format, args)
 		if !ok {
 			l.eof = true
 			l.lineRunes = l.runes
@@ -402,9 +396,6 @@ func (l2 *Layout) init(format string, args []any) {
 	}
 	l.runes -= l.lineRunes
 	l.width -= l.lineWidth
-	// Rewind and yield glyphs.
-	l.checkpoint = l.cursor
-	l.cursor = l.prevCur
 	l.dot = fixed.I(0)
 	switch l.Style.Alignment {
 	case AlignCenter:
@@ -413,7 +404,6 @@ func (l2 *Layout) init(format string, args []any) {
 		l.dot = fixed.I(l.MaxWidth) - l.lineWidth
 	}
 	l.state = layoutRunes
-	*l2 = l
 }
 
 type state struct {
