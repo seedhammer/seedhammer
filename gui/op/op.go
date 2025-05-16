@@ -11,6 +11,7 @@ import (
 
 type Ops struct {
 	maskStack []frameOp
+	inputs    []inputOp
 	frame     frame
 	prevFrame frame
 
@@ -62,7 +63,6 @@ type genImage struct {
 type frame struct {
 	ops     []frameOp
 	drawOps []drawOp
-	inputs  []inputOp
 	args    []uint32
 	refs    []any
 }
@@ -143,6 +143,7 @@ func (o *Ops) Context() Ctx {
 func (o *Ops) Reset() {
 	o.frame, o.prevFrame = o.prevFrame, o.frame
 	o.frame.Reset()
+	o.inputs = o.inputs[:0]
 }
 
 type drawState struct {
@@ -157,7 +158,6 @@ func (f *frame) Reset() {
 	clear(f.ops)
 	f.ops = f.ops[:0]
 	f.drawOps = f.drawOps[:0]
-	f.inputs = f.inputs[:0]
 }
 
 func (o *Ops) ExtractText(dst image.Rectangle) string {
@@ -176,7 +176,7 @@ func (o *Ops) ExtractText(dst image.Rectangle) string {
 }
 
 func (o *Ops) TagBounds(t Tag) (image.Rectangle, bool) {
-	for _, inp := range o.frame.inputs {
+	for _, inp := range o.inputs {
 		if t == inp.tag {
 			return inp.bounds, true
 		}
@@ -185,7 +185,7 @@ func (o *Ops) TagBounds(t Tag) (image.Rectangle, bool) {
 }
 
 func (o *Ops) Hit(p image.Point) (Tag, image.Rectangle, bool) {
-	for _, inp := range o.frame.inputs {
+	for _, inp := range o.inputs {
 		if p.In(inp.bounds) {
 			return inp.tag, inp.bounds, true
 		}
@@ -400,7 +400,7 @@ func (o *Ops) serialize(state drawState, from opCursor) {
 			}
 			o.serialize(state, start)
 		case opInput:
-			o.frame.inputs = append(o.frame.inputs, inputOp{
+			o.inputs = append(o.inputs, inputOp{
 				tag:    rargs[0],
 				bounds: state.clip,
 			})
