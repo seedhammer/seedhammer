@@ -14,6 +14,7 @@ func TestAllocs(t *testing.T) {
 		fb := rgb565.New(bounds)
 		mask := image.NewAlpha(bounds)
 		ops := new(Ops)
+		b.ResetTimer()
 		for range b.N {
 			ops.Reset()
 			ctx := ops.Context()
@@ -23,7 +24,7 @@ func TestAllocs(t *testing.T) {
 			ops.Draw(fb, mask)
 		}
 	})
-	if a := res.AllocsPerOp(); a > 0 {
-		t.Errorf("got %d allocs, expected %d", a, 0)
+	if a, bpo := res.AllocsPerOp(), res.AllocedBytesPerOp(); a > 0 || bpo > 0 {
+		t.Errorf("got %d allocs (%d bytes), expected none", a, bpo)
 	}
 }
