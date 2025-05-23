@@ -334,7 +334,7 @@ func (o *Ops) drawMasks(dst draw.Image, clip image.Rectangle, src imageOp, pos i
 	}
 	mask := masks[0]
 	o.maskStack = append(o.maskStack, mask)
-	o.drawMasks(dst, clip.Intersect(mask.clip), src, pos, maskfb, masks[1:])
+	o.drawMasks(dst, clip, src, pos, maskfb, masks[1:])
 	o.maskStack = o.maskStack[:len(o.maskStack)-1]
 }
 
