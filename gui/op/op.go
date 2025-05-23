@@ -90,12 +90,12 @@ const (
 )
 
 type frameOp struct {
-	pos  image.Point
-	op   imageOp
-	clip image.Rectangle
+	pos image.Point
+	op  imageOp
 }
 
 type drawOp struct {
+	clip       image.Rectangle
 	start, end int
 }
 
@@ -224,15 +224,14 @@ loop:
 				// Count the ops matched by opsEqual.
 				scanned += len(ops)
 			}
-			prevClip = prevClip.Union(o.prevFrame.ops[prevOp.end-1].clip)
+			prevClip = prevClip.Union(prevOp.clip)
 			scanned++
 			if scanned >= scanMax {
 				break
 			}
 		}
 		// No match found.
-		lastOp := o.frame.ops[op.end-1]
-		oclip := lastOp.clip
+		oclip := op.clip
 		clip = clip.Union(oclip)
 		if clip == dst {
 			return clip
@@ -240,7 +239,7 @@ loop:
 	}
 	// Add remaining ops from the previous frame.
 	for _, prevOp := range prevDrawOps {
-		oclip := o.prevFrame.ops[prevOp.end-1].clip
+		oclip := prevOp.clip
 		clip = clip.Union(oclip)
 	}
 	return clip
@@ -260,9 +259,6 @@ func opsEqual(ops1, ops2 []frameOp) bool {
 
 func opEqual(op1, op2 frameOp) bool {
 	if op1.pos != op2.pos {
-		return false
-	}
-	if op1.clip != op2.clip {
 		return false
 	}
 	iop1, iop2 := op1.op, op2.op
@@ -295,11 +291,11 @@ func (o *Ops) Draw(dst draw.Image, maskfb draw.Image) {
 	b := dst.Bounds()
 	for _, dop := range o.frame.drawOps {
 		masks := o.frame.ops[dop.start : dop.end-1]
-		op := o.frame.ops[dop.end-1]
-		clip := b.Intersect(op.clip)
+		clip := b.Intersect(dop.clip)
 		if clip.Empty() {
 			continue
 		}
+		op := o.frame.ops[dop.end-1]
 		o.maskStack = o.maskStack[:0]
 		o.drawMasks(dst, clip, op.op, op.pos, maskfb, masks)
 	}
@@ -421,9 +417,8 @@ func (o *Ops) serialize(state drawState, from opCursor) {
 				op.gen.gen = gen.(ImageGenerator)
 			}
 			r := op.Bounds.Add(state.pos)
-			clip := state.clip.Intersect(r)
-			state.clip = clip
-			fop := frameOp{pos: state.pos, op: op, clip: clip}
+			state.clip = state.clip.Intersect(r)
+			fop := frameOp{pos: state.pos, op: op}
 			if op.mask != imageMask {
 				o.maskStack = append(o.maskStack, fop)
 				continue
@@ -435,6 +430,7 @@ func (o *Ops) serialize(state drawState, from opCursor) {
 			o.frame.ops = append(o.frame.ops, o.maskStack...)
 			o.frame.ops = append(o.frame.ops, fop)
 			o.frame.drawOps = append(o.frame.drawOps, drawOp{
+				clip:  state.clip,
 				start: start,
 				end:   len(o.frame.ops),
 			})
