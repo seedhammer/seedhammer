@@ -300,7 +300,7 @@ func TestNonParticipatingSeed(t *testing.T) {
 	}
 }
 
-func dumpUI(t *testing.T, ops *op.Ops) {
+func dumpUI(t *testing.T, ops *op.Ops, path string) {
 	clip := image.Rectangle{Max: image.Pt(testDisplayDim, testDisplayDim)}
 	ops.Clip(clip)
 	fb := image.NewNRGBA(clip)
@@ -310,7 +310,7 @@ func dumpUI(t *testing.T, ops *op.Ops) {
 	if err := png.Encode(buf, fb); err != nil {
 		t.Error(err)
 	}
-	if err := os.WriteFile("ui.png", buf.Bytes(), 0o600); err != nil {
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 		t.Error(err)
 	}
 }
