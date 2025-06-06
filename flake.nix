@@ -379,7 +379,7 @@
               src = ./.;
 
               nativeBuildInputs = with pkgs.buildPackages; [
-                pkgs-unstable.buildPackages.go_1_23
+                pkgs-unstable.buildPackages.go_1_24
                 nukeReferences
               ];
 
@@ -430,12 +430,11 @@
 
               nativeBuildInputs = with pkgs.buildPackages; [
                 cacert
-                pkgs-unstable.buildPackages.go_1_23
+                pkgs-unstable.buildPackages.go_1_24
               ];
 
               installPhase = ''
                 mkdir -p $out
-                export HOME="$PWD/gohome"
                 GOMODCACHE=$out go mod download
               '';
 
