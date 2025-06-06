@@ -62,6 +62,37 @@ func TestEngraveErrors(t *testing.T) {
 	}
 }
 
+func BenchmarkEngraving(b *testing.B) {
+	p2wsh := []uint32{
+		hdkeychain.HardenedKeyStart + 48,
+		hdkeychain.HardenedKeyStart + 0,
+		hdkeychain.HardenedKeyStart + 0,
+		hdkeychain.HardenedKeyStart + 2,
+	}
+	outDesc := urtypes.OutputDescriptor{
+		Title:     "Satoshi Stash",
+		Script:    urtypes.P2WSH,
+		Threshold: 1,
+		Type:      urtypes.Singlesig,
+		Keys:      make([]urtypes.KeyDescriptor, 1),
+	}
+	seed, desc := genTestPlate(b, outDesc, p2wsh, 24, 0, SquarePlate)
+	for b.Loop() {
+		plan, err := EngraveDescriptor(mjolnir.Params, desc)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for range plan {
+		}
+		plan, err = EngraveSeed(mjolnir.Params, seed)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for range plan {
+		}
+	}
+}
+
 func TestEngrave(t *testing.T) {
 	tests := []struct {
 		threshold int
@@ -241,7 +272,7 @@ func TestTitleString(t *testing.T) {
 	}
 }
 
-func genTestPlate(t *testing.T, desc urtypes.OutputDescriptor, path []uint32, seedlen int, keyIdx int, plateSize PlateSize) (Seed, Descriptor) {
+func genTestPlate(t testing.TB, desc urtypes.OutputDescriptor, path []uint32, seedlen int, keyIdx int, plateSize PlateSize) (Seed, Descriptor) {
 	var mnemonic bip39.Mnemonic
 	for i := range desc.Keys {
 		m := make(bip39.Mnemonic, seedlen)
