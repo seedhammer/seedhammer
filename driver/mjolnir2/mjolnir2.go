@@ -34,9 +34,8 @@ type Device struct {
 	// HomingSpeed in steps/s.
 	HomingSpeed int
 	// Acceleration in steps/s².
-	Acceleration     int
-	NeedlePeriod     time.Duration
-	NeedleActivation time.Duration
+	Acceleration int
+	NeedlePeriod time.Duration
 
 	channel dma.ChannelID
 	homing  bool
@@ -126,17 +125,17 @@ func (d *Device) handleDiag(pin machine.Pin) {
 	}
 }
 
-func (d *Device) Engrave(plan engrave.Plan, quit <-chan struct{}) error {
-	if err := d.engrave(d.HomingSpeed, quit, true, func(yield func(engrave.Command) bool) {
+func (d *Device) Engrave(needleActivation time.Duration, plan engrave.Plan, quit <-chan struct{}) error {
+	if err := d.engrave(d.HomingSpeed, needleActivation, quit, true, func(yield func(engrave.Command) bool) {
 		yield(engrave.Move(d.Home))
 	}); err != nil {
 		return err
 	}
 
-	return d.engrave(d.TopSpeed, quit, false, plan)
+	return d.engrave(d.TopSpeed, needleActivation, quit, false, plan)
 }
 
-func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan engrave.Plan) error {
+func (d *Device) engrave(moveSpeed int, needleActivation time.Duration, quit <-chan struct{}, homing bool, plan engrave.Plan) error {
 	pio.ConfigurePins(d.Pio, pioSM, d.BasePin, mjolnir2pinBits)
 	pio.Pindirs(d.Pio, pioSM, d.BasePin, mjolnir2pinBits, machine.PinOutput)
 	// Reset and start state machine.
@@ -186,7 +185,7 @@ func (d *Device) engrave(moveSpeed int, quit <-chan struct{}, homing bool, plan 
 		Acceleration:     d.Acceleration,
 		TicksPerSecond:   d.TopSpeed,
 		NeedlePeriod:     d.NeedlePeriod,
-		NeedleActivation: d.NeedleActivation,
+		NeedleActivation: needleActivation,
 	}.New()
 	return dd.engrave(transfer, d.diag, conf, quit, homing, plan)
 }

@@ -73,6 +73,7 @@ const (
 	LCD_DB0 = machine.GPIO18
 
 	DRV_ENABLE = machine.GPIO10
+	enableDrv  = true
 
 	STEPPER_UART = machine.GPIO9
 	X_ADDR       = 0b00
@@ -110,9 +111,10 @@ const (
 	// The period of a needle cycle.
 	needlePeriod = 20 * time.Millisecond
 	// The duration of a needle cycle turned on.
-	needleActivation = 5 * time.Millisecond
+	needleActivationMinVoltage = 5 * time.Millisecond
+	needleActivationMaxVoltage = 3 * time.Millisecond
 	// needleCurrentLimit in millisamperes (mA).
-	needleCurrentLimit = 32_500
+	needleCurrentLimit = 15_000
 	// needleSenseScale is the current limit
 	// in milliamperes (mA) that corresponds to a
 	// 100% PWM duty cycle output to NEEDLE_VREF.
@@ -120,8 +122,8 @@ const (
 
 	idleVoltage = 5
 	// Voltage range for engraving.
-	minVoltage = 20
-	maxVoltage = 28
+	minVoltage = 20_000
+	maxVoltage = 28_000
 	// Current limit for engraving. Note that the needle
 	// sense current above only limits the activation current,
 	// whereas this limits the average current.
@@ -260,7 +262,7 @@ func (d nfcDev) FIFOSize() int {
 
 func configEngraver(bus *multiplexI2C) (*engraver, error) {
 	DRV_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	DRV_ENABLE.Set(true)
+	DRV_ENABLE.Set(!enableDrv)
 	vrefCh, err := needleVREFPWM.Channel(NEEDLE_VREF)
 	if err != nil {
 		// This should never happen with a proper match
@@ -318,17 +320,16 @@ func configEngraver(bus *multiplexI2C) (*engraver, error) {
 		Y: -homingDist,
 	}
 	d := &mjolnir2.Device{
-		Pio:              engraverPIO,
-		BasePin:          engraverBasePin,
-		XDiag:            X_DIAG,
-		YDiag:            Y_DIAG,
-		Home:             home,
-		TopSpeed:         topSpeed,
-		EngravingSpeed:   engravingSpeed,
-		HomingSpeed:      homingSpeed,
-		Acceleration:     acceleration,
-		NeedlePeriod:     needlePeriod,
-		NeedleActivation: needleActivation,
+		Pio:            engraverPIO,
+		BasePin:        engraverBasePin,
+		XDiag:          X_DIAG,
+		YDiag:          Y_DIAG,
+		Home:           home,
+		TopSpeed:       topSpeed,
+		EngravingSpeed: engravingSpeed,
+		HomingSpeed:    homingSpeed,
+		Acceleration:   acceleration,
+		NeedlePeriod:   needlePeriod,
 	}
 	if err := d.Configure(); err != nil {
 		return nil, err
@@ -431,27 +432,27 @@ func (e *engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan st
 	return e.engrave(plan, quit)
 }
 
-func (e *engraver) adjustVoltage(minmV, maxmV int) error {
+func (e *engraver) adjustVoltage(minmV, maxmV int) (int, error) {
 	const retries = 3
 	for range retries {
 		mV, err := e.PD.AdjustVoltage(minmV, maxmV)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		// Allow the new contract to settle.
 		time.Sleep(100 * time.Millisecond)
 		gotmV, err := e.PD.Voltage()
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if gotmV == mV {
-			return nil
+			return mV, nil
 		}
 		// Contract switches immediately after a previous switch
 		// are ignored. Sleep a little and try again.
 		time.Sleep(500 * time.Millisecond)
 	}
-	return errors.New("power negotiation timed out")
+	return 0, errors.New("power negotiation timed out")
 }
 
 func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
@@ -459,7 +460,8 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 	defer func() {
 		e.ready <- struct{}{}
 	}()
-	if err := e.adjustVoltage(minVoltage*1000, maxVoltage*1000); err != nil {
+	voltage, err := e.adjustVoltage(minVoltage, maxVoltage)
+	if err != nil {
 		return err
 	}
 	defer e.adjustVoltage(idleVoltage*1000, idleVoltage*1000)
@@ -468,8 +470,8 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 	}
 	defer e.PD.LimitCurrent(0)
 	// Set up pins.
-	DRV_ENABLE.Set(false)
-	defer DRV_ENABLE.Set(true)
+	DRV_ENABLE.Set(enableDrv)
+	defer DRV_ENABLE.Set(!enableDrv)
 	// Wait for standstill tuning of the drivers.
 	time.Sleep(tmc2209.StandstillTuningPeriod)
 
@@ -480,7 +482,11 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 		engrave.Plan(slices.Values([]engrave.Command{engrave.Move(ejectPos)})),
 	)
 	plan = engrave.Offset(originX, originY, plan)
-	if err := e.Dev.Engrave(plan, quit); err != nil {
+	// Perform a linear interpolation of the voltage into the range of needle
+	// activation durations.
+	act := (needleActivationMinVoltage*time.Duration(maxVoltage-voltage) +
+		needleActivationMaxVoltage*time.Duration(voltage-minVoltage)) / (maxVoltage - minVoltage)
+	if err := e.Dev.Engrave(act, plan, quit); err != nil {
 		if err := e.XAxis.Error(); err != nil {
 			return fmt.Errorf("X axis: %w", err)
 		}
