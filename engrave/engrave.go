@@ -323,7 +323,7 @@ func constantQR(strokeWidth, scale int, level qr.Level, content []byte) (*consta
 		return nil, fmt.Errorf("too many dims %d QR modules for constant time engraving n: %d waste: %d",
 			dim, len(modules), waste)
 	}
-	modules = padQRModules(nmod, content, modules)
+	modules = padQRModules(nmod, qrc, modules)
 	cmd := &constantQRCmd{
 		start:       start,
 		end:         end,
@@ -341,12 +341,12 @@ func constantQR(strokeWidth, scale int, level qr.Level, content []byte) (*consta
 }
 
 // padQRModules pads modules with extra engravings up to n modules.
-func padQRModules(n int, content []byte, modules []image.Point) []image.Point {
+func padQRModules(n int, qrc *qr.Code, modules []image.Point) []image.Point {
 	// Distribute the extra modules randomly as repeats of existing
 	// modules.
 	extra := n - len(modules)
 	mac := hmac.New(sha256.New, []byte("seedhammer constant qr"))
-	mac.Write(content)
+	mac.Write(qrc.Bitmap)
 	sum := mac.Sum(nil)
 	seed := int64(binary.BigEndian.Uint64(sum))
 	r := rand.New(rand.NewSource(seed))
