@@ -492,10 +492,8 @@ func (q constantQRCmd) engraveAlignMarker(off image.Point) Plan {
 			if !yield(Move(center)) {
 				return
 			}
-			for c := range q.engraveModule(center) {
-				if !yield(c) {
-					return
-				}
+			for !q.engraveModule(yield, center) {
+				return
 			}
 		}
 	}
@@ -508,10 +506,8 @@ func (q constantQRCmd) engravePositionMarker(off image.Point) Plan {
 			if !yield(Move(center)) {
 				return
 			}
-			for c := range q.engraveModule(center) {
-				if !yield(c) {
-					return
-				}
+			if !q.engraveModule(yield, center) {
+				return
 			}
 		}
 	}
@@ -545,42 +541,36 @@ func (q constantQRCmd) engrave() Plan {
 		moveDist := qrMoves * sw * q.scale
 		for _, m := range q.plan {
 			center := q.centerOf(m)
-			for c := range constantMove(center, prev, moveDist) {
-				cont = cont && yield(c)
-			}
+			cont = cont && constantMove(yield, center, prev, moveDist)
 			prev = center
-			for c := range q.engraveModule(center) {
-				cont = cont && yield(c)
-			}
+			cont = cont && q.engraveModule(yield, center)
 			cont = cont && yield(Line(center))
 		}
 		end := q.centerOf(q.end)
-		for c := range constantMove(end, prev, moveDist) {
-			cont = cont && yield(c)
-		}
+		cont = cont && constantMove(yield, end, prev, moveDist)
 	}
 }
 
-func (q constantQRCmd) engraveModule(center image.Point) Plan {
-	return func(yield func(Command) bool) {
-		sw := q.strokeWidth
-		switch q.scale {
-		case 3:
-			_ = yield(Line(center.Add(image.Pt(sw, 0)))) &&
-				yield(Line(center.Add(image.Pt(sw, sw)))) &&
-				yield(Line(center.Add(image.Pt(-sw, sw)))) &&
-				yield(Line(center.Add(image.Pt(-sw, -sw)))) &&
-				yield(Line(center.Add(image.Pt(sw, -sw))))
-		case 4:
-			_ = yield(Line(center.Add(image.Pt(-sw, 0)))) &&
-				yield(Line(center.Add(image.Pt(-sw, -sw)))) &&
-				yield(Line(center.Add(image.Pt(2*sw, -sw)))) &&
-				yield(Line(center.Add(image.Pt(2*sw, 2*sw)))) &&
-				yield(Line(center.Add(image.Pt(-sw, 2*sw)))) &&
-				yield(Line(center.Add(image.Pt(-sw, sw)))) &&
-				yield(Line(center.Add(image.Pt(sw, sw)))) &&
-				yield(Line(center.Add(image.Pt(sw, 0))))
-		}
+func (q constantQRCmd) engraveModule(yield cmdYielder, center image.Point) bool {
+	sw := q.strokeWidth
+	switch q.scale {
+	case 3:
+		return yield(Line(center.Add(image.Pt(sw, 0)))) &&
+			yield(Line(center.Add(image.Pt(sw, sw)))) &&
+			yield(Line(center.Add(image.Pt(-sw, sw)))) &&
+			yield(Line(center.Add(image.Pt(-sw, -sw)))) &&
+			yield(Line(center.Add(image.Pt(sw, -sw))))
+	case 4:
+		return yield(Line(center.Add(image.Pt(-sw, 0)))) &&
+			yield(Line(center.Add(image.Pt(-sw, -sw)))) &&
+			yield(Line(center.Add(image.Pt(2*sw, -sw)))) &&
+			yield(Line(center.Add(image.Pt(2*sw, 2*sw)))) &&
+			yield(Line(center.Add(image.Pt(-sw, 2*sw)))) &&
+			yield(Line(center.Add(image.Pt(-sw, sw)))) &&
+			yield(Line(center.Add(image.Pt(sw, sw)))) &&
+			yield(Line(center.Add(image.Pt(sw, 0))))
+	default:
+		panic("unsupported module scale")
 	}
 }
 
@@ -796,17 +786,13 @@ func (c *ConstantStringer) String(txt string) Plan {
 				needle = center
 				cont := yield(Move(needle))
 				start := l.path[0].Add(off)
-				for c := range constantMove(start, needle, c.moveDist) {
-					cont = cont && yield(c)
-				}
+				cont = cont && constantMove(yield, start, needle, c.moveDist)
 				needle = start
 				for _, pos := range l.path[1:] {
 					needle = pos.Add(off)
 					cont = cont && yield(Line(needle))
 				}
-				for c := range constantMove(center, needle, c.moveDist) {
-					cont = cont && yield(c)
-				}
+				cont = cont && constantMove(yield, center, needle, c.moveDist)
 				needle = center
 				end := off.Add(image.Pt(c.dims.X, c.dims.Y/2))
 				cont = cont && yield(Move(end))
@@ -831,10 +817,8 @@ func (c *ConstantStringer) String(txt string) Plan {
 			}
 		}
 		// Then let constantMove take care of the rest.
-		for c := range constantMove(c.wordEnd, needle, wantDist) {
-			if !yield(c) {
-				return
-			}
+		if !constantMove(yield, c.wordEnd, needle, wantDist) {
+			return
 		}
 	}
 
@@ -916,53 +900,54 @@ func (c *ConstantStringer) isConstant(cmd Plan) bool {
 	return true
 }
 
+type cmdYielder func(Command) bool
+
 // constantMove moves to dst from src in exactly dist manhattan distance.
 // It spends extra moves by moving along the square with dst in the center
 // and src on its boundary.
 // constantMove assumes the distance between dst and src is less than or
 // equal to dist.
 // constantMove panics if dst equals src and dist is 1.
-func constantMove(dst, src image.Point, dist int) Plan {
-	return func(yield func(Command) bool) {
-		// extra is the distance to spend.
-		extra := dist - ManhattanDist(dst, src)
-		cont := true
-		if dst == src {
-			if extra == 1 {
-				panic("dst and src coincides and dist allows no movement")
-			}
-			// If src and dst coincides the implied square reduces to a
-			// point which cannot be used for spending moves.
-			// Instead move half of extra away and continue from there.
-			d := extra / 2
-			src = src.Add(image.Pt(d, 0))
-			cont = cont && yield(Move(src))
-			extra -= d * 2
+func constantMove(yield cmdYielder, dst, src image.Point, dist int) bool {
+	// extra is the distance to spend.
+	extra := dist - ManhattanDist(dst, src)
+	cont := true
+	if dst == src {
+		if extra == 1 {
+			panic("dst and src coincides and dist allows no movement")
 		}
-		dp := src.Sub(dst)
-		d := manhattanLen(dp)
-		// axis is the direction from dst to src along the longest axis.
-		axis := dp.Div(d)
-		// Tie-break diagonals arbitrarily.
-		if axis.X != 0 && axis.Y != 0 {
-			axis.X = 0
-		}
-		for extra > 0 {
-			dp := src.Sub(dst)
-			axis = image.Pt(-axis.Y, axis.X)
-			// cornerDist is the distance from src to the corner along
-			// moveDir.
-			cornerDist := d - dp.X*axis.X - dp.Y*axis.Y
-			moveDist := cornerDist
-			if moveDist > extra {
-				moveDist = extra
-			}
-			extra -= moveDist
-			src = src.Add(axis.Mul(moveDist))
-			cont = cont && yield(Move(src))
-		}
-		cont = cont && yield(Move(dst))
+		// If src and dst coincides the implied square reduces to a
+		// point which cannot be used for spending moves.
+		// Instead move half of extra away and continue from there.
+		d := extra / 2
+		src = src.Add(image.Pt(d, 0))
+		cont = cont && yield(Move(src))
+		extra -= d * 2
 	}
+	dp := src.Sub(dst)
+	d := manhattanLen(dp)
+	// axis is the direction from dst to src along the longest axis.
+	axis := dp.Div(d)
+	// Tie-break diagonals arbitrarily.
+	if axis.X != 0 && axis.Y != 0 {
+		axis.X = 0
+	}
+	for extra > 0 {
+		dp := src.Sub(dst)
+		axis = image.Pt(-axis.Y, axis.X)
+		// cornerDist is the distance from src to the corner along
+		// moveDir.
+		cornerDist := d - dp.X*axis.X - dp.Y*axis.Y
+		moveDist := cornerDist
+		if moveDist > extra {
+			moveDist = extra
+		}
+		extra -= moveDist
+		src = src.Add(axis.Mul(moveDist))
+		cont = cont && yield(Move(src))
+	}
+	cont = cont && yield(Move(dst))
+	return cont
 }
 
 type collectProgram struct {
