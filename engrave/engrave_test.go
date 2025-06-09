@@ -21,14 +21,13 @@ func TestConstantQR(t *testing.T) {
 			if _, err := io.ReadFull(rng, entropy); err != nil {
 				t.Fatal(err)
 			}
-			lvl := qr.Q
-			cmd, err := constantQR(7, 4, lvl, entropy)
-			if err != nil {
-				t.Fatalf("entropy: %x: %v", entropy, err)
-			}
-			qrc, err := qr.Encode(string(entropy), lvl)
+			qrc, err := qr.Encode(string(entropy), qr.Q)
 			if err != nil {
 				t.Fatal(err)
+			}
+			cmd, err := constantQR(7, 4, qrc)
+			if err != nil {
+				t.Fatalf("entropy: %x: %v", entropy, err)
 			}
 			dim := qrc.Size
 			want := bitmapForQR(qrc)
@@ -64,10 +63,18 @@ func FuzzConstantQR(f *testing.F) {
 		if len(entropy) > 32 {
 			entropy = entropy[:32]
 		}
-		if _, err := ConstantQR(1, 3, qr.Q, entropy); err != nil {
+		qrcq, err := qr.Encode(string(entropy), qr.Q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ConstantQR(1, 3, qrcq); err != nil {
 			t.Fatalf("entropy: %x: %v", entropy, err)
 		}
-		if _, err := ConstantQR(1, 3, qr.L, entropy); err != nil {
+		qrcl, err := qr.Encode(string(entropy), qr.L)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ConstantQR(1, 3, qrcl); err != nil {
 			t.Fatalf("entropy: %x: %v", entropy, err)
 		}
 	})

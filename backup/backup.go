@@ -54,11 +54,6 @@ type Descriptor struct {
 	Size       PlateSize
 }
 
-func dims(c engrave.Plan) (engrave.Plan, image.Point) {
-	b := engrave.Measure(c)
-	return engrave.Offset(-b.Min.X, -b.Min.Y, c), b.Size()
-}
-
 var ErrDescriptorTooLarge = errors.New("output descriptor is too large to backup")
 
 const MaxTitleLen = 18
@@ -298,12 +293,17 @@ func frontSideSeed(params engrave.Params, plate Seed, plateDims image.Point) (en
 	cmd(engrave.Offset(params.I(44), (plateDims.Y-col1Height)/2, col2))
 
 	// Engrave seed QR.
-	qrCmd, err := engrave.ConstantQR(params.StrokeWidth, 3, qr.M, seedqr.QR(plate.Mnemonic))
+	qrc, err := qr.Encode(string(seedqr.QR(plate.Mnemonic)), qr.M)
 	if err != nil {
 		return nil, err
 	}
-	qr, sz := dims(qrCmd)
-	cmd(engrave.Offset(params.I(60)-sz.X/2, (plateDims.Y-sz.Y)/2, qr))
+	const qrScale = 3
+	qrCmd, err := engrave.ConstantQR(params.StrokeWidth, qrScale, qrc)
+	if err != nil {
+		return nil, err
+	}
+	qrsz := qrc.Size * params.StrokeWidth * qrScale
+	cmd(engrave.Offset(params.I(60)-qrsz/2, (plateDims.Y-qrsz)/2, qrCmd))
 
 	{
 		// Engrave bottom of column 2.
@@ -374,14 +374,16 @@ func descriptorSide(params engrave.Params, fnt *vector.Face, urs []string, size 
 	charPerLine := int(width / charWidth)
 	offy := params.I(outerMargin)
 	for i, ur := range urs {
-		qrcmd, err := engrave.QR(params.StrokeWidth, 2, qr.M, []byte(ur))
+		qrcode, err := qr.Encode(ur, qr.M)
 		if err != nil {
 			return nil, err
 		}
-		qr, qrsz := dims(qrcmd)
+		const qrScale = 2
+		qr := engrave.QR(params.StrokeWidth, qrScale, qrcode)
+		qrsz := qrcode.Size * params.StrokeWidth * qrScale
 		qrBorder := params.I(2)
-		charPerQRLine := (width - 2*qrBorder - qrsz.X) / charWidth
-		qrLines := (qrsz.Y + 2*qrBorder + fontSize - 1) / fontSize
+		charPerQRLine := (width - 2*qrBorder - qrsz) / charWidth
+		qrLines := (qrsz + 2*qrBorder + fontSize - 1) / fontSize
 		qrLineStart := holeLines
 		lineno := 0
 		for len(ur) > 0 {
@@ -414,8 +416,8 @@ func descriptorSide(params engrave.Params, fnt *vector.Face, urs []string, size 
 			cmd(engrave.Offset(offx+margin, offy+lineno*fontSize, str(s)))
 			lineno++
 		}
-		qrx := plateDims.X - qrsz.X - margin - qrBorder
-		qry := qrLineStart*fontSize + (qrLines*fontSize-qrsz.Y)/2
+		qrx := plateDims.X - qrsz - margin - qrBorder
+		qry := qrLineStart*fontSize + (qrLines*fontSize-qrsz)/2
 		cmd(engrave.Offset(qrx, offy+qry, qr))
 		offy += lineno * fontSize
 		if i != len(urs)-1 {

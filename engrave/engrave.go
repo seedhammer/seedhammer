@@ -127,11 +127,7 @@ func DryRun(p Plan) Plan {
 	}
 }
 
-func QR(strokeWidth int, scale int, level qr.Level, content []byte) (Plan, error) {
-	qr, err := qr.Encode(string(content), level)
-	if err != nil {
-		return nil, err
-	}
+func QR(strokeWidth int, scale int, qr *qr.Code) Plan {
 	return func(yield func(Command) bool) {
 		dim := qr.Size
 		for y := 0; y < dim; y++ {
@@ -171,7 +167,7 @@ func QR(strokeWidth int, scale int, level qr.Level, content []byte) (Plan, error
 				}
 			}
 		}
-	}, nil
+	}
 }
 
 // qrMoves is the exact number of qrMoves before engraving
@@ -244,19 +240,15 @@ func bitmapForQRStatic(dim int) ([]image.Point, []image.Point, bitmap) {
 
 // ConstantQR is like QR that engraves the QR code in a pattern independent of content,
 // except for the QR code version (size).
-func ConstantQR(strokeWidth, scale int, level qr.Level, content []byte) (Plan, error) {
-	c, err := constantQR(strokeWidth, scale, level, content)
+func ConstantQR(strokeWidth, scale int, qrc *qr.Code) (Plan, error) {
+	c, err := constantQR(strokeWidth, scale, qrc)
 	if err != nil {
 		return nil, err
 	}
 	return c.engrave(), nil
 }
 
-func constantQR(strokeWidth, scale int, level qr.Level, content []byte) (*constantQRCmd, error) {
-	qrc, err := qr.Encode(string(content), level)
-	if err != nil {
-		return nil, err
-	}
+func constantQR(strokeWidth, scale int, qrc *qr.Code) (*constantQRCmd, error) {
 	dim := qrc.Size
 	qr := bitmapForQR(qrc)
 	// No need to engrave static features of the QR code.
