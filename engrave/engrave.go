@@ -443,7 +443,7 @@ func findPath(modules []image.Point, visited, qr, engraved bitmap, to, from imag
 	if ManhattanDist(from, to) <= qrMoves {
 		return modules, true
 	}
-	var candidates []image.Point
+	candidates := make([]image.Point, 0, qrMoves*qrMoves)
 	for y := -qrMoves; y <= qrMoves; y++ {
 		for x := -qrMoves; x <= qrMoves; x++ {
 			p := from.Add(image.Pt(x, y))
