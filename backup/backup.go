@@ -75,33 +75,39 @@ func TitleString(face *vector.Face, s string) string {
 	return res
 }
 
-type engraveFunc func(plateDims image.Point) (engrave.Plan, error)
-
-func engraveSide(scale int, size PlateSize, eng engraveFunc) (engrave.Plan, error) {
+func planFits(plan engrave.Plan, scale int, size PlateSize) error {
 	sz := size.Dims().Mul(scale)
-	side, err := eng(sz)
+	bounds := engrave.Measure(plan)
+	safetyMargin := image.Pt(outerMargin*scale, outerMargin*scale)
+	if !bounds.In(image.Rectangle{Min: safetyMargin, Max: sz.Sub(safetyMargin)}) {
+		return ErrDescriptorTooLarge
+	}
+	return nil
+}
+
+func EngraveSeed(params engrave.Params, plate Seed) (engrave.Plan, error) {
+	sz := plate.Size.Dims().Mul(params.Millimeter)
+	side, err := frontSideSeed(params, plate, sz)
 	if err != nil {
 		return nil, err
 	}
-	bounds := engrave.Measure(side)
-	safetyMargin := image.Pt(outerMargin*scale, outerMargin*scale)
-	if !bounds.In(image.Rectangle{Min: safetyMargin, Max: sz.Sub(safetyMargin)}) {
-		return nil, ErrDescriptorTooLarge
+	if err := planFits(side, params.Millimeter, plate.Size); err != nil {
+		return nil, err
 	}
 	return side, nil
 }
 
-func EngraveSeed(params engrave.Params, plate Seed) (engrave.Plan, error) {
-	return engraveSide(params.Millimeter, plate.Size, func(plateDims image.Point) (engrave.Plan, error) {
-		return frontSideSeed(params, plate, plateDims)
-	})
-}
-
 func EngraveDescriptor(params engrave.Params, plate Descriptor) (engrave.Plan, error) {
-	return engraveSide(params.Millimeter, plate.Size, func(plateDims image.Point) (engrave.Plan, error) {
-		urs := splitUR(plate.Descriptor, plate.KeyIdx)
-		return descriptorSide(params, plate.Font, urs, plate.Size, plateDims)
-	})
+	sz := plate.Size.Dims().Mul(params.Millimeter)
+	urs := splitUR(plate.Descriptor, plate.KeyIdx)
+	side, err := descriptorSide(params, plate.Font, urs, plate.Size, sz)
+	if err != nil {
+		return nil, err
+	}
+	if err := planFits(side, params.Millimeter, plate.Size); err != nil {
+		return nil, err
+	}
+	return side, nil
 }
 
 // splitUR searches for the appropriate seqNum in the [UR] encoding
