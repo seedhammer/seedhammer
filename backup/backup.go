@@ -87,7 +87,11 @@ func planFits(plan engrave.Plan, scale int, size PlateSize) error {
 
 func EngraveSeed(params engrave.Params, plate Seed) (engrave.Plan, error) {
 	sz := plate.Size.Dims().Mul(params.Millimeter)
-	side, err := frontSideSeed(params, plate, sz)
+	qrc, err := qr.Encode(string(seedqr.QR(plate.Mnemonic)), qr.M)
+	if err != nil {
+		return nil, err
+	}
+	side, err := frontSideSeed(params, plate, qrc, sz)
 	if err != nil {
 		return nil, err
 	}
@@ -100,10 +104,15 @@ func EngraveSeed(params engrave.Params, plate Seed) (engrave.Plan, error) {
 func EngraveDescriptor(params engrave.Params, plate Descriptor) (engrave.Plan, error) {
 	sz := plate.Size.Dims().Mul(params.Millimeter)
 	urs := splitUR(plate.Descriptor, plate.KeyIdx)
-	side, err := descriptorSide(params, plate.Font, urs, plate.Size, sz)
-	if err != nil {
-		return nil, err
+	urQRs := make([]*qr.Code, 0, len(urs))
+	for _, ur := range urs {
+		qrcode, err := qr.Encode(ur, qr.M)
+		if err != nil {
+			return nil, err
+		}
+		urQRs = append(urQRs, qrcode)
 	}
+	side := descriptorSide(params, plate.Font, urs, urQRs, plate.Size, sz)
 	if err := planFits(side, params.Millimeter, plate.Size); err != nil {
 		return nil, err
 	}
@@ -251,7 +260,7 @@ const plateFontSize = 4.1
 const plateFontSizeUR = 3.8
 const plateSmallFontSize = 3.
 
-func frontSideSeed(params engrave.Params, plate Seed, plateDims image.Point) (engrave.Plan, error) {
+func frontSideSeed(params engrave.Params, plate Seed, qrc *qr.Code, plateDims image.Point) (engrave.Plan, error) {
 	constant := engrave.NewConstantStringer(plate.Font, params.F(plateFontSize), bip39.ShortestWord, bip39.LongestWord)
 	var cmds []engrave.Plan
 	cmd := func(c engrave.Plan) {
@@ -299,10 +308,6 @@ func frontSideSeed(params engrave.Params, plate Seed, plateDims image.Point) (en
 	cmd(engrave.Offset(params.I(44), (plateDims.Y-col1Height)/2, col2))
 
 	// Engrave seed QR.
-	qrc, err := qr.Encode(string(seedqr.QR(plate.Mnemonic)), qr.M)
-	if err != nil {
-		return nil, err
-	}
 	const qrScale = 3
 	qrCmd, err := engrave.ConstantQR(params.StrokeWidth, qrScale, qrc)
 	if err != nil {
@@ -353,7 +358,7 @@ func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize 
 	return engrave.Commands(cmds...)
 }
 
-func descriptorSide(params engrave.Params, fnt *vector.Face, urs []string, size PlateSize, plateDims image.Point) (engrave.Plan, error) {
+func descriptorSide(params engrave.Params, fnt *vector.Face, urs []string, urQRs []*qr.Code, size PlateSize, plateDims image.Point) engrave.Plan {
 	var cmds []engrave.Plan
 	cmd := func(c engrave.Plan) {
 		cmds = append(cmds, c)
@@ -380,10 +385,7 @@ func descriptorSide(params engrave.Params, fnt *vector.Face, urs []string, size 
 	charPerLine := int(width / charWidth)
 	offy := params.I(outerMargin)
 	for i, ur := range urs {
-		qrcode, err := qr.Encode(ur, qr.M)
-		if err != nil {
-			return nil, err
-		}
+		qrcode := urQRs[i]
 		const qrScale = 2
 		qr := engrave.QR(params.StrokeWidth, qrScale, qrcode)
 		qrsz := qrcode.Size * params.StrokeWidth * qrScale
@@ -432,5 +434,5 @@ func descriptorSide(params engrave.Params, fnt *vector.Face, urs []string, size 
 		}
 	}
 
-	return engrave.Commands(cmds...), nil
+	return engrave.Commands(cmds...)
 }
