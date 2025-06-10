@@ -258,7 +258,8 @@ func constantQR(strokeWidth, scale int, qrc *qr.Code) (*constantQRCmd, error) {
 	// Iterating forward.
 	dir := 1
 	start, end := constantTimeStartEnd(dim)
-	modules := []image.Point{}
+	nmod := constantTimeQRModules(dim)
+	modules := make([]image.Point, 0, nmod)
 	waste := 0
 	engrave := func(p image.Point) {
 		modules = append(modules, p)
@@ -268,9 +269,10 @@ func constantQR(strokeWidth, scale int, qrc *qr.Code) (*constantQRCmd, error) {
 			engraved.Set(p)
 		}
 	}
+	visited := NewBitmap(dim, dim)
 	move := func(p image.Point) error {
 		// Find path to a module close enough to pos.
-		visited := NewBitmap(dim, dim)
+		clear(visited.bits)
 		needle := start
 		if len(modules) > 0 {
 			needle = modules[len(modules)-1]
@@ -310,7 +312,6 @@ func constantQR(strokeWidth, scale int, qrc *qr.Code) (*constantQRCmd, error) {
 	if err := move(end); err != nil {
 		return nil, err
 	}
-	nmod := constantTimeQRModules(dim)
 	if len(modules) >= nmod {
 		return nil, fmt.Errorf("too many dims %d QR modules for constant time engraving n: %d waste: %d",
 			dim, len(modules), waste)
