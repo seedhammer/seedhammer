@@ -31,8 +31,8 @@ func New(bus Bus, intr machine.Pin) *Device {
 
 func (d *Device) Configure() error {
 	d.interrupts = make(chan struct{}, 1)
-	d.intr.Configure(machine.PinConfig{Mode: machine.PinInput})
-	d.intr.SetInterrupt(machine.PinRising, d.handleInterrupt)
+	d.intr.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
+	d.intr.SetInterrupt(machine.PinFalling, d.handleInterrupt)
 	// Set interrupt mask.
 	if err := d.writeReg(regMASK, intREADY|intSTARTED|intNEWPDO); err != nil {
 		return fmt.Errorf("ap3372s: %w", err)
