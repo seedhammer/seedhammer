@@ -3,9 +3,6 @@
 package engrave
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
@@ -13,7 +10,6 @@ import (
 	"image/draw"
 	"iter"
 	"math"
-	"math/rand"
 	"slices"
 
 	"github.com/seedhammer/kortschak-qr"
@@ -465,7 +461,7 @@ func constantQR(qrc *qr.Code) (*constantQRCmd, error) {
 		return nil, err
 	}
 	// Pad up to, but not including, the end point.
-	modules = padQRModules(nmod-1, qrc, modules)
+	modules = padQRModules(nmod-1, modules)
 	// Add end point.
 	modules = append(modules, constantQRMoves(end.Sub(needle)))
 	if len(modules) != nmod {
@@ -481,29 +477,32 @@ func constantQR(qrc *qr.Code) (*constantQRCmd, error) {
 }
 
 // padQRModules pads modules with extra engravings up to n modules.
-func padQRModules(n int, qrc *qr.Code, modules []qrMoves) []qrMoves {
-	// Distribute the extra modules randomly as repeats of existing
-	// modules.
-	extra := n - len(modules)
-	mac := hmac.New(sha256.New, []byte("seedhammer constant qr"))
-	mac.Write(qrc.Bitmap)
-	sum := mac.Sum(nil)
-	seed := int64(binary.BigEndian.Uint64(sum))
-	r := rand.New(rand.NewSource(seed))
-	counts := make([]int, len(modules))
-	for i := 0; i < extra; i++ {
-		idx := r.Intn(len(counts))
-		counts[idx]++
-	}
+func padQRModules(n int, modules []qrMoves) []qrMoves {
+	// Distribute the extra modules evenly.
 	zeroMove := constantQRMoves(image.Point{})
-	var paddedModules []qrMoves
-	for i, m := range modules {
-		paddedModules = append(paddedModules, m)
-		for range counts[i] {
-			paddedModules = append(paddedModules, zeroMove)
+	extra := n - len(modules)
+	// Extend slice, possibly in place.
+	result := append(modules, make([]qrMoves, extra)...)
+	// Use a line tracer to determine when to insert dummy moves.
+	// The x axis denote modules, the y axis denote extras.
+	var l bresenham.Line
+	_, _, steps := l.Reset(image.Pt(len(modules), extra))
+	// Iterate backwards in case result shares memory with modules.
+	ri := len(result) - 1
+	mi := len(modules) - 1
+	for range steps {
+		dx, dy := l.Step()
+		if dx != 0 {
+			result[ri] = modules[mi]
+			mi--
+			ri--
+		}
+		if dy != 0 {
+			result[ri] = zeroMove
+			ri--
 		}
 	}
-	return paddedModules
+	return result
 }
 
 var alignmentMarker = []image.Point{
