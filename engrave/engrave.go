@@ -11,6 +11,7 @@ import (
 	"iter"
 	"math"
 	"slices"
+	"unicode/utf8"
 
 	"github.com/seedhammer/kortschak-qr"
 	"seedhammer.com/bresenham"
@@ -199,6 +200,27 @@ const (
 	dirW
 	dirNW
 )
+
+func (d direction) Reverse() direction {
+	switch d {
+	case dirN:
+		return dirS
+	case dirNE:
+		return dirSW
+	case dirE:
+		return dirW
+	case dirSE:
+		return dirNW
+	case dirS:
+		return dirN
+	case dirSW:
+		return dirNE
+	case dirW:
+		return dirE
+	default:
+		return dirSE
+	}
+}
 
 func (m direction) Direction() image.Point {
 	switch m {
@@ -702,6 +724,16 @@ func manhattanLen(v image.Point) int {
 	return max(v.X, v.Y)
 }
 
+func manhattanLenFrac(f1, f2 fraction) fraction {
+	f1.Nom = abs(f1.Nom)
+	f2.Nom = abs(f2.Nom)
+	if f1.GreaterEq(f2) {
+		return f1
+	} else {
+		return f2
+	}
+}
+
 type bitmap struct {
 	w    int
 	bits []uint32
@@ -745,199 +777,381 @@ const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 // ConstantStringer can engrave text in a timing insensitive way.
 type ConstantStringer struct {
-	moveDist    int
-	finalDist   int
-	engraveDist int
-	longest     int
-	wordStart   image.Point
-	wordEnd     image.Point
-	dims        image.Point
-	alphabet    [len(alphabet)]constantRune
+	origin     image.Point
+	advance    int
+	ascent     int
+	height     int
+	lineMoves  []unitMove
+	startMoves []direction
+	// endMoves contains fractional end moves.
+	endMoves []direction
+	// endMoveDenom is the denominator for end move fractions.
+	endMoveDenom uint
 }
 
-type constantRune struct {
-	path []image.Point
+// unitMove represent a move of unit Manhattan distance.
+type unitMove struct {
+	// Dir is one of the 4 the major axis directions (N, S, W, E).
+	Dir direction
+	// Minor the fractional move of the Minor axis.
+	Minor fraction
 }
 
-func engraveConstantRune(yield func(Command), face *vector.Face, em int, r rune) image.Point {
-	m := face.Metrics()
-	adv, segs, found := face.Decode(r)
-	if !found {
-		panic(fmt.Errorf("unsupported rune: %s", string(r)))
+func (m unitMove) Reverse() unitMove {
+	return unitMove{
+		Dir:   m.Dir.Reverse(),
+		Minor: m.Minor.Mul(-1),
 	}
-	pos := image.Pt(0, int(m.Ascent)*em/int(m.Height))
-	for {
-		seg, ok := segs.Next()
-		if !ok {
-			break
-		}
-		p1 := image.Point{
-			X: seg.Arg.X * em / int(m.Height),
-			Y: seg.Arg.Y * em / int(m.Height),
-		}
-		switch seg.Op {
-		case vector.SegmentOpMoveTo:
-			yield(Move(pos.Add(p1)))
-		case vector.SegmentOpLineTo:
-			yield(Line(pos.Add(p1)))
-		default:
-			panic("constant rune has unsupported segment type")
-		}
-	}
-	return image.Pt(adv*em/int(m.Height), em)
 }
 
-func NewConstantStringer(face *vector.Face, em int, shortest, longest int) *ConstantStringer {
-	var runes []*collectProgram
-	cs := &ConstantStringer{
-		longest: longest,
+func (m unitMove) Direction() (fraction, fraction) {
+	switch m.Dir {
+	case dirN:
+		return m.Minor, intFrac(1)
+	case dirE:
+		return intFrac(1), m.Minor
+	case dirS:
+		return m.Minor, intFrac(-1)
+	default:
+		return intFrac(-1), m.Minor
 	}
-	// Collects path for every letter.
+}
+
+type fraction struct {
+	Nom   int
+	Denom uint
+}
+
+var zeroFrac = fraction{Denom: 1}
+
+func intFrac(v int) fraction {
+	return fraction{
+		Nom:   v,
+		Denom: 1,
+	}
+}
+
+func (f fraction) GreaterEq(f2 fraction) bool {
+	f1nom := f.Nom * int(f2.Denom)
+	f2nom := f2.Nom * int(f.Denom)
+	return f1nom >= f2nom
+}
+
+func (f fraction) Mul(s int) fraction {
+	return fraction{
+		Nom:   f.Nom * s,
+		Denom: f.Denom,
+	}.Reduce()
+}
+
+func (f fraction) Div(s int) fraction {
+	if s < 0 {
+		f.Nom = -f.Nom
+		s = -s
+	}
+	f.Denom *= uint(s)
+	return f
+}
+
+func (f fraction) Add(f2 fraction) fraction {
+	return fraction{
+		Nom:   f.Nom*int(f2.Denom) + f2.Nom*int(f.Denom),
+		Denom: f.Denom * f2.Denom,
+	}.Reduce()
+}
+
+func (f fraction) Split() (int, fraction) {
+	return f.Nom / int(f.Denom), fraction{
+		Nom:   f.Nom % int(f.Denom),
+		Denom: f.Denom,
+	}
+}
+
+func (f fraction) Reduce() fraction {
+	nom := f.Nom
+	if nom < 0 {
+		nom = -nom
+	}
+	d := gcd(uint(nom), f.Denom)
+	return fraction{
+		Nom:   f.Nom / int(d),
+		Denom: f.Denom / d,
+	}
+}
+
+func gcd(a, b uint) uint {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+func NewConstantStringer(face *vector.Face) *ConstantStringer {
+	// Compute alphabet bounds, engraving length etc.
+	// bstart is the bounds of all start points.
+	bstart := image.Rectangle{
+		Min: image.Pt(math.MaxInt, math.MaxInt),
+		Max: image.Pt(math.MinInt, math.MinInt),
+	}
+	var advance int
+	maxLineTotal := 0
 	for _, r := range alphabet {
-		c := new(collectProgram)
-		cs.dims = engraveConstantRune(c.Command, face, em, r)
-		if c.len > cs.engraveDist {
-			cs.engraveDist = c.len
+		a, segs, found := face.Decode(r)
+		if !found {
+			panic(fmt.Errorf("unsupported rune: %s", string(r)))
 		}
-		runes = append(runes, c)
+		advance = a
+		seenLine := false
+		var needle image.Point
+		lineTotal := 0
+		for {
+			seg, ok := segs.Next()
+			if !ok {
+				break
+			}
+			p := seg.Arg
+			switch seg.Op {
+			case vector.SegmentOpMoveTo:
+				if seenLine {
+					panic("constant glyph path is not an unbroken path")
+				}
+				bstart.Min.X = min(bstart.Min.X, p.X)
+				bstart.Min.Y = min(bstart.Min.Y, p.Y)
+				bstart.Max.X = max(bstart.Max.X, p.X)
+				bstart.Max.Y = max(bstart.Max.Y, p.Y)
+			case vector.SegmentOpLineTo:
+				if !seenLine {
+					seenLine = true
+				}
+				l := manhattanLen(p.Sub(needle))
+				lineTotal += l
+			default:
+				panic("constant glyph has unsupported segment type")
+			}
+			needle = p
+		}
+		maxLineTotal = max(maxLineTotal, lineTotal)
 	}
-	// We rely on the advance being even so there is equal
-	// distance from either edge to the center.
-	if cs.dims.X%2 == 1 {
-		cs.dims.X--
+
+	// Build line paths and start moves.
+	nmoves := len(alphabet) * maxLineTotal
+	origin := bstart.Max.Add(bstart.Min).Div(2)
+	startDist := max(ManhattanDist(origin, bstart.Max), ManhattanDist(origin, bstart.Min))
+	m := face.Metrics()
+	s := &ConstantStringer{
+		ascent:       int(m.Ascent),
+		height:       int(m.Height),
+		advance:      advance,
+		origin:       origin,
+		lineMoves:    make([]unitMove, 0, nmoves),
+		startMoves:   make([]direction, 0, len(alphabet)*startDist),
+		endMoveDenom: 1,
 	}
-	// Expand letters to match the longest letter.
-	suffix := longest - shortest
-	// end in the center of the rune between the shortest and
-	// longest string. Minimizes the final movement.
-	cs.finalDist = suffix * cs.dims.X / 2
-	endx := shortest*cs.dims.X + cs.finalDist
-	cs.wordStart = image.Pt(0, cs.dims.Y/2)
-	cs.wordEnd = image.Pt(endx, cs.dims.Y/2)
-	center := image.Pt(cs.dims.X/2, cs.dims.Y/2)
-	for i, r := range alphabet {
-		c := runes[i]
-		path := c.path
-		last := len(path) - 1
-		n := c.len
-		// Trace backwards, starting from the end.
-		idx := last
-		dir := -1
-		for n != cs.engraveDist {
-			idx += dir
-			needle := path[len(path)-1]
-			p := path[idx]
-			dist := ManhattanDist(needle, p)
-			// Shorten path segment if required.
-			if overflow := n + dist - cs.engraveDist; overflow > 0 {
+	// The maximum, fractional distance from end point to origin.
+	var endDist fraction
+	for _, r := range alphabet {
+		_, segs, _ := face.Decode(r)
+		var needle image.Point
+		n := 0
+		startIdx := len(s.lineMoves)
+		for {
+			seg, ok := segs.Next()
+			if !ok {
+				break
+			}
+			p := seg.Arg
+			switch seg.Op {
+			case vector.SegmentOpMoveTo:
+				s.startMoves = appendConstantMove(s.startMoves, startDist, p.Sub(s.origin))
+			case vector.SegmentOpLineTo:
 				d := p.Sub(needle)
-				abs := d
-				if abs.X < 0 {
-					abs.X = -abs.X
-				}
-				if abs.Y < 0 {
-					abs.Y = -abs.Y
-				}
-				if abs.X >= abs.Y {
-					// X determines manhattan distance, shorten it
-					// by overflow.
-					signx := d.X / abs.X
-					d.X -= overflow * signx
-					// Shorten Y proportionally.
-					d.Y -= overflow * d.Y / abs.X
-				} else {
-					// Vice versa.
-					signy := d.Y / abs.Y
-					d.Y -= overflow * signy
-					d.X -= overflow * d.X / abs.Y
-				}
-				p = needle.Add(d)
-				dist -= overflow
+				l := manhattanLen(d)
+				s.lineMoves = appendConstantUnitMove(s.lineMoves, d)
+				n += l
+			default:
+				panic("constant glyph has unsupported segment type")
 			}
-			n += dist
-			path = append(path, p)
-			if idx == 0 || idx == last {
-				dir = -dir
+			needle = p
+		}
+		// Pad engraving by retracing the engraved path.
+		idx := len(s.lineMoves) - 1
+		// Reverse direction.
+		dir := -1
+		// Accumulate the fractional position.
+		xfrac := intFrac(needle.X)
+		yfrac := intFrac(needle.Y)
+		for n < maxLineTotal {
+			m := s.lineMoves[idx]
+			rev := m
+			if dir == -1 {
+				rev = rev.Reverse()
 			}
+			s.lineMoves = append(s.lineMoves, rev)
+			dx, dy := rev.Direction()
+			xfrac = xfrac.Add(dx)
+			yfrac = yfrac.Add(dy)
+			// Flip direction if the beginning is reached.
+			if idx == startIdx {
+				dir = 1
+			}
+			idx += dir
+			n++
 		}
-		cs.alphabet[r-'A'] = constantRune{
-			path: path,
-		}
-		start, end := path[0], path[len(path)-1]
-		if d := ManhattanDist(center, start); d > cs.moveDist {
-			cs.moveDist = d
-		}
-		if d := ManhattanDist(center, end); d > cs.moveDist {
-			cs.moveDist = d
+		div := gcd(s.endMoveDenom, xfrac.Denom)
+		s.endMoveDenom = s.endMoveDenom * xfrac.Denom / div
+		div = gcd(s.endMoveDenom, yfrac.Denom)
+		s.endMoveDenom = s.endMoveDenom * yfrac.Denom / div
+		if dist := manhattanLenFrac(xfrac, yfrac); dist.GreaterEq(endDist) {
+			endDist = dist
 		}
 	}
-	return cs
+
+	// Build (fractional) end moves.
+	lineMoves := endDist.Mul(int(s.endMoveDenom)).Nom
+	s.endMoves = make([]direction, 0, len(alphabet)*lineMoves)
+	i, j := 0, 0
+	for range alphabet {
+		var needle image.Point
+		// Move to line beginning.
+		for range startDist {
+			d := s.startMoves[j].Direction()
+			j++
+			needle = needle.Add(d)
+		}
+		// Trace line until end.
+		xfrac := intFrac(needle.X)
+		yfrac := intFrac(needle.Y)
+		for range maxLineTotal {
+			dx, dy := s.lineMoves[i].Direction()
+			i++
+			xfrac = xfrac.Add(dx)
+			yfrac = yfrac.Add(dy)
+		}
+		xfrac = xfrac.Mul(int(s.endMoveDenom))
+		yfrac = yfrac.Mul(int(s.endMoveDenom))
+		ix, xrem := xfrac.Split()
+		iy, yrem := yfrac.Split()
+		if xrem.Nom != 0 || yrem.Nom != 0 {
+			panic("non-integer line move")
+		}
+		s.endMoves = appendConstantMove(s.endMoves, lineMoves, image.Pt(-ix, -iy))
+	}
+	return s
 }
 
-func (c *ConstantStringer) String(txt string) Plan {
-	cmd := func(yield func(Command) bool) {
-		needle := c.wordStart
-		if !yield(Move(needle)) {
-			return
-		}
-		repeats := c.longest / len(txt)
-		rest := c.longest - repeats*len(txt)
-		for i, r := range txt {
-			l := c.alphabet[r-'A']
-			extra := 0
-			if rest > 0 {
-				rest--
-				extra = 1
-			}
-			for j := 0; j < repeats+extra; j++ {
-				off := image.Pt(i*c.dims.X, 0)
-				// Move to center. Always equal distance.
-				center := off.Add(image.Pt(c.dims.X/2, c.dims.Y/2))
-				needle = center
-				cont := yield(Move(needle))
-				start := l.path[0].Add(off)
-				cont = cont && constantMove(yield, start, needle, c.moveDist)
-				needle = start
-				for _, pos := range l.path[1:] {
-					needle = pos.Add(off)
-					cont = cont && yield(Line(needle))
-				}
-				cont = cont && constantMove(yield, center, needle, c.moveDist)
-				needle = center
-				end := off.Add(image.Pt(c.dims.X, c.dims.Y/2))
-				cont = cont && yield(Move(end))
-				if !cont {
-					return
-				}
-				needle = end
-			}
-		}
-		// constantMove by itself is correct but risks engraving out of bounds.
-		// To keep movement inside the bounds of the word, move closer so
-		// that the distance is less than half the line height.
-		wantDist := c.finalDist
-		dist := ManhattanDist(c.wordEnd, needle)
-		if d := dist - c.dims.Y/2; d > 0 {
-			dir := c.wordEnd.Sub(needle)
-			mid := needle.Add(dir.Mul(d).Div(dist))
-			wantDist -= ManhattanDist(mid, needle)
-			needle = mid
-			if !yield(Move(needle)) {
-				return
-			}
-		}
-		// Then let constantMove take care of the rest.
-		if !constantMove(yield, c.wordEnd, needle, wantDist) {
-			return
-		}
+func abs(v int) int {
+	if v >= 0 {
+		return v
 	}
+	return -v
+}
 
-	// Verify constant-ness.
-	if !c.isConstant(cmd) {
-		// Should be constant by construction.
-		panic("command is not constant")
+func appendConstantUnitMove(moves []unitMove, target image.Point) []unitMove {
+	absTarget := image.Point{
+		X: abs(target.X),
+		Y: abs(target.Y),
 	}
-	return cmd
+	var m unitMove
+	if absTarget.X > absTarget.Y {
+		m.Minor = fraction{Nom: target.Y, Denom: uint(absTarget.X)}
+		switch {
+		case target.X < 0:
+			m.Dir = dirW
+		case target.X > 0:
+			m.Dir = dirE
+		}
+	} else {
+		m.Minor = fraction{Nom: target.X, Denom: uint(absTarget.Y)}
+		switch {
+		case target.Y < 0:
+			m.Dir = dirS
+		case target.Y > 0:
+			m.Dir = dirN
+		}
+	}
+	dist := max(absTarget.X, absTarget.Y)
+	for range dist {
+		moves = append(moves, m)
+	}
+	return moves
+}
+
+type constantGlyph struct {
+	reverse bool
+	index   int
+}
+
+func (c *ConstantStringer) String(txt string, em int, longest int) Plan {
+	var l bresenham.Line
+	glyphs := make([]constantGlyph, 0, longest)
+	// Use line stepping to distribute padding letters.
+	_, _, steps := l.Reset(image.Pt(len(txt), longest-len(txt)))
+	var last int
+	for range steps {
+		dx, dy := l.Step()
+		if dx != 0 {
+			r, n := utf8.DecodeRuneInString(txt)
+			txt = txt[n:]
+			last = int(r) - 'A'
+			glyphs = append(glyphs, constantGlyph{index: last})
+		}
+		if dy != 0 {
+			glyphs = append(glyphs, constantGlyph{reverse: true, index: last})
+		}
+	}
+	return func(yield func(Command) bool) {
+		scale := em / c.height
+		px, py := intFrac(0), intFrac(0)
+		moveFrac := func(x, y fraction) image.Point {
+			px = px.Add(x)
+			py = py.Add(y)
+			nx, _ := px.Mul(scale).Split()
+			ny, _ := py.Mul(scale).Split()
+			return image.Pt(nx, ny)
+		}
+		move := func(d image.Point) image.Point {
+			return moveFrac(intFrac(d.X), intFrac(d.Y))
+		}
+		orig := c.origin.Add(image.Pt(0, int(c.ascent)))
+		if !yield(Move(move(orig))) {
+			return
+		}
+		advHalf := fraction{Nom: c.advance, Denom: 2}
+		startDist := len(c.startMoves) / len(alphabet)
+		endDist := len(c.endMoves) / len(alphabet)
+		lineDist := len(c.lineMoves) / len(alphabet)
+		cont := true
+		for i, g := range glyphs {
+			// Advance.
+			if i > 0 {
+				cont = cont && yield(Move(moveFrac(advHalf, intFrac(0))))
+				dx := advHalf
+				if g.reverse {
+					dx = dx.Mul(-1)
+				}
+				cont = cont && yield(Move(moveFrac(dx, intFrac(0))))
+			}
+			// Move from origin to beginning of path.
+			startMoves := c.startMoves[g.index*startDist : (g.index+1)*startDist]
+			for _, m := range startMoves {
+				cont = cont && yield(Move(move(m.Direction())))
+			}
+			// Engrave glyph.
+			lineMoves := c.lineMoves[g.index*lineDist : (g.index+1)*lineDist]
+			for _, m := range lineMoves {
+				dx, dy := m.Direction()
+				cont = cont && yield(Line(moveFrac(dx, dy)))
+			}
+			// Move to origin.
+			endMoves := c.endMoves[g.index*endDist : (g.index+1)*endDist]
+			for _, m := range endMoves {
+				dir := m.Direction()
+				dx := intFrac(dir.X).Div(int(c.endMoveDenom))
+				dy := intFrac(dir.Y).Div(int(c.endMoveDenom))
+				cont = cont && yield(Move(moveFrac(dx, dy)))
+			}
+		}
+	}
 }
 
 // assertConstantQR verifies that the engraving time of cmd
@@ -961,147 +1175,7 @@ func assertConstantQR(cmd *constantQRCmd) {
 	}
 }
 
-func (c *ConstantStringer) isConstant(cmd Plan) bool {
-	pt := new(pattern)
-	for c := range cmd {
-		pt.Command(c)
-	}
-	// Constant start and end points.
-	if pt.start != c.wordStart || pt.end != c.wordEnd {
-		return false
-	}
-	// Constant number of patterns.
-	if len(pt.pattern) != 2*c.longest+1 {
-		return false
-	}
-	// All pattern elements have constant sizes.
-	line := false
-	for i, p := range pt.pattern {
-		if p.line != line {
-			return false
-		}
-		var wantDist int
-		switch {
-		case i == 0:
-			wantDist = c.moveDist + c.dims.X/2
-		case i == len(pt.pattern)-1:
-			wantDist = c.moveDist + c.dims.X/2 + c.finalDist
-		case line:
-			wantDist = c.engraveDist
-		default:
-			wantDist = 2*c.moveDist + c.dims.X
-		}
-		if wantDist != p.len {
-			return false
-		}
-		line = !line
-	}
-	return true
-}
-
 type cmdYielder func(Command) bool
-
-// constantMove moves to dst from src in exactly dist manhattan distance.
-// It spends extra moves by moving along the square with dst in the center
-// and src on its boundary.
-// constantMove assumes the distance between dst and src is less than or
-// equal to dist.
-// constantMove panics if dst equals src and dist is 1.
-func constantMove(yield cmdYielder, dst, src image.Point, dist int) bool {
-	// extra is the distance to spend.
-	extra := dist - ManhattanDist(dst, src)
-	cont := true
-	if dst == src {
-		if extra == 1 {
-			panic("dst and src coincides and dist allows no movement")
-		}
-		// If src and dst coincides the implied square reduces to a
-		// point which cannot be used for spending moves.
-		// Instead move half of extra away and continue from there.
-		d := extra / 2
-		src = src.Add(image.Pt(d, 0))
-		cont = cont && yield(Move(src))
-		extra -= d * 2
-	}
-	dp := src.Sub(dst)
-	d := manhattanLen(dp)
-	// axis is the direction from dst to src along the longest axis.
-	axis := dp.Div(d)
-	// Tie-break diagonals arbitrarily.
-	if axis.X != 0 && axis.Y != 0 {
-		axis.X = 0
-	}
-	for extra > 0 {
-		dp := src.Sub(dst)
-		axis = image.Pt(-axis.Y, axis.X)
-		// cornerDist is the distance from src to the corner along
-		// moveDir.
-		cornerDist := d - dp.X*axis.X - dp.Y*axis.Y
-		moveDist := cornerDist
-		if moveDist > extra {
-			moveDist = extra
-		}
-		extra -= moveDist
-		src = src.Add(axis.Mul(moveDist))
-		cont = cont && yield(Move(src))
-	}
-	cont = cont && yield(Move(dst))
-	return cont
-}
-
-type collectProgram struct {
-	path []image.Point
-	len  int
-}
-
-func (m *collectProgram) Command(c Command) {
-	if c.Line {
-		if len(m.path) == 0 {
-			panic("no start point for constant rune")
-		}
-		needle := m.path[len(m.path)-1]
-		d := ManhattanDist(needle, c.Coord)
-		if d == 0 {
-			return
-		}
-		m.len += d
-	} else {
-		if len(m.path) > 0 {
-			panic("move during constant rune")
-		}
-	}
-	m.path = append(m.path, c.Coord)
-}
-
-// pattern records the pattern of the engraving instructions
-// sent to it.
-type pattern struct {
-	start, end image.Point
-	pattern    []patternElem
-}
-
-type patternElem struct {
-	line bool
-	len  int
-}
-
-func (c *pattern) Command(cmd Command) {
-	if len(c.pattern) == 0 {
-		c.start = cmd.Coord
-		c.end = cmd.Coord
-		c.pattern = append(c.pattern, patternElem{line: cmd.Line})
-		return
-	}
-	prev := c.end
-	elem := &c.pattern[len(c.pattern)-1]
-	dist := ManhattanDist(prev, cmd.Coord)
-	if elem.line != cmd.Line {
-		c.pattern = append(c.pattern, patternElem{line: cmd.Line, len: dist})
-	} else {
-		elem.len += dist
-	}
-	c.end = cmd.Coord
-}
 
 func String(face *vector.Face, em int, txt string) *StringCmd {
 	return &StringCmd{

@@ -1,10 +1,15 @@
 package engrave
 
 import (
+	"bytes"
+	"flag"
 	"image"
+	"image/png"
 	"io"
 	"iter"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,6 +19,8 @@ import (
 	"seedhammer.com/font/constant"
 	"seedhammer.com/seedqr"
 )
+
+var update = flag.Bool("update", false, "update golden files")
 
 func TestCSQR(t *testing.T) {
 	mnemonic := make(bip39.Mnemonic, 24)
@@ -108,15 +115,79 @@ func TestQRMoves(t *testing.T) {
 	}
 }
 
-func TestConstantString(t *testing.T) {
-	s := NewConstantStringer(constant.Font, 1000, bip39.ShortestWord, bip39.LongestWord)
-	for i := bip39.Word(0); i < bip39.NumWords; i++ {
-		w := strings.ToUpper(bip39.LabelFor(i))
-		cmd := s.String(w)
-		bounds := image.Rect(0, 0, s.longest*s.dims.X, s.dims.Y)
+func TestConstantFont(t *testing.T) {
+	f := constant.Font
+	s := NewConstantStringer(f)
+	h := int(f.Metrics().Height)
+	em := h * 10
+	bounds := image.Rectangle{Max: image.Pt(em*len(alphabet), em)}
+	got := image.NewAlpha(bounds)
+	Rasterize(got, s.String(alphabet, em, len(alphabet)))
+	golden := filepath.Join("testdata", "alphabet.png")
+	if *update {
+		if err := os.MkdirAll(filepath.Dir(golden), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, got); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(golden, buf.Bytes(), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	gf, err := os.Open(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gf.Close()
+	want, _, err := image.Decode(gf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, g := want.Bounds().Size(), got.Bounds().Size(); w != g {
+		t.Fatalf("golden image bounds mismatch: got %v, want %v", g, w)
+	}
+	mismatches := 0
+	pixels := 0
+	width, height := want.Bounds().Dx(), want.Bounds().Dy()
+	gotOff := bounds.Min
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			wanty16, _, _, _ := want.At(x, y).RGBA()
+			want := wanty16 != 0
+			got := got.AlphaAt(gotOff.X+x, gotOff.Y+y).A != 0
+			if want {
+				pixels++
+			}
+			if got != want {
+				mismatches++
+			}
+		}
+	}
+	if mismatches > 0 {
+		t.Errorf("%d/%d pixels golden image mismatches", mismatches, pixels)
+	}
+}
+
+func TestConstantWords(t *testing.T) {
+	const em = 1000
+	s := NewConstantStringer(constant.Font)
+	var prev Plan
+	for r := bip39.Word(0); r < bip39.NumWords; r++ {
+		w := strings.ToUpper(bip39.LabelFor(r))
+		cmd := s.String(w, em, bip39.LongestWord)
+		if prev != nil {
+			if !constantEqual(prev, cmd) {
+				t.Errorf("%s: not constant", w)
+			}
+		}
+		prev = cmd
 		moves := measureMoves(cmd)
+		bounds := image.Rect(0, 0, em*len(w), em)
 		if !moves.In(bounds) {
-			t.Errorf("%s movement bounds %v are not inside bounds %v", w, moves, bounds)
+			t.Errorf("%s: movement bounds %v are not inside bounds %v", w, moves, bounds)
 		}
 	}
 }

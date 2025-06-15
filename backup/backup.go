@@ -262,7 +262,7 @@ const plateFontSizeUR = 3.8
 const plateSmallFontSize = 3.
 
 func frontSideSeed(params engrave.Params, plate Seed, qrc *qr.Code, plateDims image.Point) (engrave.Plan, error) {
-	constant := engrave.NewConstantStringer(plate.Font, params.F(plateFontSize), bip39.ShortestWord, bip39.LongestWord)
+	constant := engrave.NewConstantStringer(plate.Font)
 	var cmds []engrave.Plan
 	cmd := func(c engrave.Plan) {
 		cmds = append(cmds, c)
@@ -349,7 +349,7 @@ func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize 
 		d := num.Measure()
 		w := mnemonic[i]
 		word := strings.ToUpper(bip39.LabelFor(w))
-		txt := constant.String(word)
+		txt := constant.String(word, fontSize, bip39.LongestWord)
 		cmds = append(cmds,
 			engrave.Offset(0, y, num.Engrave()),
 			engrave.Offset(d.X, y, txt),
