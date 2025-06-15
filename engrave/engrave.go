@@ -39,7 +39,7 @@ func (p Params) I(v int) int {
 }
 
 // Plan is an iterator over the commands of an engraving.
-type Plan iter.Seq[Command]
+type Plan = iter.Seq[Command]
 
 type Command struct {
 	Line  bool
@@ -181,11 +181,157 @@ func QR(strokeWidth int, scale int, qr *qr.Code) Plan {
 	}
 }
 
-// qrMoves is the exact number of qrMoves before engraving
+// qrMovesPerModule is the exact number of qrMovesPerModule before engraving
 // a constant time QR module.
-const qrMoves = 4
+const qrMovesPerModule = 4
 
-// constantTimeQRModeuls returns the exact number of modules in a constant
+// direction represents a direction in a compass direction.
+type direction uint8
+
+// qrMoves represent [qrMovesPerModule] moves, each move packed into
+// 3 bits.
+type qrMoves uint16
+
+// Compass directions for QR moves.
+const (
+	dirN direction = iota
+	dirNE
+	dirE
+	dirSE
+	dirS
+	dirSW
+	dirW
+	dirNW
+)
+
+func (m direction) Direction() image.Point {
+	switch m {
+	case dirN:
+		return image.Pt(0, 1)
+	case dirNE:
+		return image.Pt(1, 1)
+	case dirE:
+		return image.Pt(1, 0)
+	case dirSE:
+		return image.Pt(1, -1)
+	case dirS:
+		return image.Pt(0, -1)
+	case dirSW:
+		return image.Pt(-1, -1)
+	case dirW:
+		return image.Pt(-1, 0)
+	case dirNW:
+		return image.Pt(-1, 1)
+	default:
+		panic("invalid move")
+	}
+}
+
+func (q qrMoves) Set(i int, m direction) qrMoves {
+	if i < 0 || i >= qrMovesPerModule {
+		panic("index out of bounds")
+	}
+	return q | qrMoves(m)<<(i*3)
+}
+
+func (q qrMoves) Get(i int) image.Point {
+	if i < 0 || i >= qrMovesPerModule {
+		panic("index out of bounds")
+	}
+	return direction((q >> (i * 3)) & 0b111).Direction()
+}
+
+func moveFromDirection(dir image.Point) direction {
+	switch dir {
+	case image.Pt(0, 1):
+		return dirN
+	case image.Pt(1, 1):
+		return dirNE
+	case image.Pt(1, 0):
+		return dirE
+	case image.Pt(1, -1):
+		return dirSE
+	case image.Pt(0, -1):
+		return dirS
+	case image.Pt(-1, -1):
+		return dirSW
+	case image.Pt(-1, 0):
+		return dirW
+	case image.Pt(-1, 1):
+		return dirNW
+	default:
+		panic("invalid direction")
+	}
+}
+
+// constantQRMoves computes a list of moves from the origin to target.
+func constantQRMoves(target image.Point) qrMoves {
+	moves := make([]direction, 0, qrMovesPerModule)
+	moves = appendConstantMove(moves, qrMovesPerModule, target)
+	var qrm qrMoves
+	for i, m := range moves {
+		qrm = qrm.Set(i, m)
+	}
+	return qrm
+}
+
+// appendConstantMove computes a list of moves from the origin to target.
+func appendConstantMove(moves []direction, n int, target image.Point) []direction {
+	m := 0
+	// Burn extra moves until the manhattan distance is
+	// equal to the remaining moves.
+	for manhattanLen(target) < (n - m) {
+		// Make a distance-neutral move for any non-zero
+		// target. Zero targets will increase the distance
+		// by 1.
+		var dir image.Point
+		abs := image.Point{
+			X: max(target.X, -target.X),
+			Y: max(target.Y, -target.Y),
+		}
+		if abs.X >= abs.Y {
+			if target.Y >= 0 {
+				dir.Y = 1
+			} else {
+				dir.Y = -1
+			}
+		} else {
+			if target.X >= 0 {
+				dir.X = 1
+			} else {
+				dir.X = -1
+			}
+		}
+		target = target.Sub(dir)
+		moves = append(moves, moveFromDirection(dir))
+		m++
+	}
+	// Spend remaining moves towards target.
+	for m < n {
+		var dir image.Point
+		switch {
+		case target.X > 0:
+			dir.X = 1
+		case target.X < 0:
+			dir.X = -1
+		}
+		switch {
+		case target.Y > 0:
+			dir.Y = 1
+		case target.Y < 0:
+			dir.Y = -1
+		}
+		target = target.Sub(dir)
+		moves = append(moves, moveFromDirection(dir))
+		m++
+	}
+	if target != (image.Point{}) {
+		panic("move out of range")
+	}
+	return moves
+}
+
+// constantTimeQRModules returns the exact number of modules in a constant
 // time QR code, given its version.
 func constantTimeQRModules(dims int) int {
 	// The numbers below are maximum numbers found through fuzzing.
@@ -193,23 +339,23 @@ func constantTimeQRModules(dims int) int {
 	const extra = 5
 	switch dims {
 	case 21:
-		return 163 + extra
+		return 164 + extra
 	case 25:
-		return 261 + extra
+		return 262 + extra
 	case 29:
-		return 385 + extra
+		return 386 + extra
 	}
 	// Not supported, return a low number to force error.
 	return 0
 }
 
 func constantTimeStartEnd(dim int) (start, end image.Point) {
-	return image.Pt(8+qrMoves, dim-1-qrMoves), image.Pt(dim-1-3, 3)
+	return image.Pt(8+qrMovesPerModule, dim-1-qrMovesPerModule), image.Pt(dim-1-3, 3)
 }
 
 func bitmapForQR(qr *qr.Code) bitmap {
 	dim := qr.Size
-	bm := NewBitmap(dim, dim)
+	bm := newBitmap(dim, dim)
 	for y := 0; y < dim; y++ {
 		for x := 0; x < dim; x++ {
 			if qr.Black(x, y) {
@@ -220,16 +366,12 @@ func bitmapForQR(qr *qr.Code) bitmap {
 	return bm
 }
 
-func bitmapForQRStatic(dim int) ([]image.Point, []image.Point, bitmap) {
-	engraved := NewBitmap(dim, dim)
+func bitmapForQRStatic(dim int) ([]image.Point, []image.Point) {
 	// First 3 position markers.
 	posMarkers := []image.Point{
 		{0, 0},
 		{dim - 7, 0},
 		{0, dim - 7},
-	}
-	for _, p := range posMarkers {
-		fillMarker(engraved, p, positionMarker)
 	}
 	// Ignore aligment markers.
 	var alignMarkers []image.Point
@@ -243,51 +385,54 @@ func bitmapForQRStatic(dim int) ([]image.Point, []image.Point, bitmap) {
 	default:
 		panic("unsupported qr code version")
 	}
-	for _, p := range alignMarkers {
-		fillMarker(engraved, p, alignmentMarker)
-	}
-	return posMarkers, alignMarkers, engraved
+	return posMarkers, alignMarkers
 }
 
 // ConstantQR is like QR that engraves the QR code in a pattern independent of content,
 // except for the QR code version (size).
 func ConstantQR(strokeWidth, scale int, qrc *qr.Code) (Plan, error) {
-	c, err := constantQR(strokeWidth, scale, qrc)
+	c, err := constantQR(qrc)
 	if err != nil {
 		return nil, err
 	}
-	return c.engrave(), nil
+	return c.engrave(strokeWidth, scale), nil
 }
 
-func constantQR(strokeWidth, scale int, qrc *qr.Code) (*constantQRCmd, error) {
+func constantQR(qrc *qr.Code) (*constantQRCmd, error) {
 	dim := qrc.Size
 	qr := bitmapForQR(qrc)
+	engraved := newBitmap(dim, dim)
+	posMarkers, alignMarkers := bitmapForQRStatic(dim)
 	// No need to engrave static features of the QR code.
-	posMarkers, alignMarkers, engraved := bitmapForQRStatic(dim)
+	for _, p := range posMarkers {
+		fillMarker(engraved, p, positionMarker)
+	}
+	for _, p := range alignMarkers {
+		fillMarker(engraved, p, alignmentMarker)
+	}
 	// Start in the lower-left corner.
 	pos := image.Pt(0, dim-1)
 	// Iterating forward.
 	dir := 1
 	start, end := constantTimeStartEnd(dim)
+	needle := start
 	nmod := constantTimeQRModules(dim)
-	modules := make([]image.Point, 0, nmod)
+	modules := make([]qrMoves, 0, nmod)
 	waste := 0
 	engrave := func(p image.Point) {
-		modules = append(modules, p)
+		m := constantQRMoves(p.Sub(needle))
+		modules = append(modules, m)
+		needle = p
 		if engraved.Get(p) {
 			waste++
 		} else {
 			engraved.Set(p)
 		}
 	}
-	visited := NewBitmap(dim, dim)
+	visited := newBitmap(dim, dim)
+	// Find path to a module close enough to p.
 	move := func(p image.Point) error {
-		// Find path to a module close enough to pos.
 		clear(visited.bits)
-		needle := start
-		if len(modules) > 0 {
-			needle = modules[len(modules)-1]
-		}
 		path, ok := findPath(nil, visited, qr, engraved, p, needle)
 		if !ok {
 			return errors.New("QR modules spaced too far for constant time engraving")
@@ -299,12 +444,8 @@ func constantQR(strokeWidth, scale int, qrc *qr.Code) (*constantQRCmd, error) {
 	}
 	for pos.Y >= 0 {
 		if qr.Get(pos) && !engraved.Get(pos) {
-			needle := start
-			if len(modules) > 0 {
-				needle = modules[len(modules)-1]
-			}
 			dist := ManhattanDist(pos, needle)
-			if dist > qrMoves {
+			if dist > qrMovesPerModule {
 				if err := move(pos); err != nil {
 					return nil, err
 				}
@@ -323,29 +464,24 @@ func constantQR(strokeWidth, scale int, qrc *qr.Code) (*constantQRCmd, error) {
 	if err := move(end); err != nil {
 		return nil, err
 	}
-	if len(modules) >= nmod {
+	// Pad up to, but not including, the end point.
+	modules = padQRModules(nmod-1, qrc, modules)
+	// Add end point.
+	modules = append(modules, constantQRMoves(end.Sub(needle)))
+	if len(modules) != nmod {
 		return nil, fmt.Errorf("too many dims %d QR modules for constant time engraving n: %d waste: %d",
 			dim, len(modules), waste)
 	}
-	modules = padQRModules(nmod, qrc, modules)
 	cmd := &constantQRCmd{
-		start:       start,
-		end:         end,
-		strokeWidth: strokeWidth,
-		scale:       scale,
-		plan:        modules,
+		dim:  dim,
+		plan: modules,
 	}
-	// Verify constant-ness without the static markers.
-	if !isConstantQR(cmd, dim) {
-		panic("constant QR engraving is not constant")
-	}
-	cmd.posMarkers = posMarkers
-	cmd.alignMarkers = alignMarkers
+	assertConstantQR(cmd)
 	return cmd, nil
 }
 
 // padQRModules pads modules with extra engravings up to n modules.
-func padQRModules(n int, qrc *qr.Code, modules []image.Point) []image.Point {
+func padQRModules(n int, qrc *qr.Code, modules []qrMoves) []qrMoves {
 	// Distribute the extra modules randomly as repeats of existing
 	// modules.
 	extra := n - len(modules)
@@ -359,12 +495,12 @@ func padQRModules(n int, qrc *qr.Code, modules []image.Point) []image.Point {
 		idx := r.Intn(len(counts))
 		counts[idx]++
 	}
-	var paddedModules []image.Point
+	zeroMove := constantQRMoves(image.Point{})
+	var paddedModules []qrMoves
 	for i, m := range modules {
-		// Engrave once plus extra.
-		c := 1 + counts[i]
-		for j := 0; j < c; j++ {
-			paddedModules = append(paddedModules, m)
+		paddedModules = append(paddedModules, m)
+		for range counts[i] {
+			paddedModules = append(paddedModules, zeroMove)
 		}
 	}
 	return paddedModules
@@ -442,12 +578,12 @@ func fillMarker(engraved bitmap, off image.Point, points []image.Point) {
 }
 
 func findPath(modules []image.Point, visited, qr, engraved bitmap, to, from image.Point) ([]image.Point, bool) {
-	if ManhattanDist(from, to) <= qrMoves {
+	if ManhattanDist(from, to) <= qrMovesPerModule {
 		return modules, true
 	}
-	candidates := make([]image.Point, 0, qrMoves*qrMoves)
-	for y := -qrMoves; y <= qrMoves; y++ {
-		for x := -qrMoves; x <= qrMoves; x++ {
+	candidates := make([]image.Point, 0, qrMovesPerModule*qrMovesPerModule)
+	for y := -qrMovesPerModule; y <= qrMovesPerModule; y++ {
+		for x := -qrMovesPerModule; x <= qrMovesPerModule; x++ {
 			p := from.Add(image.Pt(x, y))
 			if !qr.Get(p) || visited.Get(p) {
 				continue
@@ -477,85 +613,62 @@ func findPath(modules []image.Point, visited, qr, engraved bitmap, to, from imag
 	return nil, false
 }
 
+// constantQRCmd represents the constant time plan for engraving a QR
+// code.
 type constantQRCmd struct {
-	strokeWidth int
-	scale       int
-
-	start, end   image.Point
-	posMarkers   []image.Point
-	alignMarkers []image.Point
-	plan         []image.Point
+	// The QR dimension.
+	dim int
+	// The list of moves.
+	plan []qrMoves
 }
 
-func (q constantQRCmd) engraveAlignMarker(off image.Point) Plan {
-	return func(yield func(Command) bool) {
-		for _, m := range alignmentMarker {
-			center := q.centerOf(m.Add(off))
-			if !yield(Move(center)) {
-				return
-			}
-			for !q.engraveModule(yield, center) {
-				return
-			}
-		}
-	}
-}
-
-func (q constantQRCmd) engravePositionMarker(off image.Point) Plan {
-	return func(yield func(Command) bool) {
-		for _, m := range positionMarker {
-			center := q.centerOf(m.Add(off))
-			if !yield(Move(center)) {
-				return
-			}
-			if !q.engraveModule(yield, center) {
-				return
-			}
-		}
-	}
-}
-
-func (q constantQRCmd) centerOf(p image.Point) image.Point {
-	sw := q.strokeWidth
+func centerOf(sw, scale int, p image.Point) image.Point {
 	radius := sw / 2
 	return image.Point{
-		X: radius + (p.X*q.scale+1)*sw,
-		Y: radius + (p.Y*q.scale+1)*sw,
+		X: radius + (p.X*scale+1)*sw,
+		Y: radius + (p.Y*scale+1)*sw,
 	}
 }
 
-func (q constantQRCmd) engrave() Plan {
+func (q constantQRCmd) engrave(strokeWidth, scale int) Plan {
 	return func(yield func(Command) bool) {
 		cont := true
-		for _, off := range q.posMarkers {
-			for c := range q.engravePositionMarker(off) {
-				cont = cont && yield(c)
+		posMarkers, alignMarkers := bitmapForQRStatic(q.dim)
+		start, _ := constantTimeStartEnd(q.dim)
+		for _, off := range posMarkers {
+			for _, m := range positionMarker {
+				center := centerOf(strokeWidth, scale, m.Add(off))
+				cont = cont && yield(Move(center))
+				cont = cont && engraveModule(yield, strokeWidth, scale, center)
 			}
 		}
-		for _, off := range q.alignMarkers {
-			for c := range q.engraveAlignMarker(off) {
-				cont = cont && yield(c)
+		for _, off := range alignMarkers {
+			for _, m := range alignmentMarker {
+				center := centerOf(strokeWidth, scale, m.Add(off))
+				cont = cont && yield(Move(center))
+				cont = cont && engraveModule(yield, strokeWidth, scale, center)
 			}
 		}
-		sw := q.strokeWidth
-		prev := q.centerOf(q.start)
-		cont = cont && yield(Move(prev))
-		moveDist := qrMoves * sw * q.scale
-		for _, m := range q.plan {
-			center := q.centerOf(m)
-			cont = cont && constantMove(yield, center, prev, moveDist)
-			prev = center
-			cont = cont && q.engraveModule(yield, center)
-			cont = cont && yield(Line(center))
+		needle := start
+		cont = cont && yield(Move(centerOf(strokeWidth, scale, needle)))
+		for i, m := range q.plan {
+			for i := range qrMovesPerModule {
+				dir := m.Get(i)
+				needle = needle.Add(dir)
+				cont = cont && yield(Move(centerOf(strokeWidth, scale, needle)))
+			}
+			// Don't engrave the end point.
+			if i < len(q.plan)-1 {
+				center := centerOf(strokeWidth, scale, needle)
+				cont = cont && engraveModule(yield, strokeWidth, scale, center)
+				cont = cont && yield(Line(center))
+			}
 		}
-		end := q.centerOf(q.end)
-		cont = cont && constantMove(yield, end, prev, moveDist)
 	}
 }
 
-func (q constantQRCmd) engraveModule(yield cmdYielder, center image.Point) bool {
-	sw := q.strokeWidth
-	switch q.scale {
+func engraveModule(yield cmdYielder, sw, scale int, center image.Point) bool {
+	switch scale {
 	case 3:
 		return yield(Line(center.Add(image.Pt(sw, 0)))) &&
 			yield(Line(center.Add(image.Pt(sw, sw)))) &&
@@ -587,11 +700,7 @@ func manhattanLen(v image.Point) int {
 	if v.Y < 0 {
 		v.Y = -v.Y
 	}
-	if v.X > v.Y {
-		return v.X
-	} else {
-		return v.Y
-	}
+	return max(v.X, v.Y)
 }
 
 type bitmap struct {
@@ -599,7 +708,7 @@ type bitmap struct {
 	bits []uint32
 }
 
-func NewBitmap(w, h int) bitmap {
+func newBitmap(w, h int) bitmap {
 	if w > 32 {
 		panic("bitset too wide")
 	}
@@ -832,36 +941,25 @@ func (c *ConstantStringer) String(txt string) Plan {
 	return cmd
 }
 
-func isConstantQR(cmd *constantQRCmd, dim int) bool {
-	pt := new(pattern)
-	for c := range cmd.engrave() {
-		pt.Command(c)
+// assertConstantQR verifies that the engraving time of cmd
+// depends only on its dimension.
+func assertConstantQR(cmd *constantQRCmd) {
+	// Verify the engraving length.
+	nmod := constantTimeQRModules(cmd.dim)
+	if len(cmd.plan) != nmod {
+		panic("constant QR engraving is not constant")
 	}
-	start, end := constantTimeStartEnd(dim)
-	start = cmd.centerOf(start)
-	end = cmd.centerOf(end)
-	// Constant start and end points.
-	if pt.start != start || pt.end != end {
-		return false
-	}
-	// Constant number of patterns: 2 per module, 1
-	// for the end
-	npatterns := 2*constantTimeQRModules(dim) + 1
-	if len(pt.pattern) != npatterns {
-		return false
-	}
-	sc := cmd.scale * cmd.strokeWidth
-	moveLen := qrMoves * sc
-	for _, p := range pt.pattern {
-		wantLen := moveLen
-		if p.line {
-			wantLen = sc * cmd.scale
-		}
-		if p.len != wantLen {
-			return false
+	// Verify the end point.
+	start, end := constantTimeStartEnd(cmd.dim)
+	needle := start
+	for _, m := range cmd.plan {
+		for j := range qrMovesPerModule {
+			needle = needle.Add(m.Get(j))
 		}
 	}
-	return true
+	if needle != end {
+		panic("constant QR engraving is not constant")
+	}
 }
 
 func (c *ConstantStringer) isConstant(cmd Plan) bool {
