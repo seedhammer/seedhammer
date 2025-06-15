@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"time"
 
+	"seedhammer.com/bresenham"
 	"seedhammer.com/engrave"
 )
 
@@ -72,7 +73,7 @@ type engraving struct {
 	phase   phase
 	pen     image.Point
 	step    step
-	line    bresenham
+	line    bresenham.Line
 	steps   int
 	engrave bool
 	// The current speed, in ticks.
@@ -243,50 +244,6 @@ func (st *engraving) Step() (step, bool) {
 		step = step.WithSteps(st.line.Step())
 	}
 	return step, true
-}
-
-// bresenham implements a line stepper with the Bresenham
-// algorithm.
-type bresenham struct {
-	// D is the minor axis error, doubled.
-	D int
-	// dmajor, dminor is the line vector.
-	dmajor, dminor int
-	// swap is 0 if the major axis is x, 1 otherwise.
-	swap uint8
-}
-
-// Reset the stepper with a signed distance. It returns the
-// directions and the number of steps.
-func (l *bresenham) Reset(dist image.Point) (uint8, uint8, int) {
-	var dirx, diry uint8
-	if dist.X < 0 {
-		dirx = 1
-		dist.X = -dist.X
-	}
-	if dist.Y < 0 {
-		diry = 1
-		dist.Y = -dist.Y
-	}
-	l.swap = 0
-	if dist.Y > dist.X {
-		l.swap = 1
-		dist.X, dist.Y = dist.Y, dist.X
-	}
-	l.dmajor, l.dminor = dist.X, dist.Y
-	l.D = 2*l.dminor - l.dmajor
-	return dirx, diry, l.dmajor
-}
-
-func (l *bresenham) Step() (uint8, uint8) {
-	var maj, min uint8 = 1, 0
-	if l.D > 0 {
-		min = 1
-	}
-	l.D -= 2 * l.dmajor * int(min)
-	l.D += 2 * l.dminor
-	return (maj &^ l.swap) | (min & l.swap),
-		(maj & l.swap) | (min &^ l.swap)
 }
 
 func (s step) WithDirs(dirx, diry uint8) step {
