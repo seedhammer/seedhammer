@@ -180,12 +180,6 @@ func (t *InputTracker) Next(c *Context, filters ...Filter) (Event, bool) {
 	return e, true
 }
 
-func (t *InputTracker) Clicked(b Button) bool {
-	c := t.clicked[b]
-	t.clicked[b] = false
-	return c
-}
-
 const longestWord = "TOMORROW"
 
 type program int
@@ -254,19 +248,19 @@ func ShowAddressesScreen(ctx *Context, ops op.Ctx, th *Colors, desc *bip380.Desc
 
 	const maxPage = len(s.addresses)
 	inp := new(InputTracker)
+	backBtn := &Clickable{Button: Button1}
 	for {
 		scrollDelta := 0
+		if backBtn.Clicked(ctx) {
+			return
+		}
 		for {
-			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Left), ButtonFilter(Right), ButtonFilter(Up), ButtonFilter(Down))
+			e, ok := inp.Next(ctx, ButtonFilter(Left), ButtonFilter(Right), ButtonFilter(Up), ButtonFilter(Down))
 			if !ok {
 				break
 			}
 			if e, ok := e.AsButton(); ok {
 				switch e.Button {
-				case Button1:
-					if inp.Clicked(e.Button) {
-						return
-					}
 				case Left:
 					if e.Pressed {
 						s.page = (s.page - 1 + maxPage) % maxPage
@@ -333,7 +327,7 @@ func ShowAddressesScreen(ctx *Context, ops op.Ctx, th *Colors, desc *bip380.Desc
 		op.Position(ops.Begin(), addresses, pos)
 		fadeClip(ops, ops.End(), image.Rectangle(body))
 
-		layoutNavigation(inp, ops, th, dims, []NavButton{{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack}}...)
+		layoutNavigation(ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack})
 		ctx.Frame()
 	}
 }
@@ -391,7 +385,6 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 		cameraErr         error
 		decoder           QRDecoder
 	)
-	inp := new(InputTracker)
 	backBtn := &Clickable{Button: Button1}
 	flipBtn := &Clickable{Button: Button2}
 	for {
@@ -478,7 +471,7 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 		}
 
 		nav := func(btn *Clickable, icn image.RGBA64Image) {
-			nav := layoutNavigation(inp, ops.Begin(), th, dims, NavButton{Clickable: btn, Style: StyleSecondary, Icon: icn})
+			nav := layoutNavigation(ops.Begin(), th, dims, NavButton{Clickable: btn, Style: StyleSecondary, Icon: icn})
 			nav = image.Rectangle(layout.Rectangle(nav).Shrink(underlay.Padding()).Shrink(-2, -4, -2, -2))
 			background(ops, ops.End(), nav, image.Point{})
 		}
@@ -572,7 +565,6 @@ type ErrorScreen struct {
 	Title string
 	Body  string
 	w     Warning
-	inp   InputTracker
 	ok    Clickable
 }
 
@@ -582,7 +574,7 @@ func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 		return true
 	}
 	s.w.Layout(ctx, ops, th, dims, s.Title, s.Body)
-	layoutNavigation(&s.inp, ops, th, dims, NavButton{Clickable: &s.ok, Style: StylePrimary, Icon: assets.IconCheckmark})
+	layoutNavigation(ops, th, dims, NavButton{Clickable: &s.ok, Style: StylePrimary, Icon: assets.IconCheckmark})
 	return false
 }
 
@@ -596,7 +588,6 @@ type ConfirmWarningScreen struct {
 	pressed    bool
 	warning    Warning
 	confirm    ConfirmDelay
-	inp        InputTracker
 }
 
 type Warning struct {
@@ -722,7 +713,7 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 		return ConfirmYes
 	}
 	s.warning.Layout(ctx, ops, th, dims, s.Title, s.Body)
-	layoutNavigation(&s.inp, ops, th, dims, []NavButton{
+	layoutNavigation(ops, th, dims, []NavButton{
 		{Clickable: cancelBtn, Style: StyleSecondary, Icon: assets.IconBack},
 		{Clickable: confirmBtn, Style: StylePrimary, Icon: s.Icon, Progress: progress},
 	}...)
@@ -1114,7 +1105,6 @@ var scrollMask = op.RegisterParameterizedImage(func(args op.ImageArguments, x, y
 
 func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic, selected int) {
 	kbd := NewKeyboard(ctx)
-	inp := new(InputTracker)
 	backBtn := &Clickable{Button: Button1}
 	okBtn := &Clickable{Button: Button2}
 	layoutWord := func(ops op.Ctx, n int, word string) image.Point {
@@ -1165,9 +1155,9 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 		top, _ := content.CutBottom(kbdsz.Y)
 		op.Position(ops, ops.End(), top.Center(longest))
 
-		layoutNavigation(inp, ops, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
+		layoutNavigation(ops, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
 		if _, complete := kbd.Complete(); complete {
-			layoutNavigation(inp, ops, th, dims, []NavButton{{Clickable: okBtn, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
+			layoutNavigation(ops, th, dims, []NavButton{{Clickable: okBtn, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
 		}
 		ctx.Frame()
 	}
@@ -1561,7 +1551,7 @@ func (s *ChoiceScreen) Choose(ctx *Context, ops op.Ctx, th *Colors) (int, bool) 
 		dims := ctx.Platform.DisplaySize()
 		s.Draw(ctx, ops, th, dims)
 
-		layoutNavigation(inp, ops, th, dims, []NavButton{
+		layoutNavigation(ops, th, dims, []NavButton{
 			{Clickable: cancelBtn, Style: StyleSecondary, Icon: assets.IconBack},
 			{Clickable: chooseBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		}...)
@@ -1674,7 +1664,7 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 		}
 		dims := ctx.Platform.DisplaySize()
 		drawMainScreen(ctx, ops, dims, page)
-		layoutNavigation(inp, ops, mainScreenTheme(page), dims,
+		layoutNavigation(ops, mainScreenTheme(page), dims,
 			NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		)
 		ctx.Frame()
@@ -1736,18 +1726,13 @@ const (
 )
 
 type NavButton struct {
-	Button    Button
 	Clickable *Clickable
 	Style     ButtonStyle
 	Icon      image.Image
 	Progress  float32
 }
 
-func navButtonTag(inp *InputTracker, b Button) op.Tag {
-	return &inp.clicked[b]
-}
-
-func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Point, btns ...NavButton) image.Rectangle {
+func layoutNavigation(ops op.Ctx, th *Colors, dims image.Point, btns ...NavButton) image.Rectangle {
 	navsz := assets.NavBtnPrimary.Bounds().Size()
 	button := func(ops op.Ctx, b NavButton, t op.Tag, pressed bool) {
 		if b.Style == StyleNone {
@@ -1792,13 +1777,9 @@ func layoutNavigation(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Poin
 	}
 	var r image.Rectangle
 	for _, b := range btns {
-		idx := int(b.Button - Button1)
-		pressed := inp.Pressed[b.Button]
 		clk := b.Clickable
-		if clk != nil {
-			idx = int(clk.Button - Button1)
-			pressed = clk.Pressed && clk.Entered
-		}
+		idx := int(clk.Button - Button1)
+		pressed := clk.Pressed && clk.Entered
 		button(ops.Begin(), b, clk, pressed)
 		y := ys[idx]
 		pos := image.Pt(dims.X-btnsz.X, y)
@@ -2149,12 +2130,12 @@ events:
 		dims := ctx.Platform.DisplaySize()
 		s.Draw(ctx, ops, th, dims, mnemonic)
 
-		layoutNavigation(inp, ops, th, dims, []NavButton{
+		layoutNavigation(ops, th, dims, []NavButton{
 			{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack},
 			{Clickable: editBtn, Style: StyleSecondary, Icon: assets.IconEdit},
 		}...)
 		if isMnemonicComplete(mnemonic) {
-			layoutNavigation(inp, ops, th, dims, []NavButton{
+			layoutNavigation(ops, th, dims, []NavButton{
 				{Clickable: confirmBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 			}...)
 		}
@@ -2335,78 +2316,65 @@ func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (int, b
 			ctx.Frame()
 		}
 	}
-	inp := new(InputTracker)
+	backBtn := &Clickable{Button: Button1}
+	infoBtn := &Clickable{Button: Button2}
+	confirmBtn := &Clickable{Button: Button3}
 	for {
-		for {
-			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button2), ButtonFilter(Button3))
+		if backBtn.Clicked(ctx) {
+			return 0, false
+		}
+		for infoBtn.Clicked(ctx) {
+			ShowAddressesScreen(ctx, ops, th, s.Descriptor)
+		}
+		for confirmBtn.Clicked(ctx) {
+			if err := validateDescriptor(ctx.Platform.EngraverParams(), s.Descriptor); err != nil {
+				showErr(NewErrorScreen(err))
+				continue
+			}
+			keyIdx, ok := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
 			if !ok {
-				break
-			}
-			if e, ok := e.AsButton(); ok {
-				switch e.Button {
-				case Button1:
-					if inp.Clicked(e.Button) {
-						return 0, false
+				// Passphrase protected seeds don't match the descriptor, so
+				// allow the user to ignore the mismatch. Don't allow this for
+				// multisig descriptors where we can't know which key the seed
+				// belongs to.
+				if len(s.Descriptor.Keys) == 1 {
+					confirm := &ConfirmWarningScreen{
+						Title: strings.ToTitle("Unknown Wallet"),
+						Body:  "The wallet does not match the seed.\n\nIf it is passphrase protected, long press to confirm.",
+						Icon:  assets.IconCheckmark,
 					}
-				case Button2:
-					if !inp.Clicked(e.Button) {
-						break
-					}
-					ShowAddressesScreen(ctx, ops, th, s.Descriptor)
-				case Button3:
-					if !inp.Clicked(e.Button) {
-						break
-					}
-					if err := validateDescriptor(ctx.Platform.EngraverParams(), s.Descriptor); err != nil {
-						showErr(NewErrorScreen(err))
-						continue
-					}
-					keyIdx, ok := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
-					if !ok {
-						// Passphrase protected seeds don't match the descriptor, so
-						// allow the user to ignore the mismatch. Don't allow this for
-						// multisig descriptors where we can't know which key the seed
-						// belongs to.
-						if len(s.Descriptor.Keys) == 1 {
-							confirm := &ConfirmWarningScreen{
-								Title: strings.ToTitle("Unknown Wallet"),
-								Body:  "The wallet does not match the seed.\n\nIf it is passphrase protected, long press to confirm.",
-								Icon:  assets.IconCheckmark,
-							}
-						loop:
-							for {
-								dims := ctx.Platform.DisplaySize()
-								res := confirm.Layout(ctx, ops.Begin(), th, dims)
-								d := ops.End()
-								switch res {
-								case ConfirmYes:
-									return 0, true
-								case ConfirmNo:
-									break loop
-								}
-								s.Draw(ctx, ops, th, dims)
-								d.Add(ops)
-								ctx.Frame()
-							}
-						} else {
-							showErr(&ErrorScreen{
-								Title: "Unknown Wallet",
-								Body:  "The wallet does not match the seed or is passphrase protected.",
-							})
+				loop:
+					for {
+						dims := ctx.Platform.DisplaySize()
+						res := confirm.Layout(ctx, ops.Begin(), th, dims)
+						d := ops.End()
+						switch res {
+						case ConfirmYes:
+							return 0, true
+						case ConfirmNo:
+							break loop
 						}
-						continue
+						s.Draw(ctx, ops, th, dims)
+						d.Add(ops)
+						ctx.Frame()
 					}
-					return keyIdx, true
+				} else {
+					showErr(&ErrorScreen{
+						Title: "Unknown Wallet",
+						Body:  "The wallet does not match the seed or is passphrase protected.",
+					})
 				}
+				continue
 			}
+			return keyIdx, true
 		}
 
 		dims := ctx.Platform.DisplaySize()
 		s.Draw(ctx, ops, th, dims)
-		layoutNavigation(inp, ops, th, dims, []NavButton{
-			{Button: Button1, Style: StyleSecondary, Icon: assets.IconBack},
-			{Button: Button2, Style: StyleSecondary, Icon: assets.IconInfo},
-			{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark},
+		layoutNavigation(ops, th, dims, []NavButton{
+			{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack},
+			{Clickable: infoBtn, Style: StyleSecondary, Icon: assets.IconInfo},
+			{Clickable: confirmBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		}...)
 		ctx.Frame()
 	}
@@ -2707,7 +2675,7 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 						}
 						dims := ctx.Platform.DisplaySize()
 						s.draw(ctx, ops, th, dims)
-						s.drawNav(inp, ops, th, dims, p, backBtn, selectBtn)
+						s.drawNav(ops, th, dims, p, backBtn, selectBtn)
 						ctx.Frame()
 					}
 				case EngraveInstruction:
@@ -2741,7 +2709,7 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 
 		dims := ctx.Platform.DisplaySize()
 		s.draw(ctx, ops, th, dims)
-		s.drawNav(inp, ops, th, dims, 0, backBtn, selectBtn)
+		s.drawNav(ops, th, dims, 0, backBtn, selectBtn)
 
 		ctx.Frame()
 	}
@@ -2797,19 +2765,19 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 	}
 }
 
-func (s *EngraveScreen) drawNav(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Point, progress float32, backBtn, selectBtn *Clickable) {
+func (s *EngraveScreen) drawNav(ops op.Ctx, th *Colors, dims image.Point, progress float32, backBtn, selectBtn *Clickable) {
 	icnBack := assets.IconBack
 	if s.canPrev() {
 		icnBack = assets.IconLeft
 	}
-	layoutNavigation(inp, ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: icnBack})
+	layoutNavigation(ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: icnBack})
 	ins := s.instructions[s.step]
 	switch ins.Type {
 	case EngraveInstruction:
 	case ConnectInstruction:
-		layoutNavigation(inp, ops, th, dims, NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconHammer, Progress: progress})
+		layoutNavigation(ops, th, dims, NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconHammer, Progress: progress})
 	default:
-		layoutNavigation(inp, ops, th, dims, NavButton{
+		layoutNavigation(ops, th, dims, NavButton{
 			Clickable: selectBtn,
 			Style:     StylePrimary,
 			Icon:      assets.IconRight,
