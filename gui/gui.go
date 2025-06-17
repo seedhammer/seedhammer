@@ -392,24 +392,15 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 		decoder           QRDecoder
 	)
 	inp := new(InputTracker)
+	backBtn := &Clickable{Button: Button1}
+	flipBtn := &Clickable{Button: Button2}
 	for {
 		const cameraFrameScale = 3
-		for {
-			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button2))
-			if !ok {
-				break
-			}
-			if e, ok := e.AsButton(); ok {
-				if !inp.Clicked(e.Button) {
-					continue
-				}
-				switch e.Button {
-				case Button1:
-					return nil, false
-				case Button2:
-					ctx.RotateCamera = !ctx.RotateCamera
-				}
-			}
+		if backBtn.Clicked(ctx) {
+			return nil, false
+		}
+		for flipBtn.Clicked(ctx) {
+			ctx.RotateCamera = !ctx.RotateCamera
 		}
 
 		dims := ctx.Platform.DisplaySize()
@@ -486,13 +477,13 @@ func (s *ScanScreen) Scan(ctx *Context, ops op.Ctx) (any, bool) {
 			background(ops, ops.End(), image.Rectangle{Min: pos, Max: pos.Add(sz)}, pos)
 		}
 
-		nav := func(btn Button, icn image.RGBA64Image) {
-			nav := layoutNavigation(inp, ops.Begin(), th, dims, []NavButton{{Button: btn, Style: StyleSecondary, Icon: icn}}...)
+		nav := func(btn *Clickable, icn image.RGBA64Image) {
+			nav := layoutNavigation(inp, ops.Begin(), th, dims, NavButton{Clickable: btn, Style: StyleSecondary, Icon: icn})
 			nav = image.Rectangle(layout.Rectangle(nav).Shrink(underlay.Padding()).Shrink(-2, -4, -2, -2))
 			background(ops, ops.End(), nav, image.Point{})
 		}
-		nav(Button1, assets.IconBack)
-		nav(Button2, assets.IconFlip)
+		nav(backBtn, assets.IconBack)
+		nav(flipBtn, assets.IconFlip)
 		ctx.Frame()
 	}
 }
