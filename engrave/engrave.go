@@ -17,9 +17,7 @@ import (
 	"slices"
 
 	"github.com/kortschak/qr"
-	"github.com/srwiley/rasterx"
-	"golang.org/x/image/math/f32"
-	"golang.org/x/image/math/fixed"
+	"seedhammer.com/bresenham"
 	"seedhammer.com/font/vector"
 )
 
@@ -1075,52 +1073,26 @@ func (s *StringCmd) engrave(yield func(Command) bool) image.Point {
 	return image.Pt(pos.X, height)
 }
 
-type Rasterizer struct {
-	p       f32.Vec2
-	started bool
-	dasher  *rasterx.Dasher
-	img     image.Image
-	scale   float32
-}
-
-func (r *Rasterizer) Command(cmd Command) {
-	pf := f32.Vec2{
-		float32(cmd.Coord.X)*r.scale - float32(r.img.Bounds().Min.X),
-		float32(cmd.Coord.Y)*r.scale - float32(r.img.Bounds().Min.Y),
-	}
-	if cmd.Line {
-		if !r.started {
-			r.dasher.Start(rasterx.ToFixedP(float64(r.p[0]), float64(r.p[1])))
-			r.started = true
+func Rasterize(img draw.Image, p Plan) {
+	var pen image.Point
+	for c := range p {
+		var l bresenham.Line
+		v := c.Coord.Sub(pen)
+		xd, yd, steps := l.Reset(v)
+		xdir := int(xd)*2 - 1
+		ydir := int(yd)*2 - 1
+		if c.Line {
+			img.Set(pen.X, pen.Y, color.Black)
 		}
-		r.dasher.Line(rasterx.ToFixedP(float64(pf[0]), float64(pf[1])))
-	} else {
-		if r.started {
-			r.dasher.Stop(false)
-			r.started = false
+		for range steps {
+			dx, dy := l.Step()
+			pen.X -= int(dx) * xdir
+			pen.Y -= int(dy) * ydir
+			if c.Line {
+				img.Set(pen.X, pen.Y, color.Black)
+			}
 		}
-		r.p = pf
 	}
-}
-
-func NewRasterizer(img draw.Image, dr image.Rectangle, scale float32, strokeWidth int) *Rasterizer {
-	width, height := dr.Dx(), dr.Dy()
-	scanner := rasterx.NewScannerGV(width, height, img, img.Bounds())
-	r := &Rasterizer{
-		dasher: rasterx.NewDasher(width, height, scanner),
-		img:    img,
-		scale:  scale,
-	}
-	r.dasher.SetStroke(fixed.I(strokeWidth), 0, rasterx.RoundCap, rasterx.RoundCap, rasterx.RoundGap, rasterx.ArcClip, nil, 0)
-	r.dasher.SetColor(color.Black)
-	return r
-}
-
-func (r *Rasterizer) Rasterize() {
-	if r.started {
-		r.dasher.Stop(false)
-	}
-	r.dasher.Draw()
 }
 
 type measureProgram struct {

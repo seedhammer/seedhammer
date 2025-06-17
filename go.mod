@@ -9,7 +9,6 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/fxamacker/cbor/v2 v2.4.0
 	github.com/kortschak/qr v0.3.0
-	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07
 	golang.org/x/crypto v0.7.0
 	golang.org/x/image v0.6.0

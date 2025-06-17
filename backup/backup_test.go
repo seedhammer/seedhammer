@@ -160,21 +160,15 @@ func TestEngrave(t *testing.T) {
 			name := fmt.Sprintf("plate-%d-side-%d-%d-of-%d-words-%d.png", i, test.side, desc.Threshold, len(desc.Keys), test.seedLen)
 			golden := filepath.Join("testdata", name)
 			got := image.NewAlpha(bounds)
-			r := engrave.NewRasterizer(got, bounds, float32(ppmm)/float32(params.Millimeter), params.StrokeWidth*ppmm/params.Millimeter)
-			se := side
-			for c := range se {
-				r.Command(c)
-			}
-			r.Rasterize()
-			// Binarize to minimize golden image sizes.
-			for i, p := range got.Pix {
-				if p < 128 {
-					p = 0
-				} else {
-					p = 255
+			scaled := func(yield func(engrave.Command) bool) {
+				for c := range side {
+					c.Coord = c.Coord.Mul(ppmm).Div(params.Millimeter)
+					if !yield(c) {
+						return
+					}
 				}
-				got.Pix[i] = p
 			}
+			engrave.Rasterize(got, scaled)
 			if *update {
 				var buf bytes.Buffer
 				if err := png.Encode(&buf, got); err != nil {
@@ -193,6 +187,7 @@ func TestEngrave(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			f.Close()
 			if w, g := want.Bounds().Size(), got.Bounds().Size(); w != g {
 				t.Fatalf("golden image bounds mismatch: got %v, want %v", g, w)
 			}
@@ -213,8 +208,7 @@ func TestEngrave(t *testing.T) {
 					}
 				}
 			}
-			const maxErrors = 65
-			if mismatches > maxErrors {
+			if mismatches > 0 {
 				t.Errorf("%d/%d pixels golden image mismatches", mismatches, pixels)
 			}
 		})
