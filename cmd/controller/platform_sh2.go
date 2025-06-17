@@ -498,6 +498,10 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 	return nil
 }
 
+func (p *Platform) Features() gui.Features {
+	return 0
+}
+
 func (p *Platform) NFCDevice() gui.NFCDevice {
 	return p.nfc
 }

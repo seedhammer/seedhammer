@@ -157,6 +157,10 @@ func (p *Platform) PlateSizes() []backup.PlateSize {
 	return []backup.PlateSize{backup.SquarePlate, backup.LargePlate}
 }
 
+func (p *Platform) Features() gui.Features {
+	return gui.FeatureExternalEngraver
+}
+
 func (p *Platform) EngraverParams() engrave.Params {
 	return mjolnir.Params
 }

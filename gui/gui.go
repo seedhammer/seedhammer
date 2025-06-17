@@ -582,25 +582,16 @@ type ErrorScreen struct {
 	Body  string
 	w     Warning
 	inp   InputTracker
+	ok    Clickable
 }
 
 func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) bool {
-	for {
-		e, ok := s.inp.Next(ctx, ButtonFilter(Button3))
-		if !ok {
-			break
-		}
-		if e, ok := e.AsButton(); ok {
-			switch e.Button {
-			case Button3:
-				if s.inp.Clicked(e.Button) {
-					return true
-				}
-			}
-		}
+	s.ok.Button = Button3
+	if s.ok.Clicked(ctx) {
+		return true
 	}
 	s.w.Layout(ctx, ops, th, dims, s.Title, s.Body)
-	layoutNavigation(&s.inp, ops, th, dims, []NavButton{{Button: Button3, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
+	layoutNavigation(&s.inp, ops, th, dims, NavButton{Clickable: &s.ok, Style: StylePrimary, Icon: assets.IconCheckmark})
 	return false
 }
 
@@ -1042,6 +1033,40 @@ var (
 		},
 		{
 			Body: "Tighten the nuts firmly.",
+		},
+		{
+			Body: "Hold button to start the engraving process. The process is loud, use hearing protection.",
+			Type: ConnectInstruction,
+		},
+		{
+			Lead: "Engraving plate",
+			Type: EngraveInstruction,
+			Side: 1,
+		},
+	}
+
+	EngraveSideASimple = []Instruction{
+		{
+			Body: "Make sure the fingerprint above represents the intended share.",
+		},
+		{
+			Body: "Place a {{.Name}} on the machine.",
+		},
+		{
+			Body: "Hold button to start the engraving process. The process is loud, use hearing protection.",
+			Type: ConnectInstruction,
+			Lead: "seedhammer.com/tip#8",
+		},
+		{
+			Lead: "Engraving plate",
+			Type: EngraveInstruction,
+			Side: 0,
+		},
+	}
+
+	EngraveSideBSimple = []Instruction{
+		{
+			Body: "Flip the top metal plate horizontally.",
 		},
 		{
 			Body: "Hold button to start the engraving process. The process is loud, use hearing protection.",
@@ -1615,57 +1640,16 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 	var page program
 	inp := new(InputTracker)
 	selectBtn := &Clickable{Button: Button3, AltButton: Center}
-	var quit chan struct{}
 	for {
 		for selectBtn.Clicked(ctx) {
-			if quit != nil {
-				log.Println("quitting engraving")
-				close(quit)
-				quit = nil
-				continue
-			}
 			mainSelectedFlow(ctx, ops, page)
 			continue
 		}
 		if scan, ok := ctx.Scan(); ok {
 			switch scan := scan.(type) {
 			case bip39.Mnemonic:
-				if quit != nil {
-					break
-				}
-				quit = make(chan struct{})
-				go func() {
-					err := func() error {
-						mfp, err := masterFingerprintFor(scan, &chaincfg.MainNetParams)
-						if err != nil {
-							return err
-						}
-						params := ctx.Platform.EngraverParams()
-						const sz = backup.SquarePlate
-						keySide, err := backup.EngraveSeed(params, backup.Seed{
-							KeyIdx:            0,
-							Mnemonic:          scan,
-							Keys:              1,
-							MasterFingerprint: mfp,
-							Font:              constant.Font,
-							Size:              sz,
-						})
-						if err != nil {
-							return err
-						}
-						e, err := ctx.Platform.Engraver()
-						if err != nil {
-							return err
-						}
-						defer e.Close()
-						log.Println("opened engraver, engraving...")
-						defer log.Println("done engraving...")
-						return e.Engrave(sz, keySide, quit)
-					}()
-					if err != nil {
-						log.Printf("engrave error: %v", err)
-					}
-				}()
+				backupWalletFlow(ctx, ops, &descriptorTheme, scan)
+				continue
 			}
 		}
 		for {
@@ -1918,15 +1902,15 @@ loop:
 	}
 	switch page {
 	case backupWallet:
-		backupWalletFlow(ctx, ops, th)
+		mnemonic, ok := newMnemonicFlow(ctx, ops, th)
+		if !ok {
+			break
+		}
+		backupWalletFlow(ctx, ops, th, mnemonic)
 	}
 }
 
-func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors) {
-	mnemonic, ok := newMnemonicFlow(ctx, ops, th)
-	if !ok {
-		return
-	}
+func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic []bip39.Word) {
 	ss := new(SeedScreen)
 	for {
 		if !ss.Confirm(ctx, ops, th, mnemonic) {
@@ -2066,6 +2050,7 @@ outer:
 
 type SeedScreen struct {
 	selected int
+	words    []Clickable
 }
 
 func (s *SeedScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) bool {
@@ -2075,6 +2060,12 @@ func (s *SeedScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip3
 	confirmBtn := &Clickable{Button: Button3}
 events:
 	for {
+		for i := range s.words {
+			c := &s.words[i]
+			if c.Clicked(ctx) {
+				s.selected = i
+			}
+		}
 		for backBtn.Clicked(ctx) {
 			if isEmptyMnemonic(mnemonic) {
 				return false
@@ -2190,6 +2181,9 @@ func isMnemonicComplete(m bip39.Mnemonic) bool {
 }
 
 func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, mnemonic bip39.Mnemonic) {
+	if len(s.words) != len(mnemonic) {
+		s.words = make([]Clickable, len(mnemonic))
+	}
 	op.ColorOp(ops, th.Background)
 	layoutTitle(ctx, ops, dims.X, th.Text, "Confirm Seed")
 
@@ -2219,30 +2213,45 @@ func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point
 	if scroll < 0 {
 		scroll = 0
 	}
+	largeScreen := dims.X >= 480
+	if largeScreen {
+		scroll = 0
+	}
 	off := content.Min.Add(image.Pt(0, -scroll*lineHeight))
 	{
 		ops := ops.Begin()
 		for i, w := range mnemonic {
 			ops.Begin()
 			col := th.Text
+			r := image.Rectangle{Max: longest}
 			if i == s.selected {
 				col = th.Background
-				r := image.Rectangle{Max: longest}
 				r.Min.Y -= 3
 				assets.ButtonFocused.Add(ops, r, true)
 				op.ColorOp(ops, th.Text)
 			}
 			word := strings.ToUpper(bip39.LabelFor(w))
 			layoutWord(ops, col, i+1, word)
+			op.ClipOp(r).Add(ops)
+			op.InputOp(ops, &s.words[i])
 			pos := image.Pt(0, y).Add(off)
 			op.Position(ops, ops.End(), pos)
 			y += lineHeight
+			// TODO: hack to show words on two columns in
+			// touch mode.
+			if largeScreen && i == 11 {
+				y = 0
+				off.X += longest.X + 16
+			}
 		}
 	}
 	fadeClip(ops, ops.End(), image.Rectangle(list))
 }
 
 func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) (*bip380.Descriptor, bool) {
+	// TODO: hack.
+	return nil, true
+
 	cs := &ChoiceScreen{
 		Title:   "Descriptor",
 		Lead:    "Choose input method",
@@ -2457,13 +2466,21 @@ func (s *DescriptorScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image
 
 func NewEngraveScreen(ctx *Context, plate Plate) *EngraveScreen {
 	var ins []Instruction
-	if !ctx.Calibrated {
+	ext := ctx.Platform.Features().Has(FeatureExternalEngraver)
+	switch {
+	case ext && !ctx.Calibrated:
 		ins = append(ins, EngraveFirstSideA...)
-	} else {
+	case ext && ctx.Calibrated:
 		ins = append(ins, EngraveSideA...)
+	default:
+		ins = append(ins, EngraveSideASimple...)
 	}
 	if len(plate.Sides) > 1 {
-		ins = append(ins, EngraveSideB...)
+		if ext {
+			ins = append(ins, EngraveSideB...)
+		} else {
+			ins = append(ins, EngraveSideBSimple...)
+		}
 	}
 	ins = append(ins, EngraveSuccess...)
 	s := &EngraveScreen{
@@ -2604,6 +2621,8 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 		s.engrave = engraveState{}
 	}()
 	inp := new(InputTracker)
+	backBtn := &Clickable{Button: Button1}
+	selectBtn := &Clickable{Button: Button3, AltButton: Center}
 	for {
 	loop:
 		for {
@@ -2642,40 +2661,81 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 					s.dryRun.enabled = !s.dryRun.enabled
 				}
 			}
-			e, ok := inp.Next(ctx, ButtonFilter(Button1), ButtonFilter(Button2), ButtonFilter(Button3))
+			for backBtn.Clicked(ctx) {
+				if s.canPrev() {
+					s.step--
+				} else {
+					confirm := &ConfirmWarningScreen{
+						Title: strings.ToTitle("Cancel?"),
+						Body:  "This will cancel the engraving process.\n\nHold button to confirm.",
+						Icon:  assets.IconDiscard,
+					}
+				loop2:
+					for {
+						dims := ctx.Platform.DisplaySize()
+						res := confirm.Layout(ctx, ops.Begin(), th, dims)
+						d := ops.End()
+						switch res {
+						case ConfirmNo:
+							break loop2
+						case ConfirmYes:
+							return false
+						}
+						s.draw(ctx, ops, th, dims)
+						d.Add(ops)
+						ctx.Frame()
+					}
+				}
+				continue
+			}
+			for {
+				e, ok := selectBtn.Next(ctx)
+				if !ok {
+					break
+				}
+				switch ins.Type {
+				case ConnectInstruction:
+					if !selectBtn.Pressed {
+						continue
+					}
+					confirm := new(ConfirmDelay)
+					confirm.Start(ctx, confirmDelay)
+					for {
+						p := confirm.Progress(ctx)
+						if p == 1. {
+							break
+						}
+						for {
+							_, ok := selectBtn.Next(ctx)
+							if !ok {
+								break
+							}
+							if !selectBtn.Pressed {
+								continue outer
+							}
+						}
+						dims := ctx.Platform.DisplaySize()
+						s.draw(ctx, ops, th, dims)
+						s.drawNav(inp, ops, th, dims, p, backBtn, selectBtn)
+						ctx.Frame()
+					}
+				case EngraveInstruction:
+					continue
+				default:
+					if !e.Clicked {
+						continue
+					}
+				}
+				if s.moveStep(ctx, ops, th) {
+					return true
+				}
+			}
+			e, ok := inp.Next(ctx, ButtonFilter(Button2))
 			if !ok {
 				break
 			}
 			if e, ok := e.AsButton(); ok {
 				switch e.Button {
-				case Button1:
-					if !inp.Clicked(e.Button) {
-						break
-					}
-					if s.canPrev() {
-						s.step--
-					} else {
-						confirm := &ConfirmWarningScreen{
-							Title: strings.ToTitle("Cancel?"),
-							Body:  "This will cancel the engraving process.\n\nHold button to confirm.",
-							Icon:  assets.IconDiscard,
-						}
-					loop2:
-						for {
-							dims := ctx.Platform.DisplaySize()
-							res := confirm.Layout(ctx, ops.Begin(), th, dims)
-							d := ops.End()
-							switch res {
-							case ConfirmNo:
-								break loop2
-							case ConfirmYes:
-								return false
-							}
-							s.draw(ctx, ops, th, dims)
-							d.Add(ops)
-							ctx.Frame()
-						}
-					}
 				case Button2:
 					if e.Pressed {
 						t := ctx.Platform.Now().Add(confirmDelay)
@@ -2684,53 +2744,13 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 					} else {
 						s.dryRun.timeout = time.Time{}
 					}
-				case Button3:
-					switch ins.Type {
-					case ConnectInstruction:
-						if !e.Pressed {
-							continue
-						}
-						confirm := new(ConfirmDelay)
-						confirm.Start(ctx, confirmDelay)
-						inp.Pressed[e.Button] = false
-						for {
-							p := confirm.Progress(ctx)
-							if p == 1. {
-								break
-							}
-							for {
-								e, ok := inp.Next(ctx, ButtonFilter(Button3))
-								if !ok {
-									break
-								}
-								if e, ok := e.AsButton(); ok {
-									if e.Button == Button3 && !e.Pressed {
-										continue outer
-									}
-								}
-							}
-							dims := ctx.Platform.DisplaySize()
-							s.draw(ctx, ops, th, dims)
-							s.drawNav(inp, ops, th, dims, p)
-							ctx.Frame()
-						}
-					case EngraveInstruction:
-						continue
-					default:
-						if !inp.Clicked(e.Button) {
-							continue
-						}
-					}
-					if s.moveStep(ctx, ops, th) {
-						return true
-					}
 				}
 			}
 		}
 
 		dims := ctx.Platform.DisplaySize()
 		s.draw(ctx, ops, th, dims)
-		s.drawNav(inp, ops, th, dims, 0)
+		s.drawNav(inp, ops, th, dims, 0, backBtn, selectBtn)
 
 		ctx.Frame()
 	}
@@ -2786,24 +2806,24 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 	}
 }
 
-func (s *EngraveScreen) drawNav(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Point, progress float32) {
+func (s *EngraveScreen) drawNav(inp *InputTracker, ops op.Ctx, th *Colors, dims image.Point, progress float32, backBtn, selectBtn *Clickable) {
 	icnBack := assets.IconBack
 	if s.canPrev() {
 		icnBack = assets.IconLeft
 	}
-	layoutNavigation(inp, ops, th, dims, []NavButton{{Button: Button1, Style: StyleSecondary, Icon: icnBack}}...)
+	layoutNavigation(inp, ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: icnBack})
 	ins := s.instructions[s.step]
 	switch ins.Type {
 	case EngraveInstruction:
 	case ConnectInstruction:
-		layoutNavigation(inp, ops, th, dims, []NavButton{{Button: Button3, Style: StylePrimary, Icon: assets.IconHammer, Progress: progress}}...)
+		layoutNavigation(inp, ops, th, dims, NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconHammer, Progress: progress})
 	default:
-		layoutNavigation(inp, ops, th, dims, []NavButton{{
-			Button:   Button3,
-			Style:    StylePrimary,
-			Icon:     assets.IconRight,
-			Progress: progress,
-		}}...)
+		layoutNavigation(inp, ops, th, dims, NavButton{
+			Clickable: selectBtn,
+			Style:     StylePrimary,
+			Icon:      assets.IconRight,
+			Progress:  progress,
+		})
 	}
 }
 
@@ -2824,6 +2844,17 @@ type Platform interface {
 	NextChunk() (draw.RGBA64Image, bool)
 	ScanQR(qr *image.Gray) ([][]byte, error)
 	Debug() bool
+	Features() Features
+}
+
+type Features int
+
+const (
+	FeatureExternalEngraver Features = 1 << iota
+)
+
+func (f Features) Has(feat Features) bool {
+	return f&feat != 0
 }
 
 type Engraver interface {
