@@ -23,19 +23,14 @@ func generate() error {
 	fmt.Fprintf(buf, "var index = [...]uint16{")
 	idx := 0
 	longest := 0
-	shortest := 10000
 	for _, w := range wordlist {
 		fmt.Fprintf(buf, "%d,", idx)
-		if len(w) < shortest {
-			shortest = len(w)
-		}
 		if len(w) > longest {
 			longest = len(w)
 		}
 		idx += len(w)
 	}
 	fmt.Fprintf(buf, "}\n")
-	fmt.Fprintf(buf, "const ShortestWord = %d\n", shortest)
 	fmt.Fprintf(buf, "const LongestWord = %d\n\n", longest)
 	fmt.Fprintf(buf, "const words = \"")
 	for _, w := range wordlist {
