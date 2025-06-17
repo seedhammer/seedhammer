@@ -158,7 +158,7 @@ func (p *Platform) PlateSizes() []backup.PlateSize {
 }
 
 func (p *Platform) Features() gui.Features {
-	return gui.FeatureExternalEngraver
+	return gui.FeatureExternalEngraver | gui.FeatureSDCard
 }
 
 func (p *Platform) EngraverParams() engrave.Params {

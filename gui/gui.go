@@ -1885,7 +1885,7 @@ func mainSelectedFlow(ctx *Context, ops op.Ctx, page program) {
 	}
 	th := mainScreenTheme(page)
 loop:
-	for !ctx.EmptySDSlot {
+	for ctx.Platform.Features().Has(FeatureSDCard) && !ctx.EmptySDSlot {
 		dims := ctx.Platform.DisplaySize()
 		res := ws.Layout(ctx, ops.Begin(), th, dims)
 		dialog := ops.End()
@@ -2851,6 +2851,7 @@ type Features int
 
 const (
 	FeatureExternalEngraver Features = 1 << iota
+	FeatureSDCard
 )
 
 func (f Features) Has(feat Features) bool {
