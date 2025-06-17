@@ -172,7 +172,7 @@ func Init() (*Platform, error) {
 		return nil, err
 	}
 	// Home and move needle to eject position.
-	go e.engrave(engrave.Commands(), nil)
+	go e.engrave(nil, nil)
 
 	p := &Platform{
 		wakeups:  make(chan struct{}, 1),
@@ -475,18 +475,22 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 	// Wait for standstill tuning of the drivers.
 	time.Sleep(tmc2209.StandstillTuningPeriod)
 
-	ejectPos := image.Point{}
-	plan = engrave.Commands(
-		plan,
-		// Return to "eject" position.
-		engrave.Plan(slices.Values([]engrave.Command{engrave.Move(ejectPos)})),
-	)
-	plan = engrave.Offset(originX, originY, plan)
-	// Perform a linear interpolation of the voltage into the range of needle
-	// activation durations.
-	act := (needleActivationMinVoltage*time.Duration(maxVoltage-voltage) +
-		needleActivationMaxVoltage*time.Duration(voltage-minVoltage)) / (maxVoltage - minVoltage)
-	if err := e.Dev.Engrave(act, plan, quit); err != nil {
+	if plan != nil {
+		plan = engrave.Offset(originX, originY, plan)
+		// Perform a linear interpolation of the voltage into the range of needle
+		// activation durations.
+		act := (needleActivationMinVoltage*time.Duration(maxVoltage-voltage) +
+			needleActivationMaxVoltage*time.Duration(voltage-minVoltage)) / (maxVoltage - minVoltage)
+		if err := e.execute(act, plan, quit); err != nil {
+			return err
+		}
+	}
+	moveToOrigin := engrave.Plan(slices.Values([]engrave.Command{engrave.Move(image.Pt(originX, originY))}))
+	return e.execute(0, moveToOrigin, nil)
+}
+
+func (e *engraver) execute(needleActivation time.Duration, plan engrave.Plan, quit <-chan struct{}) error {
+	if err := e.Dev.Engrave(needleActivation, plan, quit); err != nil {
 		if err := e.XAxis.Error(); err != nil {
 			return fmt.Errorf("X axis: %w", err)
 		}
