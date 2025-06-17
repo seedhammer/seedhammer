@@ -1970,9 +1970,13 @@ func newMnemonicFlow(ctx *Context, ops op.Ctx, th *Colors) (bip39.Mnemonic, bool
 	}
 outer:
 	for {
-		choice, ok := cs.Choose(ctx, ops, th)
-		if !ok {
-			return nil, false
+		var choice int
+		if ctx.Platform.Features().Has(FeatureCamera) {
+			c, ok := cs.Choose(ctx, ops, th)
+			if !ok {
+				return nil, false
+			}
+			choice = c
 		}
 		switch choice {
 		case 0: // Keyboard.
@@ -1984,6 +1988,9 @@ outer:
 			for {
 				choice, ok := cs.Choose(ctx, ops, th)
 				if !ok {
+					if !ctx.Platform.Features().Has(FeatureCamera) {
+						return nil, false
+					}
 					continue outer
 				}
 				mnemonic := emptyMnemonic([]int{12, 24}[choice])
@@ -2221,8 +2228,10 @@ func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point
 }
 
 func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) (*bip380.Descriptor, bool) {
-	// TODO: hack.
-	return nil, true
+	if !ctx.Platform.Features().Has(FeatureCamera) {
+		// Skip.
+		return nil, true
+	}
 
 	cs := &ChoiceScreen{
 		Title:   "Descriptor",
@@ -2811,6 +2820,7 @@ type Features int
 const (
 	FeatureExternalEngraver Features = 1 << iota
 	FeatureSDCard
+	FeatureCamera
 )
 
 func (f Features) Has(feat Features) bool {
