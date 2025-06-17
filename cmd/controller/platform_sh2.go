@@ -73,7 +73,7 @@ const (
 	LCD_DB0 = machine.GPIO18
 
 	DRV_ENABLE = machine.GPIO10
-	enableDrv  = true
+	enableDrv  = false
 
 	STEPPER_UART = machine.GPIO9
 	X_ADDR       = 0b00
@@ -114,7 +114,7 @@ const (
 	needleActivationMinVoltage = 5 * time.Millisecond
 	needleActivationMaxVoltage = 3 * time.Millisecond
 	// needleCurrentLimit in millisamperes (mA).
-	needleCurrentLimit = 15_000
+	needleCurrentLimit = 5_000
 	// needleSenseScale is the current limit
 	// in milliamperes (mA) that corresponds to a
 	// 100% PWM duty cycle output to NEEDLE_VREF.
