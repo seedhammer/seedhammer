@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"seedhammer.com/bip39"
-	"seedhammer.com/driver/ap33772s"
 	"seedhammer.com/driver/st25r3916"
 	"seedhammer.com/nfc/iso14443a"
 	"seedhammer.com/nfc/iso15693"
@@ -27,31 +26,15 @@ func main() {
 
 func run() error {
 	const (
-		DATA_SDA  = machine.GPIO28
-		DATA_SCL  = machine.GPIO29
-		DATA_INT  = machine.GPIO26
-		USBPD_INT = machine.GPIO27
+		DATA_SDA = machine.GPIO28
+		DATA_SCL = machine.GPIO29
+		DATA_INT = machine.GPIO26
 	)
 	dataI2C := machine.I2C0
 	if err := dataI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: DATA_SDA, SCL: DATA_SCL}); err != nil {
 		return fmt.Errorf("data I2C: %w", err)
 	}
 
-	go func() {
-		for {
-			before := time.Now()
-			for time.Since(before) < 100*time.Millisecond {
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
-	usbpd := ap33772s.New(dataI2C, USBPD_INT)
-	if err := usbpd.Configure(); err != nil {
-		return err
-	}
-	// if err := usbpd.AdjustVoltage(9*1000, 20*1000); err != nil {
-	// 	return err
-	// }
 	log.Println("**** here we go! **** ")
 	// time.Sleep(500 * time.Millisecond)
 	defer log.Println("**** all done! **** ")
@@ -63,8 +46,12 @@ func run() error {
 	if err := nfc.Configure(); err != nil {
 		return err
 	}
-	// nfc.SetCRC(true, true)
-	// return nfc.Listen()
+	// for {
+	// 	if err := nfc.Listen(); err != nil {
+	// 		log.Println("nfc.Listen:", err)
+	// 	}
+	// 	time.Sleep(500 * time.Millisecond)
+	// }
 	var lastPoll time.Time
 	const pollFrequency = 500 * time.Millisecond
 	trans := iso15693.NewTransceiver(nfc, st25r3916.FIFOSize)
