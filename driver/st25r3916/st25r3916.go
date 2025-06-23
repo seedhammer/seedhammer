@@ -281,7 +281,7 @@ func (d *Device) RadioOn(prot Protocol) error {
 		if err := d.configureProtocol(prot); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
-		if err := d.writeReg(regOpCtrl, 0b1<<en|0b01<<en_fd_c); err != nil {
+		if err := d.writeReg(regOpCtrl, 0b1<<en|0b11<<en_fd_c); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
 		intrs, err := d.commandAndWait(cmdInitialFieldOn,
@@ -293,7 +293,7 @@ func (d *Device) RadioOn(prot Protocol) error {
 			return fmt.Errorf("st25r3916: radio: field conflict")
 		}
 		// Enable receiver.
-		if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<rx_en|0b1<<tx_en|0b01<<en_fd_c); err != nil {
+		if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<rx_en|0b1<<tx_en|0b11<<en_fd_c); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
 	}
