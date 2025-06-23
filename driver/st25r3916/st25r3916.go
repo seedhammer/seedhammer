@@ -322,7 +322,7 @@ func (d *Device) RadioOn(prot Protocol) error {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
 		if intrs.Timer&(0b1<<i_cat) == 0 {
-			return fmt.Errorf("st25r3916: radio: field conflict", err)
+			return fmt.Errorf("st25r3916: radio: field conflict")
 		}
 		// Enable receiver.
 		if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<rx_en|0b1<<tx_en|0b01<<en_fd_c); err != nil {

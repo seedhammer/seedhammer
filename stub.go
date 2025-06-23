@@ -2,10 +2,10 @@
 package main
 
 import (
-	"device/rp"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"machine"
 	"os"
 	"time"
@@ -19,47 +19,8 @@ import (
 )
 
 func main() {
-	uart := machine.UART0
-	for uart.Bus.UARTFR.HasBits(rp.UART0_UARTFR_TXFF) {
-	}
-	boot0 := rp.POWMAN.BOOT0.Get()
-	rp.POWMAN.BOOT0.Set(boot0 + 1)
-	uart.Bus.UARTDR.Set(uint32('a' + boot0))
-	for range 1 {
-		for _, c := range "qoot\n" {
-			for uart.Bus.UARTFR.HasBits(rp.UART0_UARTFR_TXFF) {
-			}
-			uart.Bus.UARTDR.Set(uint32(c))
-		}
-	}
-	for _, c := range "done\n" {
-		for uart.Bus.UARTFR.HasBits(rp.UART0_UARTFR_TXFF) {
-		}
-		uart.Bus.UARTDR.Set(uint32(c))
-	}
-	// for {
-	// c := 'a'
-	// for {
-	// 	for uart.Bus.UARTFR.HasBits(rp.UART0_UARTFR_TXFF) {
-	// 	}
-	// 	uart.Bus.UARTDR.Set(uint32(c))
-	// 	for uart.Bus.UARTFR.HasBits(rp.UART0_UARTFR_TXFF) {
-	// 	}
-	// 	uart.Bus.UARTDR.Set(uint32('\n'))
-	// 	c++
-	// 	if c > 'z' {
-	// 		c = 'a'
-	// 	}
-	// }
-	// }
-	cr := rp.POWMAN.CHIP_RESET.Get()
-	fmt.Printf("CHIP_RESET: %.32b POR: %v BOR: %v RUN_LOW: %v\n", cr, cr&(0b1<<16) != 0, cr&(0b1<<17) != 0, cr&(0b1<<18) != 0)
-	// wd := rp.WATCHDOG.CTRL.Get()
-	// fmt.Printf("WATCHDOG: %.32b\n", wd)
-	// rp.POWMAN.WDSEL.Set(0xffffffff)
-	// rp.WATCHDOG.CTRL.Set(0b1<<30 | 0xffff)
 	if err := run(); err != nil {
-		fmt.Printf("main: %v\n", err)
+		log.Printf("main: %v\n", err)
 	}
 	os.Exit(2)
 }
@@ -91,9 +52,9 @@ func run() error {
 	// if err := usbpd.AdjustVoltage(9*1000, 20*1000); err != nil {
 	// 	return err
 	// }
-	fmt.Println("**** here we go! **** ")
+	log.Println("**** here we go! **** ")
 	// time.Sleep(500 * time.Millisecond)
-	defer fmt.Println("**** all done! **** ")
+	defer log.Println("**** all done! **** ")
 
 	nfc := &st25r3916.Device{
 		Bus: dataI2C,
@@ -111,11 +72,15 @@ func run() error {
 	contents := make([]byte, 8*1024)
 	for {
 		if err := nfc.RadioOn(st25r3916.Detect); err != nil {
-			return err
+			log.Printf("RadioOn: %v", err)
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
 		for {
 			if err := nfc.Detect(nil); err != nil {
-				return err
+				log.Printf("Detect: %v", err)
+				time.Sleep(500 * time.Millisecond)
+				continue
 			}
 			now := time.Now()
 			// Don't poll too often.
@@ -127,10 +92,12 @@ func run() error {
 			lastPoll = now
 			break
 		}
-		fmt.Println("card detected, reading...")
+		log.Println("card detected, reading...")
 		r, err := poll(nfc, trans)
 		if err != nil {
-			return err
+			log.Printf("Poll: %v", err)
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
 		if r == nil {
 			continue
@@ -138,7 +105,7 @@ func run() error {
 		// buf := make([]byte, 512)
 		// for {
 		// 	n, err := r.Read(buf)
-		// 	fmt.Printf("%s\n", buf[:n])
+		// 	log.Printf("%s\n", buf[:n])
 		// 	if err != nil {
 		// 		if !errors.Is(err, io.EOF) {
 		// 			return err
@@ -150,12 +117,12 @@ func run() error {
 		n, err := nr.Read(contents)
 		if err != nil && !errors.Is(err, io.EOF) {
 			// Ignore read errors.
-			fmt.Println("ndef", err)
+			log.Printf("ndef: %v", err)
 			continue
 		}
-		fmt.Println("Succes!", string(contents[:n]))
+		log.Println("Succes!", string(contents[:n]))
 		m, err := bip39.Parse(contents[:n])
-		fmt.Println(m)
+		log.Println(m)
 	}
 	return nil
 }
@@ -168,13 +135,13 @@ func poll(d *st25r3916.Device, trans *iso15693.Transceiver) (io.Reader, error) {
 	if err == nil {
 		return tag15693, nil
 	}
-	fmt.Println("iso15693", err)
+	log.Printf("iso15693: %v", err)
 	if err := d.RadioOn(st25r3916.ISO14443a); err != nil {
 		return nil, err
 	}
 	tag14443, err := iso14443a.Open(d)
 	if err != nil {
-		fmt.Println("iso14443", err)
+		log.Printf("iso14443: %v", err)
 		// Ignore read errors.
 		return nil, nil
 	}
