@@ -73,7 +73,7 @@ const (
 	LCD_DB0 = machine.GPIO18
 
 	DRV_ENABLE = machine.GPIO10
-	enableDrv  = false
+	enableDrv  = true
 
 	STEPPER_UART = machine.GPIO9
 	X_ADDR       = 0b00
@@ -90,16 +90,14 @@ const (
 	Y_STEP = engraverBasePin + 3
 	X_STEP = engraverBasePin + 4
 
-	NEEDLE_VREF = machine.GPIO11
-	USBPD_INT   = machine.GPIO27
-	NFC_INT     = machine.GPIO26
-	DATA_SDA    = machine.GPIO28
-	DATA_SCL    = machine.GPIO29
+	USBPD_INT = machine.GPIO27
+	NFC_INT   = machine.GPIO26
+	DATA_SDA  = machine.GPIO28
+	DATA_SCL  = machine.GPIO29
 )
 
 var (
-	needleVREFPWM = machine.PWM5
-	touchI2C      = machine.I2C1
+	touchI2C = machine.I2C1
 	// Data I2C bus for the USB PD and NFC peripherals.
 	dataI2C     = machine.I2C0
 	lcdPIO      = rp.PIO0
@@ -112,13 +110,9 @@ const (
 	needlePeriod = 20 * time.Millisecond
 	// The duration of a needle cycle turned on.
 	needleActivationMinVoltage = 5 * time.Millisecond
-	needleActivationMaxVoltage = 3 * time.Millisecond
+	needleActivationMaxVoltage = 4 * time.Millisecond
 	// needleCurrentLimit in millisamperes (mA).
 	needleCurrentLimit = 5_000
-	// needleSenseScale is the current limit
-	// in milliamperes (mA) that corresponds to a
-	// 100% PWM duty cycle output to NEEDLE_VREF.
-	needleSenseScale = 32_500
 
 	idleVoltage = 5
 	// Voltage range for engraving.
@@ -263,31 +257,10 @@ func (d nfcDev) FIFOSize() int {
 func configEngraver(bus *multiplexI2C) (*engraver, error) {
 	DRV_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	DRV_ENABLE.Set(!enableDrv)
-	vrefCh, err := needleVREFPWM.Channel(NEEDLE_VREF)
-	if err != nil {
-		// This should never happen with a proper match
-		// between the PWM unit and the vref pin.
-		panic(err)
-	}
-	// The needle current sense is a voltage reference.
-	// Since we can't generate an (analog) voltage
-	// directly, an external low-pass filter converts a
-	// PWM signal to a voltage from 0-3.3V. The PWM frequency
-	// simply needs to be large enough to minimize voltage
-	// ripples.
-	const vrefPWMFreq = 100 * machine.KHz
-	if err := needleVREFPWM.Configure(machine.PWMConfig{
-		Period: uint64(time.Second / vrefPWMFreq),
-	}); err != nil {
-		return nil, err
-	}
 	usbpd := ap33772s.New(bus, USBPD_INT)
 	if err := usbpd.Configure(); err != nil {
 		return nil, err
 	}
-	// Compute duty cycle that corresponds to the limit.
-	duty := uint32(uint64(needleVREFPWM.Top()) * needleCurrentLimit / needleSenseScale)
-	needleVREFPWM.Set(vrefCh, duty)
 
 	uart, err := tmc2209.NewUART(stepperPIO, STEPPER_UART)
 	if err != nil {
