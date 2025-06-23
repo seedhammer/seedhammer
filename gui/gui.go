@@ -2620,7 +2620,6 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 
 	outer:
 		for {
-			ins := s.instructions[s.step]
 			if !s.dryRun.timeout.IsZero() {
 				now := ctx.Platform.Now()
 				d := s.dryRun.timeout.Sub(now)
@@ -2661,7 +2660,7 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 				if !ok {
 					break
 				}
-				switch ins.Type {
+				switch s.instructions[s.step].Type {
 				case ConnectInstruction:
 					if !selectBtn.Pressed {
 						continue
