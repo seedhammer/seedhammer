@@ -264,11 +264,11 @@ func (d *Device) RadioOn(prot Protocol) error {
 	d.prot = prot
 	switch d.prot {
 	case Detect:
-		if err := d.writeReg(regOpCtrl, 0b1<<wu); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
 		mask := interrupts{Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph}
 		if err := d.setInterruptMask(mask); err != nil {
+			return fmt.Errorf("st25r3916: radio: %w", err)
+		}
+		if err := d.writeReg(regOpCtrl, 0b1<<wu); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
 	default:
