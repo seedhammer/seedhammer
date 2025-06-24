@@ -2,7 +2,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -43,32 +42,33 @@ func run() error {
 		Bus: dataI2C,
 		Int: DATA_INT,
 	}
-	if err := nfc.Configure(); err != nil {
-		return err
-	}
-	// for {
-	// 	if err := nfc.Listen(); err != nil {
-	// 		log.Println("nfc.Listen:", err)
-	// 	}
-	// 	time.Sleep(500 * time.Millisecond)
+	// if err := nfc.Configure(); err != nil {
+	// 	return err
 	// }
 	var lastPoll time.Time
-	const pollFrequency = 500 * time.Millisecond
+	const pollFrequency = 0 * 500 * time.Millisecond
 	trans := iso15693.NewTransceiver(nfc, st25r3916.FIFOSize)
-	defer nfc.RadioOff()
 	contents := make([]byte, 8*1024)
+	defer nfc.RadioOff()
 	for {
+		if err := nfc.Configure(); err != nil {
+			return err
+		}
 		if err := nfc.RadioOn(st25r3916.Detect); err != nil {
 			log.Printf("RadioOn: %v", err)
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
+		// nfc.DumpMeasurements()
 		for {
+			// log.Println("detecting...")
 			if err := nfc.Detect(nil); err != nil {
 				log.Printf("Detect: %v", err)
 				time.Sleep(500 * time.Millisecond)
 				continue
 			}
+			// nfc.DumpMeasurements()
+			// log.Println("detect wakeup")
 			now := time.Now()
 			// Don't poll too often.
 			if now.Sub(lastPoll) < pollFrequency {
@@ -79,37 +79,40 @@ func run() error {
 			lastPoll = now
 			break
 		}
-		log.Println("card detected, reading...")
 		r, err := poll(nfc, trans)
 		if err != nil {
 			log.Printf("Poll: %v", err)
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-		if r == nil {
-			continue
-		}
-		// buf := make([]byte, 512)
-		// for {
-		// 	n, err := r.Read(buf)
-		// 	log.Printf("%s\n", buf[:n])
-		// 	if err != nil {
-		// 		if !errors.Is(err, io.EOF) {
-		// 			return err
-		// 		}
-		// 		break
-		// 	}
-		// }
-		nr := ndef.NewReader(r)
-		n, err := nr.Read(contents)
-		if err != nil && !errors.Is(err, io.EOF) {
+		if r != nil {
+			// buf := make([]byte, 512)
+			// for {
+			// 	n, err := r.Read(buf)
+			// 	log.Printf("%s\n", buf[:n])
+			// 	if err != nil {
+			// 		if err != io.EOF {
+			// 			return err
+			// 		}
+			// 		break
+			// 	}
+			// }
+			nr := ndef.NewReader(r)
+			n, err := nr.Read(contents)
+			if err == nil || err == io.EOF {
+				log.Printf("Succes! %q", string(contents[:n]))
+				m, err := bip39.Parse(contents[:n])
+				log.Println("message", m, err)
+				continue
+			}
 			// Ignore read errors.
 			log.Printf("ndef: %v", err)
-			continue
 		}
-		log.Println("Succes!", string(contents[:n]))
-		m, err := bip39.Parse(contents[:n])
-		log.Println(m)
+		nfc.RadioOn(st25r3916.Listen)
+		if err := nfc.Listen(1000 * time.Millisecond); err != nil {
+			log.Println("nfc.Listen:", err)
+		}
+		lastPoll = time.Now()
 	}
 	return nil
 }

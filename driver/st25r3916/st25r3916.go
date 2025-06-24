@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"machine"
 	"time"
 )
@@ -40,6 +41,7 @@ const (
 	ISO15693 Protocol = iota
 	ISO14443a
 	Detect
+	Listen
 )
 
 // interrupts represent a set of interrupt statuses or
@@ -62,8 +64,12 @@ const (
 )
 
 func (d *Device) Configure() error {
-	d.timer = time.NewTimer(0)
-	d.interrupts = make(chan struct{}, 1)
+	if d.timer == nil {
+		d.timer = time.NewTimer(0)
+	}
+	if d.interrupts == nil {
+		d.interrupts = make(chan struct{}, 1)
+	}
 	d.Int.Configure(machine.PinConfig{Mode: machine.PinInput})
 	d.Int.SetInterrupt(machine.PinRising, d.handleInterrupt)
 	// Reset.
@@ -146,7 +152,7 @@ func (d *Device) handleInterrupt(machine.Pin) {
 	}
 }
 
-func (d *Device) Listen() error {
+func (d *Device) Listen(timeout time.Duration) error {
 	// Notes:
 	// RATS/ATS response: search for RFAL_ISODEP_CMD_RATS
 	//   - check DID == 0?
@@ -155,9 +161,9 @@ func (d *Device) Listen() error {
 
 	/* Compute ATS                                                                 */
 
-	if err := d.command(cmdStopAll); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
+	// if err := d.command(cmdStopAll); err != nil {
+	// 	return fmt.Errorf("st25r3916: listen: %w", err)
+	// }
 	// Load PT memory with NFC-A card emulation responses.
 	req := []byte{
 		modeFIFO | loadPTMemory,
@@ -179,16 +185,25 @@ func (d *Device) Listen() error {
 	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	// Enable receiver and external field detector.
-	if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<rx_en|0b11<<en_fd_c); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
 	d.prot = ISO14443a
 	// Start sensing.
-	if err := d.command(cmdGotoSense); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
-	fmt.Println("waiting anxiously")
+	// if err := d.command(cmdGotoSense); err != nil {
+	// 	return fmt.Errorf("st25r3916: listen: %w", err)
+	// }
+	defer func() {
+		err := (func() error {
+			if err := d.command(cmdStopAll); err != nil {
+				return fmt.Errorf("st25r3916: radio: %w", err)
+			}
+			if err := d.command(cmdGotoSleep); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+			return nil
+		})()
+		if err != nil {
+			panic(err)
+		}
+	}()
 	// oldstate := byte(0)
 	buf := make([]byte, 100)
 	buf2 := make([]byte, 100)
@@ -203,7 +218,7 @@ func (d *Device) Listen() error {
 	if _, err := d.Write(nil); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	n, err := d.Read(buf)
+	n, err := d.read(buf, timeout)
 	buf = buf[:n]
 	if err != nil && err != io.EOF {
 		return fmt.Errorf("st25r3916: listen: %w", err)
@@ -245,10 +260,24 @@ func (d *Device) Listen() error {
 	return nil
 }
 
+func (d *Device) dumpMeasurements() {
+	aad, err1 := d.readReg(regAmplitudeMeasAutoDisp)
+	amd, err2 := d.readReg(regAmplitudeMeasDisp)
+	pad, err3 := d.readReg(regPhaseMeasAutoDisp)
+	pmd, err4 := d.readReg(regPhaseMeasDisp)
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
+		panic("measurements failed")
+	}
+	log.Println("aad", aad, "amd", amd, "pad", pad, "pmd", pmd)
+}
+
 func (d *Device) Detect(quit <-chan struct{}) error {
-	if _, err := d.waitForInterrupt(0, quit); err != nil {
+	intrs, err := d.waitForInterrupt(0, quit)
+	if err != nil {
 		return fmt.Errorf("st25r3916: detect: %w", err)
 	}
+	_ = intrs
+	// fmt.Printf("intrs: %+v\n", intrs)
 	return nil
 }
 
@@ -261,13 +290,18 @@ func (d *Device) RadioOff() error {
 
 func (d *Device) RadioOn(prot Protocol) error {
 	d.prot = prot
+	if err := d.configureProtocol(prot); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
 	switch d.prot {
 	case Detect:
-		mask := interrupts{Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph}
+		mask := interrupts{
+			Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph,
+		}
 		if err := d.setInterruptMask(mask); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
-		if err := d.writeReg(regOpCtrl, 0b1<<wu); err != nil {
+		if err := d.writeRegs(regOpCtrl, 0b1<<wu); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
 	default:
@@ -277,22 +311,24 @@ func (d *Device) RadioOn(prot Protocol) error {
 		if err := d.command(cmdStopAll); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
-		if err := d.configureProtocol(prot); err != nil {
+		flags := byte(0b1<<en | 0b11<<en_fd_c)
+		if err := d.writeReg(regOpCtrl, flags); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
-		if err := d.writeReg(regOpCtrl, 0b1<<en|0b11<<en_fd_c); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
-		intrs, err := d.commandAndWait(cmdInitialFieldOn,
-			interrupts{Timer: 0b1<<i_cac | 0b1<<i_cat})
-		if err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
-		if intrs.Timer&(0b1<<i_cat) == 0 {
-			return fmt.Errorf("st25r3916: radio: field conflict")
+		if d.prot != Listen {
+			intrs, err := d.commandAndWait(cmdInitialFieldOn,
+				interrupts{Timer: 0b1<<i_cac | 0b1<<i_cat})
+			if err != nil {
+				return fmt.Errorf("st25r3916: radio: %w", err)
+			}
+			if intrs.Timer&(0b1<<i_cat) == 0 {
+				return fmt.Errorf("st25r3916: radio: field conflict")
+			}
+			flags |= 0b1 << tx_en
 		}
 		// Enable receiver.
-		if err := d.writeReg(regOpCtrl, 0b1<<en|0b1<<rx_en|0b1<<tx_en|0b11<<en_fd_c); err != nil {
+		flags |= 0b1 << rx_en
+		if err := d.writeReg(regOpCtrl, flags); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
 	}
@@ -346,8 +382,10 @@ func (d *Device) Write(tx []byte) (int, error) {
 	if len(tx) == 0 {
 		return 0, nil
 	}
-	if err := d.writeFIFO(tx, 0); err != nil {
-		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+	if transmitCmd != cmdTransmitREQA {
+		if err := d.writeFIFO(tx, 0); err != nil {
+			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+		}
 	}
 	if err := d.command(transmitCmd); err != nil {
 		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
@@ -465,7 +503,7 @@ func (d *Device) configureProtocol(prot Protocol) error {
 	}
 	var conf config
 	switch prot {
-	case ISO14443a:
+	case ISO14443a, Listen, Detect:
 		conf = config{
 			opMode:      omISO14443A,
 			rxConf:      [...]byte{0x08, 0x2d, 0x00, 0x00},
@@ -487,6 +525,8 @@ func (d *Device) configureProtocol(prot Protocol) error {
 			nrt:         0x52,
 			iso14443a:   0b1<<no_tx_par | 0b1<<no_rx_par,
 		}
+	default:
+		panic("invalid protocol")
 	}
 	if err := d.writeRegs(
 		regModeDef, conf.opMode,
@@ -512,6 +552,10 @@ func (d *Device) configureProtocol(prot Protocol) error {
 }
 
 func (d *Device) Read(buf []byte) (int, error) {
+	return d.read(buf, timeout)
+}
+
+func (d *Device) read(buf []byte, timeout time.Duration) (int, error) {
 	if !d.eof {
 		if _, err := d.waitForInterrupt(timeout, nil); err != nil {
 			return 0, fmt.Errorf("st25r3916: read: %w", err)
