@@ -1,7 +1,6 @@
 package gui
 
 import (
-	"errors"
 	"io"
 	"iter"
 	"log"
@@ -69,7 +68,7 @@ func (p *nfcPoller) poll(quit <-chan struct{}) (any, error) {
 		}
 		nr := ndef.NewReader(r)
 		n, err := nr.Read(p.buf)
-		if err != nil && !errors.Is(err, io.EOF) {
+		if err != nil && err != io.EOF {
 			// Ignore read errors.
 			continue
 		}

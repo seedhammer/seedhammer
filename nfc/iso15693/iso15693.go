@@ -52,7 +52,7 @@ func Open(bus io.ReadWriter, size int) (*Tag, error) {
 	}
 	dsfidUID := tag.scratch[:]
 	n, err := tag.read(dsfidUID)
-	if err != nil && !errors.Is(err, io.EOF) {
+	if err != nil && err != io.EOF {
 		return nil, fmt.Errorf("iso15693: Inventory: %w", err)
 	}
 	if n != 9 {
@@ -94,7 +94,7 @@ func (t *Tag) Read(rx []byte) (int, error) {
 		}
 		t.blocksRem -= n / t.blockSize
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
+			if err != io.EOF {
 				return n, fmt.Errorf("iso15693: read: %w", err)
 			}
 			if t.blocksRem > 0 {
@@ -235,7 +235,7 @@ func (t *Transceiver) Write(tx []byte) (int, error) {
 // rx for 2 CRC bytes in addition to the decoded payload.
 func (t *Transceiver) Read(rx []byte) (int, error) {
 	n, err := t.bus.Read(t.buf)
-	if err != nil && !errors.Is(err, io.EOF) {
+	if err != nil && err != io.EOF {
 		return 0, err
 	}
 	buf := t.buf[:n]

@@ -59,7 +59,7 @@ func (t *Tag) selectTag() error {
 		req2, resp := t.scratch[:7], t.scratch[7:7+5]
 		n, err := t.bus.Read(resp)
 		resp = resp[:n]
-		if err != nil && !errors.Is(err, io.EOF) {
+		if err != nil && err != io.EOF {
 			return fmt.Errorf("select: %w", err)
 		}
 
@@ -98,15 +98,15 @@ func (t *Tag) Read(rx []byte) (int, error) {
 	req[0] = cmdMifareRead
 	req[1] = t.page
 	if _, err := t.bus.Write(req); err != nil {
-		return 0, fmt.Errorf("iso14443a: Read: %w", err)
+		return 0, fmt.Errorf("iso14443a: read: %w", err)
 	}
 
 	n, err := t.bus.Read(rx)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return n, fmt.Errorf("iso14443a: Read: %w", err)
+	if err != nil && err != io.EOF {
+		return n, fmt.Errorf("iso14443a: read: %w", err)
 	}
 	if len(rx) < n {
-		return 0, fmt.Errorf("iso14443a: Read: buffer too small: %d", len(rx))
+		return 0, fmt.Errorf("iso14443a: read: buffer too small: %d", len(rx))
 	}
 	t.page += uint8(n / pageSize)
 	return n, nil

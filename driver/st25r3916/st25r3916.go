@@ -199,50 +199,49 @@ func (d *Device) Listen() error {
 	page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20}
 	page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
 	ATS := []byte{0x05, 0x78, 0x00, 0x80, 0x00}
-	for {
-		// Perform dummy write to set up chip for reading.
-		if _, err := d.Write(nil); err != nil {
-			return fmt.Errorf("st25r3916: listen: %w", err)
-		}
-		n, err := d.Read(buf)
-		buf = buf[:n]
-		if err != nil && !errors.Is(err, io.EOF) {
-			return fmt.Errorf("st25r3916: listen: %w", err)
-		}
-		switch {
-		case bytes.Equal(buf, []byte{0xe0, 0x80}):
-			// RATS
-			if _, err := d.Write(ATS); err != nil {
-				return fmt.Errorf("st25r3916: listen: %w", err)
-			}
-		case bytes.Equal(buf, []byte{0x50, 0x00}):
-			// HLTA
-			fmt.Printf("HLTA %x\n", buf)
-			continue
-		default:
-			if _, err := d.Write(page0); err != nil {
-				return fmt.Errorf("st25r3916: listen: %w", err)
-			}
-		}
-		n, err = d.Read(buf2)
-		buf2 = buf2[:n]
-		if err != nil && !errors.Is(err, io.EOF) {
-			return fmt.Errorf("st25r3916: listen: %w", err)
-		}
-		if _, err := d.Write(page4); err != nil {
-			return fmt.Errorf("st25r3916: listen: %w", err)
-		}
-		n, err = d.Read(buf3)
-		buf3 = buf3[:n]
-		if err != nil && !errors.Is(err, io.EOF) {
-			return fmt.Errorf("st25r3916: listen: %w", err)
-		}
-		if _, err := d.Write(page8); err != nil {
-			return fmt.Errorf("st25r3916: listen: %w", err)
-		}
-		fmt.Printf("buf1 %x\nbuf2 %x\nbuf3 %x\n", buf, buf2, buf3)
-		// fmt.Println("passIntr", passInt, "intr", intr, "errInt", errInt, "timInt", timInt /*"state", state*/)
+	// Perform dummy write to set up chip for reading.
+	if _, err := d.Write(nil); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
+	n, err := d.Read(buf)
+	buf = buf[:n]
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
+	switch {
+	case bytes.Equal(buf, []byte{0xe0, 0x80}):
+		// RATS
+		if _, err := d.Write(ATS); err != nil {
+			return fmt.Errorf("st25r3916: listen: %w", err)
+		}
+	case bytes.Equal(buf, []byte{0x50, 0x00}):
+		// HLTA
+		fmt.Printf("HLTA %x\n", buf)
+		return nil
+		// continue
+	default:
+		if _, err := d.Write(page0); err != nil {
+			return fmt.Errorf("st25r3916: listen: %w", err)
+		}
+	}
+	n, err = d.Read(buf2)
+	buf2 = buf2[:n]
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
+	if _, err := d.Write(page4); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
+	n, err = d.Read(buf3)
+	buf3 = buf3[:n]
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
+	if _, err := d.Write(page8); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
+	fmt.Printf("buf1 %x\nbuf2 %x\nbuf3 %x\n", buf, buf2, buf3)
+	// fmt.Println("passIntr", passInt, "intr", intr, "errInt", errInt, "timInt", timInt /*"state", state*/)
 	return nil
 }
 
