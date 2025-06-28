@@ -232,16 +232,23 @@ func (d *Device) Listen(timeout time.Duration) error {
 		0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20,
 		0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61,
 	}
-	writeMem := make([]byte, 8192)
+	writeMem := make([]byte, 492)
 	copy(writeMem, mem)
 	const (
 		SLP_REQ   = 0x50
 		T2T_READ  = 0x30
 		T2T_WRITE = 0xa2
+		WRITE_ACK = 0x0a
 
 		blockSize = 4
 		readSize  = 16
 	)
+	ack := []byte{WRITE_ACK}
+	nwrites, nreads := 0, 0
+	writtenBlocks := make([]int, 0, 100)
+	defer func() {
+		fmt.Println("stats", nwrites, nreads, writtenBlocks)
+	}()
 	for {
 		n, err := d.read(buf, timeout)
 		buf := buf[:n]
@@ -263,10 +270,8 @@ func (d *Device) Listen(timeout time.Duration) error {
 			if len(buf) < 1 || buf[0] != 0 {
 				return fmt.Errorf("st25r3916: listen: unknown SLP_REQ argument: %x", buf[0])
 			}
-			// HLTA
 			fmt.Printf("HLTA %x\n", buf)
 			return nil
-			// continue
 		case T2T_READ:
 			if len(buf) == 0 {
 				return io.ErrUnexpectedEOF
@@ -281,6 +286,9 @@ func (d *Device) Listen(timeout time.Duration) error {
 			if _, err := d.Write(data); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
+			if nwrites > 0 {
+				nreads++
+			}
 		case T2T_WRITE:
 			if len(buf) == 0 {
 				return io.ErrUnexpectedEOF
@@ -294,6 +302,9 @@ func (d *Device) Listen(timeout time.Duration) error {
 			if _, err := d.Write(ack); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
+			writtenBlocks = append(writtenBlocks, start, len(buf))
+			// fmt.Println(start, buf)
+			nwrites++
 		default:
 			return fmt.Errorf("st25r3916: listen: unknown Type 2 command: %x", cmd)
 		}
@@ -385,23 +396,34 @@ func (d *Device) Write(tx []byte) (int, error) {
 	}
 	d.excludeCRC = true
 	var transmitCmd byte
+	var bits byte
 	switch d.prot {
 	case ISO14443a:
-		const reqa = 0x26
-		// Special case REQA.
-		if len(tx) == 1 && tx[0] == reqa {
-			d.excludeCRC = false
-			transmitCmd = cmdTransmitREQA
-			break
-		}
+		const (
+			REQA = 0x26
+			ACK  = 0x0a
+		)
 		var conf byte
 		transmitCmd = byte(cmdTransmitWithCRC)
 		// Simple detection of anti-collision frame.
 		anticol := len(tx) == 2 && tx[1] == 0x20 &&
 			(tx[0] == casLevel1 || tx[0] == casLevel2 || tx[0] == casLevel3)
-		if anticol {
-			transmitCmd = cmdTransmitWithoutCRC
+		reqa := len(tx) == 1 && tx[0] == REQA
+		ack := len(tx) == 1 && tx[0] == ACK
+		switch {
+		case anticol, reqa:
 			d.excludeCRC = false
+		}
+		if ack {
+			bits = 4
+		}
+		switch {
+		case anticol || ack:
+			transmitCmd = cmdTransmitWithoutCRC
+		case reqa:
+			transmitCmd = cmdTransmitREQA
+		}
+		if anticol {
 			conf = 0b1 << antcl
 		}
 		if err := d.writeReg(regISO14443AConf, conf); err != nil {
@@ -424,7 +446,7 @@ func (d *Device) Write(tx []byte) (int, error) {
 		return 0, nil
 	}
 	if transmitCmd != cmdTransmitREQA {
-		if err := d.writeFIFO(tx, 0); err != nil {
+		if err := d.writeFIFO(tx, bits); err != nil {
 			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
 		}
 	}
@@ -639,6 +661,9 @@ func (d *Device) writeTXLen(bytes int, bits byte) error {
 	}
 	if bytes > maxTxSize {
 		return fmt.Errorf("write FIFO: buffer too large: %d bytes", bytes)
+	}
+	if bits > 0 {
+		bytes--
 	}
 	// Set transmit size.
 	req := d.scratch[:3]
