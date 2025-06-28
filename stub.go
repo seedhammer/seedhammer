@@ -79,6 +79,12 @@ func run() error {
 			lastPoll = now
 			break
 		}
+		nfc.RadioOn(st25r3916.Listen)
+		if err := nfc.Listen(1000 * time.Millisecond); err != nil {
+			log.Println("nfc.Listen:", err)
+		}
+		lastPoll = time.Now()
+		continue
 		r, err := poll(nfc, trans)
 		if err != nil {
 			log.Printf("Poll: %v", err)

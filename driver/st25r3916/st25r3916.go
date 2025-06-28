@@ -6,6 +6,7 @@
 package st25r3916
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -54,9 +55,9 @@ type interrupts struct {
 }
 
 const (
-	// General timeout to guard for hangs, excessive
+	// General defTimeout to guard for hangs, excessive
 	// receive times etc.
-	timeout = 500 * time.Millisecond
+	defTimeout = 500 * time.Millisecond
 
 	// Card detection thresholds.
 	ampSens   = 2
@@ -90,8 +91,6 @@ func (d *Device) Configure() error {
 		regResAMMod, 0b1<<fa3_f|0<<md_res, // Minimum non-overlap.
 		regExtFieldAct, 0b001<<trg_l|0b0001<<rfe_t, // Lower activation threshold.
 		regExtFieldDeact, 0b000<<trg_ld|0b000<<rfe_td, // Lower deactivation threshold.
-		regNFCIP1PassiveTarg, 5<<fdel| // Adjust fdel to 5 like the ST example code. Datasheet table 32 says minimum 2.
-			0b1<<d_212_424_1r|0b1<<d_ac_ap2p, // Disable unused passive detection modes.
 		regPassiveTargetMod, 0x5f, // Reduce RFO resistance in modulated state.
 		regEMDSupConf, 0b1<<rx_start_emv, // Enable start on first 4 bits.
 		regStreamModeDef, modeISO15693, // Setup streaming mode for iso15693.
@@ -100,6 +99,9 @@ func (d *Device) Configure() error {
 		regAmplitudeMeasCtrl, ampSens<<am_d|0b1<<am_ae|0b1<<am_aam|0b10<<am_aew, // Set amplitude measurement ∆am, auto-averaging reference.
 		regPhaseMeasCtrl, phaseSens<<pm_d|0b1<<pm_ae|0b1<<pm_aam|0b10<<pm_aew, // Set phase measurement ∆pm, auto-averaging reference.
 	); err != nil {
+		return fmt.Errorf("st25r3916: configure: %w", err)
+	}
+	if err := d.enablePassiveNFCA(false); err != nil {
 		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
 	if err := d.enable(); err != nil {
@@ -114,13 +116,24 @@ func (d *Device) Configure() error {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
 	// Then issue the adjust regulator command.
-	if _, err := d.commandAndWait(cmdAdjustRegulator, interrupts{Timer: 0b1 << i_dct}); err != nil {
+	if _, err := d.commandAndWait(cmdAdjustRegulator, interrupts{Timer: 0b1 << i_dct}, defTimeout); err != nil {
 		return fmt.Errorf("st25r3916: configure: %w", err)
 	}
 	if err := d.RadioOff(); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
 	return nil
+}
+
+func (d *Device) enablePassiveNFCA(en bool) error {
+	// Adjust fdel to 5 like the ST example code. Datasheet table 32 says minimum 2.
+	const frameDelay = 5
+	v := byte(frameDelay<<fdel |
+		0b1<<d_212_424_1r | 0b1<<d_ac_ap2p) // Disable unused passive detection modes.
+	if !en {
+		v |= d_106_ac_a
+	}
+	return d.writeReg(regNFCIP1PassiveTarg, v)
 }
 
 func (d *Device) enable() error {
@@ -141,7 +154,7 @@ func (d *Device) enable() error {
 		return err
 	}
 	// Wait for oscillator stable.
-	_, err = d.waitForInterrupt(timeout, nil)
+	_, err = d.waitForInterrupt(defTimeout, nil)
 	return err
 }
 
@@ -152,7 +165,17 @@ func (d *Device) handleInterrupt(machine.Pin) {
 	}
 }
 
+func dbg(strs ...any) {
+	log.Println(strs...)
+}
+
+func dbgf(f string, args ...any) {
+	log.Printf(f, args...)
+}
+
 func (d *Device) Listen(timeout time.Duration) error {
+	dbg("listen...")
+	defer dbg("...done listen")
 	// Notes:
 	// RATS/ATS response: search for RFAL_ISODEP_CMD_RATS
 	//   - check DID == 0?
@@ -170,6 +193,8 @@ func (d *Device) Listen(timeout time.Duration) error {
 		panic(err)
 	}
 	binary.BigEndian.PutUint32(uid, rng)
+	// SAK for NFC Type 4A.
+	const sakT4A = 0b0_01_00_0_00
 	// Load PT memory with NFC-A card emulation responses.
 	req := []byte{
 		modeFIFO | loadPTMemory,
@@ -178,8 +203,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 		// ATQA.
 		0x04, 0x00,
 		// SAK1, SAK2, SAK3.
-		// 0b0_01_00_0_00, 0b0_01_00_0_00, 0b0_01_00_0_00,
-		0x00, 0x00, 0x00,
+		sakT4A, sakT4A, sakT4A,
 	}
 	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
@@ -213,6 +237,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 	}()
 	// oldstate := byte(0)
 	buf := make([]byte, 100)
+	buf2 := make([]byte, 100)
 	// buf2 := make([]byte, 100)
 	// buf3 := make([]byte, 100)
 	// page0 := []byte{0x04, 0xf7, 0x73, 0x08, 0x7c, 0x8f, 0x61, 0x81, 0x13, 0x48, 0x00, 0x00, 0xe1, 0x10, 0x3e, 0x00}
@@ -221,10 +246,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 	// page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20}
 	// page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
 	// ATS := []byte{0x05, 0x78, 0x00, 0x80, 0x00}
-	// Perform dummy write to set up chip for reading.
-	if _, err := d.Write(nil); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
+	ATS := []byte{0x06, 0x75, 0x77, 0x81, 0x02, 0x80}
 	mem := []byte{
 		0x04, 0xf7, 0x73, 0x08, 0x7c, 0x8f, 0x61, 0x81, 0x13, 0x48, 0x00, 0x00, 0xe1, 0x10, 0x3e, 0x00,
 		// page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x62, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x2e, 0x6f}
@@ -235,22 +257,73 @@ func (d *Device) Listen(timeout time.Duration) error {
 	writeMem := make([]byte, 492)
 	copy(writeMem, mem)
 	const (
-		SLP_REQ   = 0x50
-		T2T_READ  = 0x30
-		T2T_WRITE = 0xa2
-		WRITE_ACK = 0x0a
+		SLP_REQ = 0x50
+
+		T2T_READ      = 0x30
+		T2T_WRITE     = 0xa2
+		T2T_WRITE_ACK = 0x0a
 
 		blockSize = 4
 		readSize  = 16
+
+		T4T_RATS = 0xe0
+
+		ISODEP_DESELECT = 0xc2
+		I_BLOCK         = 0x02
+		R_BLOCK         = 0b10100010
 	)
-	ack := []byte{WRITE_ACK}
-	nwrites, nreads := 0, 0
-	writtenBlocks := make([]int, 0, 100)
+	// NFC Type 4 Tag Operation Specification, Table 10.
+	T4T_NDEF_SELECT_CAPDU := []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01, 0x00}
+	T4T_NDEF_SELECT_CAPDU2 := []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00, 0x00}
+	T4T_NDEF_ACK := []byte{0x90, 0x00}
+	T4T_NDEF_CC_SELECT_CAPDU := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0xe1, 0x03}
+	T4T_NDEF_CC_SELECT_CAPDU2 := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0x01, 0x00}
+	T4T_NDEF_CC_READ_CAPDU := []byte{0x00, 0xb0, 0x00, 0x00, 0x0f}
+	const T4T_MAPPING_VERSION = 0x20
+	// Table 5.
+	bo := binary.LittleEndian
+	cc := make([]byte, 0, 15)
+	const ccSize = 15
+	cc = bo.AppendUint16(cc, ccSize) // Container size
+	cc = append(cc, T4T_MAPPING_VERSION)
+	cc = bo.AppendUint16(cc, 64) // ReadBinary chunk size
+	cc = bo.AppendUint16(cc, 64) // UpdateBinary chunk size
+
+	// Control block TLV. Section 5.1.2.1.
+	cc = append(cc, 0x04)
+	cc = append(cc, 0x06)
+	cc = bo.AppendUint16(cc, 0x0001) // File identifier.
+	cc = bo.AppendUint16(cc, 500)    // Maximum NDEF size.
+	cc = append(cc, 0x00)            // Read allowed.
+	cc = append(cc, 0x00)            // Write allowed.
+	if len(cc) != ccSize {
+		panic("wrong cc size")
+	}
+	// dbgf("CC: %x", cc)
+	// ack := []byte{T2T_WRITE_ACK}
+	s_deselect := []byte{ISODEP_DESELECT}
+	nwrites, nreads, ncmds := 0, 0, 0
+	writes := make([]int, 0, 100)
 	defer func() {
-		fmt.Println("stats", nwrites, nreads, writtenBlocks)
+		dbgf("stats nwrites %d nreads %d ncmds %d cmds %x", nwrites, nreads, ncmds, writes)
 	}()
+	mask := interrupts{
+		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
+	}
+	if err := d.enablePassiveNFCA(true); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
+	if _, err := d.commandAndWait(cmdGotoSense, mask, timeout); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
+	// Perform dummy write to set up chip for reading.
+	if _, err := d.Write(nil); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
+	// Initialize I-block to 1.
+	block := byte(0b1)
 	for {
-		n, err := d.read(buf, timeout)
+		n, err := d.Read(buf)
 		buf := buf[:n]
 		if err != nil && err != io.EOF {
 			return fmt.Errorf("st25r3916: listen: %w", err)
@@ -258,55 +331,92 @@ func (d *Device) Listen(timeout time.Duration) error {
 		if len(buf) < 1 {
 			return io.ErrUnexpectedEOF
 		}
+		ncmds++
 		cmd := buf[0]
 		buf = buf[1:]
+		writes = append(writes, int(cmd))
 		switch cmd {
-		// case bytes.Equal(buf, []byte{0xe0, 0x80}):
-		// 	// RATS
-		// 	if _, err := d.Write(ATS); err != nil {
-		// 		return fmt.Errorf("st25r3916: listen: %w", err)
-		// 	}
+		case T4T_RATS:
+			if _, err := d.Write(ATS); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+		case ISODEP_DESELECT:
+			if len(buf) != 0 {
+				return fmt.Errorf("st25r3916: listen: unsupported S-block", err)
+			}
+			block = 1 - block
+			// if err := d.writeReg(regAuxDef, 0b1<<no_crc_rx); err != nil {
+			// 	return fmt.Errorf("st25r3916: listen: %w", err)
+			// }
+			if _, err := d.Write(s_deselect); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+			return nil
+		case I_BLOCK, I_BLOCK + 1:
+			if len(buf) < 4 {
+				return fmt.Errorf("st25r3916: listen: S-block too short")
+			}
+			block = 1 - block
+			resp := buf2[:0]
+			resp = append(resp, I_BLOCK|block)
+			switch {
+			case bytes.Equal(buf, T4T_NDEF_SELECT_CAPDU) ||
+				bytes.Equal(buf, T4T_NDEF_SELECT_CAPDU2):
+				resp = append(resp, T4T_NDEF_ACK...)
+			case bytes.Equal(buf, T4T_NDEF_CC_SELECT_CAPDU) ||
+				bytes.Equal(buf, T4T_NDEF_CC_SELECT_CAPDU2):
+				resp = append(resp, T4T_NDEF_ACK...)
+			case bytes.Equal(buf, T4T_NDEF_CC_READ_CAPDU):
+				resp = append(resp, cc...)
+				resp = append(resp, T4T_NDEF_ACK...)
+			default:
+				dbgf("C-APDU: %x", buf)
+				return fmt.Errorf("st25r3916: listen: unknown C-APDU")
+			}
+			if _, err := d.Write(resp); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
 		case SLP_REQ:
 			if len(buf) < 1 || buf[0] != 0 {
 				return fmt.Errorf("st25r3916: listen: unknown SLP_REQ argument: %x", buf[0])
 			}
 			fmt.Printf("HLTA %x\n", buf)
 			return nil
-		case T2T_READ:
-			if len(buf) == 0 {
-				return io.ErrUnexpectedEOF
-			}
-			start := int(buf[0]) * blockSize
-			buf = buf[1:]
-			end := start + readSize
-			if end > len(writeMem) {
-				return fmt.Errorf("st25r3916: listen: read out of bounds")
-			}
-			data := writeMem[start:end]
-			if _, err := d.Write(data); err != nil {
-				return fmt.Errorf("st25r3916: listen: %w", err)
-			}
-			if nwrites > 0 {
-				nreads++
-			}
-		case T2T_WRITE:
-			if len(buf) == 0 {
-				return io.ErrUnexpectedEOF
-			}
-			start := int(buf[0]) * blockSize
-			buf = buf[1:]
-			if start > len(writeMem) {
-				return fmt.Errorf("st25r3916: listen: write out of bounds")
-			}
-			copy(writeMem[start:], buf)
-			if _, err := d.Write(ack); err != nil {
-				return fmt.Errorf("st25r3916: listen: %w", err)
-			}
-			writtenBlocks = append(writtenBlocks, start, len(buf))
-			// fmt.Println(start, buf)
-			nwrites++
+		// case T2T_READ:
+		// 	if len(buf) == 0 {
+		// 		return io.ErrUnexpectedEOF
+		// 	}
+		// 	start := int(buf[0]) * blockSize
+		// 	buf = buf[1:]
+		// 	end := start + readSize
+		// 	if end > len(writeMem) {
+		// 		return fmt.Errorf("st25r3916: listen: read out of bounds")
+		// 	}
+		// 	data := writeMem[start:end]
+		// 	if _, err := d.Write(data); err != nil {
+		// 		return fmt.Errorf("st25r3916: listen: %w", err)
+		// 	}
+		// 	if nwrites > 0 {
+		// 		nreads++
+		// 	}
+		// case T2T_WRITE:
+		// 	if len(buf) == 0 {
+		// 		return io.ErrUnexpectedEOF
+		// 	}
+		// 	start := int(buf[0]) * blockSize
+		// 	buf = buf[1:]
+		// 	if start > len(writeMem) {
+		// 		return fmt.Errorf("st25r3916: listen: write out of bounds")
+		// 	}
+		// 	copy(writeMem[start:], buf)
+		// 	if _, err := d.Write(ack); err != nil {
+		// 		return fmt.Errorf("st25r3916: listen: %w", err)
+		// 	}
+		// 	writtenBlocks = append(writtenBlocks, start, len(buf))
+		// 	// fmt.Println(start, buf)
+		// 	nwrites++
 		default:
-			return fmt.Errorf("st25r3916: listen: unknown Type 2 command: %x", cmd)
+			return fmt.Errorf("st25r3916: listen: unknown type 4a command: %x/%x", cmd, buf)
 		}
 	}
 	return nil
@@ -369,7 +479,7 @@ func (d *Device) RadioOn(prot Protocol) error {
 		}
 		if d.prot != Listen {
 			intrs, err := d.commandAndWait(cmdInitialFieldOn,
-				interrupts{Timer: 0b1<<i_cac | 0b1<<i_cat})
+				interrupts{Timer: 0b1<<i_cac | 0b1<<i_cat}, defTimeout)
 			if err != nil {
 				return fmt.Errorf("st25r3916: radio: %w", err)
 			}
@@ -401,7 +511,7 @@ func (d *Device) Write(tx []byte) (int, error) {
 	case ISO14443a:
 		const (
 			REQA = 0x26
-			ACK  = 0x0a
+			// ACK  = 0x0a
 		)
 		var conf byte
 		transmitCmd = byte(cmdTransmitWithCRC)
@@ -409,16 +519,16 @@ func (d *Device) Write(tx []byte) (int, error) {
 		anticol := len(tx) == 2 && tx[1] == 0x20 &&
 			(tx[0] == casLevel1 || tx[0] == casLevel2 || tx[0] == casLevel3)
 		reqa := len(tx) == 1 && tx[0] == REQA
-		ack := len(tx) == 1 && tx[0] == ACK
+		// ack := len(tx) == 1 && tx[0] == ACK
 		switch {
 		case anticol, reqa:
 			d.excludeCRC = false
 		}
-		if ack {
-			bits = 4
-		}
+		// if ack {
+		// 	bits = 4
+		// }
 		switch {
-		case anticol || ack:
+		case anticol /* || ack */ :
 			transmitCmd = cmdTransmitWithoutCRC
 		case reqa:
 			transmitCmd = cmdTransmitREQA
@@ -615,14 +725,13 @@ func (d *Device) configureProtocol(prot Protocol) error {
 }
 
 func (d *Device) Read(buf []byte) (int, error) {
-	return d.read(buf, timeout)
+	return d.read(buf, defTimeout)
 }
 
 func (d *Device) read(buf []byte, timeout time.Duration) (int, error) {
+	var ierr error
 	if !d.eof {
-		if _, err := d.waitForInterrupt(timeout, nil); err != nil {
-			return 0, fmt.Errorf("st25r3916: read: %w", err)
-		}
+		_, ierr = d.waitForInterrupt(timeout, nil)
 		d.eof = true
 	}
 	req, fifoStatus := d.scratch[:1], d.scratch[1:3]
@@ -642,14 +751,15 @@ func (d *Device) read(buf []byte, timeout time.Duration) (int, error) {
 	if err := d.Bus.Tx(i2cAddr, req, buf[:n]); err != nil {
 		return 0, fmt.Errorf("st25r3916: read: %w", err)
 	}
-	var err error
-	switch {
-	case overflow:
-		err = errors.New("st25r3916: read: FIFO overflow")
-	case n == fifoLen:
-		err = io.EOF
+	if ierr == nil {
+		switch {
+		case overflow:
+			ierr = errors.New("st25r3916: read: FIFO overflow")
+		case n == fifoLen:
+			ierr = io.EOF
+		}
 	}
-	return n, err
+	return n, ierr
 }
 
 func (d *Device) writeTXLen(bytes int, bits byte) error {
@@ -729,7 +839,7 @@ func (d *Device) writeReg(reg, val byte) error {
 	return d.Bus.Tx(i2cAddr, req, nil)
 }
 
-func (d *Device) commandAndWait(cmd byte, mask interrupts) (interrupts, error) {
+func (d *Device) commandAndWait(cmd byte, mask interrupts, timeout time.Duration) (interrupts, error) {
 	if err := d.setInterruptMask(mask); err != nil {
 		return interrupts{}, err
 	}
