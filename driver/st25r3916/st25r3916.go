@@ -6,7 +6,7 @@
 package st25r3916
 
 import (
-	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -161,17 +161,24 @@ func (d *Device) Listen(timeout time.Duration) error {
 
 	/* Compute ATS                                                                 */
 
-	// if err := d.command(cmdStopAll); err != nil {
-	// 	return fmt.Errorf("st25r3916: listen: %w", err)
-	// }
+	// Generate random 4-byte UID, starting with 0x08 to indicate
+	// it is dynamically generated.
+	uid := make([]byte, 4)
+	rng, err := machine.GetRNG()
+	if err != nil {
+		// Should never happen.
+		panic(err)
+	}
+	binary.BigEndian.PutUint32(uid, rng)
 	// Load PT memory with NFC-A card emulation responses.
 	req := []byte{
 		modeFIFO | loadPTMemory,
 		// UID.
-		0x08, 0x09, 0x0a, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		// SENS_REQ.
-		0x02, 0x00,
-		// SEL_RES1, SEL_RES2, SEL_RES3.
+		0x08, uid[0], uid[1], uid[2], 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		// ATQA.
+		0x04, 0x00,
+		// SAK1, SAK2, SAK3.
+		// 0b0_01_00_0_00, 0b0_01_00_0_00, 0b0_01_00_0_00,
 		0x00, 0x00, 0x00,
 	}
 	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
@@ -206,57 +213,91 @@ func (d *Device) Listen(timeout time.Duration) error {
 	}()
 	// oldstate := byte(0)
 	buf := make([]byte, 100)
-	buf2 := make([]byte, 100)
-	buf3 := make([]byte, 100)
-	page0 := []byte{0x04, 0xf7, 0x73, 0x08, 0x7c, 0x8f, 0x61, 0x81, 0x13, 0x48, 0x00, 0x00, 0xe1, 0x10, 0x3e, 0x00}
-	// page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x62, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x2e, 0x6f}
+	// buf2 := make([]byte, 100)
+	// buf3 := make([]byte, 100)
+	// page0 := []byte{0x04, 0xf7, 0x73, 0x08, 0x7c, 0x8f, 0x61, 0x81, 0x13, 0x48, 0x00, 0x00, 0xe1, 0x10, 0x3e, 0x00}
+	// // page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x62, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x2e, 0x6f}
+	// // page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
+	// page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20}
 	// page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
-	page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20}
-	page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
-	ATS := []byte{0x05, 0x78, 0x00, 0x80, 0x00}
+	// ATS := []byte{0x05, 0x78, 0x00, 0x80, 0x00}
 	// Perform dummy write to set up chip for reading.
 	if _, err := d.Write(nil); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	n, err := d.read(buf, timeout)
-	buf = buf[:n]
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("st25r3916: listen: %w", err)
+	mem := []byte{
+		0x04, 0xf7, 0x73, 0x08, 0x7c, 0x8f, 0x61, 0x81, 0x13, 0x48, 0x00, 0x00, 0xe1, 0x10, 0x3e, 0x00,
+		// page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x62, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x2e, 0x6f}
+		// page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
+		0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20,
+		0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61,
 	}
-	switch {
-	case bytes.Equal(buf, []byte{0xe0, 0x80}):
-		// RATS
-		if _, err := d.Write(ATS); err != nil {
+	writeMem := make([]byte, 8192)
+	copy(writeMem, mem)
+	const (
+		SLP_REQ   = 0x50
+		T2T_READ  = 0x30
+		T2T_WRITE = 0xa2
+
+		blockSize = 4
+		readSize  = 16
+	)
+	for {
+		n, err := d.read(buf, timeout)
+		buf := buf[:n]
+		if err != nil && err != io.EOF {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
-	case bytes.Equal(buf, []byte{0x50, 0x00}):
-		// HLTA
-		fmt.Printf("HLTA %x\n", buf)
-		return nil
-		// continue
-	default:
-		if _, err := d.Write(page0); err != nil {
-			return fmt.Errorf("st25r3916: listen: %w", err)
+		if len(buf) < 1 {
+			return io.ErrUnexpectedEOF
+		}
+		cmd := buf[0]
+		buf = buf[1:]
+		switch cmd {
+		// case bytes.Equal(buf, []byte{0xe0, 0x80}):
+		// 	// RATS
+		// 	if _, err := d.Write(ATS); err != nil {
+		// 		return fmt.Errorf("st25r3916: listen: %w", err)
+		// 	}
+		case SLP_REQ:
+			if len(buf) < 1 || buf[0] != 0 {
+				return fmt.Errorf("st25r3916: listen: unknown SLP_REQ argument: %x", buf[0])
+			}
+			// HLTA
+			fmt.Printf("HLTA %x\n", buf)
+			return nil
+			// continue
+		case T2T_READ:
+			if len(buf) == 0 {
+				return io.ErrUnexpectedEOF
+			}
+			start := int(buf[0]) * blockSize
+			buf = buf[1:]
+			end := start + readSize
+			if end > len(writeMem) {
+				return fmt.Errorf("st25r3916: listen: read out of bounds")
+			}
+			data := writeMem[start:end]
+			if _, err := d.Write(data); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+		case T2T_WRITE:
+			if len(buf) == 0 {
+				return io.ErrUnexpectedEOF
+			}
+			start := int(buf[0]) * blockSize
+			buf = buf[1:]
+			if start > len(writeMem) {
+				return fmt.Errorf("st25r3916: listen: write out of bounds")
+			}
+			copy(writeMem[start:], buf)
+			if _, err := d.Write(ack); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+		default:
+			return fmt.Errorf("st25r3916: listen: unknown Type 2 command: %x", cmd)
 		}
 	}
-	n, err = d.Read(buf2)
-	buf2 = buf2[:n]
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
-	if _, err := d.Write(page4); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
-	n, err = d.Read(buf3)
-	buf3 = buf3[:n]
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
-	if _, err := d.Write(page8); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
-	fmt.Printf("buf1 %x\nbuf2 %x\nbuf3 %x\n", buf, buf2, buf3)
-	// fmt.Println("passIntr", passInt, "intr", intr, "errInt", errInt, "timInt", timInt /*"state", state*/)
 	return nil
 }
 
