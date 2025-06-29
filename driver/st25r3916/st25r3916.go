@@ -55,7 +55,7 @@ type interrupts struct {
 }
 
 const (
-	// General defTimeout to guard for hangs, excessive
+	// General timeout to guard against hangs, excessive
 	// receive times etc.
 	defTimeout = 500 * time.Millisecond
 
@@ -201,7 +201,8 @@ func (d *Device) Listen(timeout time.Duration) error {
 		// 0x08, uid[0], uid[1], uid[2], 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		0x08, 0x01, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		// ATQA.
-		0x04, 0x00,
+		// 0x04, 0x00,
+		0x04, 0x03, // NTAG 424
 		// SAK1, SAK2, SAK3.
 		sakT4A, sakT4A, sakT4A,
 	}
@@ -245,8 +246,13 @@ func (d *Device) Listen(timeout time.Duration) error {
 	// // page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
 	// page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20}
 	// page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
-	// ATS := []byte{0x05, 0x78, 0x00, 0x80, 0x00}
+	// NTAG424
+	// ATS := []byte{0x06, 0x77, 0x77, 0x71, 0x02, 0x80}
+	// Original
 	ATS := []byte{0x06, 0x75, 0x77, 0x81, 0x02, 0x80}
+	// Optimized 2
+	// ATS := []byte{0x05, 0x78, 0x00, 0x80, 0x00}
+	// ATS := []byte{0x05, 0x78, 0x00, 0x81, 0x00}
 	mem := []byte{
 		0x04, 0xf7, 0x73, 0x08, 0x7c, 0x8f, 0x61, 0x81, 0x13, 0x48, 0x00, 0x00, 0xe1, 0x10, 0x3e, 0x00,
 		// page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x62, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x2e, 0x6f}
@@ -306,8 +312,12 @@ func (d *Device) Listen(timeout time.Duration) error {
 	// ack := []byte{T2T_WRITE_ACK}
 	nwrites, nreads, ncmds := 0, 0, 0
 	writes := make([]byte, 0, 1000)
+	sep := []byte{0xde, 0xad, 0xbe, 0xef}
 	defer func() {
-		dbgf("...done. stats nwrites %d nreads %d ncmds %d cmds %x", nwrites, nreads, ncmds, writes)
+		dbgf("...done. stats nwrites %d nreads %d ncmds %d", nwrites, nreads, ncmds)
+		for _, msg := range bytes.Split(writes, sep) {
+			dbgf("%x", msg)
+		}
 	}()
 	mask := interrupts{
 		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
@@ -335,7 +345,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 			return io.ErrUnexpectedEOF
 		}
 		ncmds++
-		writes = append(writes, 0xde, 0xad, 0xbe, 0xef)
+		writes = append(writes, sep...)
 		writes = append(writes, buf...)
 		cmd := buf[0]
 		buf = buf[1:]
@@ -351,6 +361,8 @@ func (d *Device) Listen(timeout time.Duration) error {
 			// if err := d.writeReg(regAuxDef, 0b1<<no_crc_rx); err != nil {
 			// 	return fmt.Errorf("st25r3916: listen: %w", err)
 			// }
+			writes = append(writes, sep...)
+			writes = append(writes, resp...)
 			if _, err := d.Write(resp); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
@@ -366,7 +378,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 				resp = append(resp, T4T_NDEF_ACK...)
 			case bytes.Equal(buf, T4T_NDEF_SELECT_CAPDU2) ||
 				bytes.Equal(buf, []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}):
-				resp = append(resp, 0x6A, 0x82)
+				resp = append(resp, 0x6A, 0x82) // Not found.
 			case bytes.Equal(buf, T4T_NDEF_CC_SELECT_CAPDU):
 				//  ||
 				// bytes.Equal(buf, T4T_NDEF_CC_SELECT_CAPDU2):
@@ -381,7 +393,9 @@ func (d *Device) Listen(timeout time.Duration) error {
 				resp = append(resp, 0x00, 0x14) // File length.
 				resp = append(resp, T4T_NDEF_ACK...)
 			case bytes.Equal(buf, T4T_NDEF_FILE_READ2_CAPDU):
-				resp = append(resp, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20,
+				// resp = append(resp, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20,
+				// 	0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f)
+				resp = append(resp, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x62, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x2e, 0x6f,
 					0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f)
 				resp = append(resp, T4T_NDEF_ACK...)
 			case bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x00, 0x02, 0x00, 0x00}): // T4T_Update_Binary
@@ -397,7 +411,8 @@ func (d *Device) Listen(timeout time.Duration) error {
 				resp = append(resp, T4T_NDEF_ACK...)
 			default:
 				dbgf("C-APDU: %x", buf)
-				return fmt.Errorf("st25r3916: listen: unknown C-APDU")
+				continue
+				// return fmt.Errorf("st25r3916: listen: unknown C-APDU")
 			}
 		case SLP_REQ:
 			if len(buf) < 1 || buf[0] != 0 {
@@ -439,8 +454,11 @@ func (d *Device) Listen(timeout time.Duration) error {
 		// 	// fmt.Println(start, buf)
 		// 	nwrites++
 		default:
-			return fmt.Errorf("st25r3916: listen: unknown type 4a command: %x/%x", cmd, buf)
+			continue
+			// return fmt.Errorf("st25r3916: listen: unknown type 4a command: %x/%x", cmd, buf)
 		}
+		writes = append(writes, sep...)
+		writes = append(writes, resp...)
 		if _, err := d.Write(resp); err != nil {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
