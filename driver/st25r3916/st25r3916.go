@@ -175,7 +175,6 @@ func dbgf(f string, args ...any) {
 
 func (d *Device) Listen(timeout time.Duration) error {
 	dbg("listen...")
-	defer dbg("...done listen")
 	// Notes:
 	// RATS/ATS response: search for RFAL_ISODEP_CMD_RATS
 	//   - check DID == 0?
@@ -199,7 +198,8 @@ func (d *Device) Listen(timeout time.Duration) error {
 	req := []byte{
 		modeFIFO | loadPTMemory,
 		// UID.
-		0x08, uid[0], uid[1], uid[2], 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		// 0x08, uid[0], uid[1], uid[2], 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x08, 0x01, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		// ATQA.
 		0x04, 0x00,
 		// SAK1, SAK2, SAK3.
@@ -277,11 +277,14 @@ func (d *Device) Listen(timeout time.Duration) error {
 	T4T_NDEF_SELECT_CAPDU2 := []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00, 0x00}
 	T4T_NDEF_ACK := []byte{0x90, 0x00}
 	T4T_NDEF_CC_SELECT_CAPDU := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0xe1, 0x03}
-	T4T_NDEF_CC_SELECT_CAPDU2 := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0x01, 0x00}
+	// T4T_NDEF_CC_SELECT_CAPDU2 := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0x01, 0x00}
 	T4T_NDEF_CC_READ_CAPDU := []byte{0x00, 0xb0, 0x00, 0x00, 0x0f}
+	T4T_NDEF_FILE_SELECT_CAPDU := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0xe1, 0x04}
+	T4T_NDEF_FILE_READ_CAPDU := []byte{0x00, 0xb0, 0x00, 0x00, 0x02}
+	T4T_NDEF_FILE_READ2_CAPDU := []byte{0x00, 0xb0, 0x00, 0x02, 0x14}
 	const T4T_MAPPING_VERSION = 0x20
 	// Table 5.
-	bo := binary.LittleEndian
+	bo := binary.BigEndian
 	cc := make([]byte, 0, 15)
 	const ccSize = 15
 	cc = bo.AppendUint16(cc, ccSize) // Container size
@@ -292,7 +295,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 	// Control block TLV. Section 5.1.2.1.
 	cc = append(cc, 0x04)
 	cc = append(cc, 0x06)
-	cc = bo.AppendUint16(cc, 0x0001) // File identifier.
+	cc = bo.AppendUint16(cc, 0xe104) // File identifier.
 	cc = bo.AppendUint16(cc, 500)    // Maximum NDEF size.
 	cc = append(cc, 0x00)            // Read allowed.
 	cc = append(cc, 0x00)            // Write allowed.
@@ -301,11 +304,10 @@ func (d *Device) Listen(timeout time.Duration) error {
 	}
 	// dbgf("CC: %x", cc)
 	// ack := []byte{T2T_WRITE_ACK}
-	s_deselect := []byte{ISODEP_DESELECT}
 	nwrites, nreads, ncmds := 0, 0, 0
-	writes := make([]int, 0, 100)
+	writes := make([]byte, 0, 1000)
 	defer func() {
-		dbgf("stats nwrites %d nreads %d ncmds %d cmds %x", nwrites, nreads, ncmds, writes)
+		dbgf("...done. stats nwrites %d nreads %d ncmds %d cmds %x", nwrites, nreads, ncmds, writes)
 	}()
 	mask := interrupts{
 		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
@@ -320,6 +322,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 	if _, err := d.Write(nil); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
+	// dbgf("cc: %x", cc)
 	// Initialize I-block to 1.
 	block := byte(0b1)
 	for {
@@ -332,23 +335,23 @@ func (d *Device) Listen(timeout time.Duration) error {
 			return io.ErrUnexpectedEOF
 		}
 		ncmds++
+		writes = append(writes, 0xde, 0xad, 0xbe, 0xef)
+		writes = append(writes, buf...)
 		cmd := buf[0]
 		buf = buf[1:]
-		writes = append(writes, int(cmd))
+		resp := buf2[:0]
 		switch cmd {
 		case T4T_RATS:
-			if _, err := d.Write(ATS); err != nil {
-				return fmt.Errorf("st25r3916: listen: %w", err)
-			}
+			resp = append(resp, ATS...)
 		case ISODEP_DESELECT:
 			if len(buf) != 0 {
 				return fmt.Errorf("st25r3916: listen: unsupported S-block", err)
 			}
-			block = 1 - block
+			resp = append(resp, ISODEP_DESELECT|block)
 			// if err := d.writeReg(regAuxDef, 0b1<<no_crc_rx); err != nil {
 			// 	return fmt.Errorf("st25r3916: listen: %w", err)
 			// }
-			if _, err := d.Write(s_deselect); err != nil {
+			if _, err := d.Write(resp); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
 			return nil
@@ -357,24 +360,44 @@ func (d *Device) Listen(timeout time.Duration) error {
 				return fmt.Errorf("st25r3916: listen: S-block too short")
 			}
 			block = 1 - block
-			resp := buf2[:0]
 			resp = append(resp, I_BLOCK|block)
 			switch {
-			case bytes.Equal(buf, T4T_NDEF_SELECT_CAPDU) ||
-				bytes.Equal(buf, T4T_NDEF_SELECT_CAPDU2):
+			case bytes.Equal(buf, T4T_NDEF_SELECT_CAPDU):
 				resp = append(resp, T4T_NDEF_ACK...)
-			case bytes.Equal(buf, T4T_NDEF_CC_SELECT_CAPDU) ||
-				bytes.Equal(buf, T4T_NDEF_CC_SELECT_CAPDU2):
+			case bytes.Equal(buf, T4T_NDEF_SELECT_CAPDU2) ||
+				bytes.Equal(buf, []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}):
+				resp = append(resp, 0x6A, 0x82)
+			case bytes.Equal(buf, T4T_NDEF_CC_SELECT_CAPDU):
+				//  ||
+				// bytes.Equal(buf, T4T_NDEF_CC_SELECT_CAPDU2):
 				resp = append(resp, T4T_NDEF_ACK...)
 			case bytes.Equal(buf, T4T_NDEF_CC_READ_CAPDU):
 				resp = append(resp, cc...)
 				resp = append(resp, T4T_NDEF_ACK...)
+			case bytes.Equal(buf, T4T_NDEF_FILE_SELECT_CAPDU):
+				resp = append(resp, T4T_NDEF_ACK...)
+			case bytes.Equal(buf, T4T_NDEF_FILE_READ_CAPDU):
+				// resp = append(resp, 0x00, 0x03) // File length.
+				resp = append(resp, 0x00, 0x14) // File length.
+				resp = append(resp, T4T_NDEF_ACK...)
+			case bytes.Equal(buf, T4T_NDEF_FILE_READ2_CAPDU):
+				resp = append(resp, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20,
+					0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f)
+				resp = append(resp, T4T_NDEF_ACK...)
+			case bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x00, 0x02, 0x00, 0x00}): // T4T_Update_Binary
+				// Write length = 0
+				resp = append(resp, T4T_NDEF_ACK...)
+			case bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x02, 0x0d, 0xd1, 0x01, 0x09, 0x54, 0x02, 0x65, 0x6e, 0x62, 0x6f, 0x69, 0x6e, 0x67, 0x21}) ||
+				bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x02, 0x13, 0xd1, 0x01, 0x0f, 0x54, 0x02, 0x65, 0x6e, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21}): // T4T_Update_Binary
+				// Write data
+				resp = append(resp, T4T_NDEF_ACK...)
+			case bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x00, 0x02, 0x00, 0x0d}) ||
+				bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x00, 0x02, 0x00, 0x13}):
+				// Write length = 0x0d
+				resp = append(resp, T4T_NDEF_ACK...)
 			default:
 				dbgf("C-APDU: %x", buf)
 				return fmt.Errorf("st25r3916: listen: unknown C-APDU")
-			}
-			if _, err := d.Write(resp); err != nil {
-				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
 		case SLP_REQ:
 			if len(buf) < 1 || buf[0] != 0 {
@@ -417,6 +440,9 @@ func (d *Device) Listen(timeout time.Duration) error {
 		// 	nwrites++
 		default:
 			return fmt.Errorf("st25r3916: listen: unknown type 4a command: %x/%x", cmd, buf)
+		}
+		if _, err := d.Write(resp); err != nil {
+			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
 	}
 	return nil
