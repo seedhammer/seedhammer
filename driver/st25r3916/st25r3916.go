@@ -218,8 +218,8 @@ func (d *Device) Listen(timeout time.Duration) error {
 	if err := d.enablePassiveNFCA(true); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	// Set listen, iso-14443a mode.
-	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
+	// Set listen, iso-14443a mode, bit rate detection.
+	if err := d.writeReg(regModeDef, 0b1<<targ|0b1<<om3|omISO14443A); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	d.prot = ISO14443a
@@ -1037,9 +1037,13 @@ const (
 	slow_up    = 0
 	io_drv_lvl = 2
 
-	// Mode definition bits.
-	omISO14443A = 0b0001 << 3
-	omISO15693  = 0b1110 << 3 // Sub-carrier stream mode.
+	// Mode definition bits, table 22, 23, 24.
+	om0         = 3
+	om1         = 4
+	om2         = 5
+	om3         = 6
+	omISO14443A = 0b1 << om0
+	omISO15693  = 0b1<<om1 | 0b1<<om2 | 0b1<<om3 // Sub-carrier stream mode.
 	targ        = 7
 
 	// Stream mode definition bits.
