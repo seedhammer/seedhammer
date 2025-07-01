@@ -309,18 +309,6 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 	writes := make([]byte, 0, 1000)
 	dirs := make([]bool, 0, 100)
 	sep := []byte{0xde, 0xad, 0xbe, 0xef}
-	defer func() {
-		dbgf("...done. stats nwrites %d nreads %d ncmds %d", nwrites, nreads, ncmds)
-		if len(writes) > 0 {
-			for i, msg := range bytes.Split(writes, sep) {
-				unit := "Tag      "
-				if dirs[i] {
-					unit = "NFC Tools"
-				}
-				dbgf("%s: %x", unit, msg)
-			}
-		}
-	}()
 	if err := d.prepareRead(); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
@@ -333,15 +321,22 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 	// Initialize I-block number to 1 (13.2.4.2).
 	block := byte(0b1)
 	extField := false
+	defer func() {
+		dbgf("...done. stats nwrites %d nreads %d ncmds %d extField %v", nwrites, nreads, ncmds, extField)
+		if len(writes) > 0 {
+			for i, msg := range bytes.Split(writes, sep) {
+				unit := "Tag      "
+				if dirs[i] {
+					unit = "NFC Tools"
+				}
+				dbgf("%s: %x", unit, msg)
+			}
+		}
+	}()
 	for {
 		intrs, err := d.waitForInterrupt(timeout, quit)
 		if err != nil {
 			return fmt.Errorf("st25r3916: listen: %w", err)
-		}
-		if !extField && intrs.Timer&(0b1<<i_eof) != 0 {
-			// Ignore field off interrupts while the field has
-			// not yet been detected.
-			continue
 		}
 		if intrs.Timer&(0b1<<i_eon) != 0 {
 			extField = true
@@ -351,6 +346,14 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 			if err := d.enablePassiveNFCA(false); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
+		}
+		if intrs.Timer&(0b1<<i_eof) != 0 {
+			if !extField {
+				// Ignore field off interrupts while the field has
+				// not yet been detected.
+				continue
+			}
+			return io.EOF
 		}
 		if intrs.Main&(0b1<<i_rxe) == 0 {
 			// No data available yet.
@@ -695,9 +698,6 @@ func (d *Device) waitForInterrupt(timeout time.Duration, quit <-chan struct{}) (
 			err = errors.New("collision")
 		case intrs.Timer&(0b1<<i_nre) != 0:
 			err = errors.New("response timeout")
-		case intrs.Timer&(0b1<<i_eof) != 0:
-			// Translate end of field in listen mode to EOF.
-			err = io.EOF
 		}
 		if err != nil || intrs != (interrupts{}) {
 			return intrs, err
@@ -706,7 +706,13 @@ func (d *Device) waitForInterrupt(timeout time.Duration, quit <-chan struct{}) (
 }
 
 func (d *Device) resetInterruptMask(mask interrupts) error {
-	if err := d.setInterruptMask(mask); err != nil {
+	req := d.scratch[:5]
+	req[0] = regMaskMainIntr
+	req[regMaskMainIntr-regMaskMainIntr+1] = ^mask.Main
+	req[regMaskTimerNFCIntr-regMaskMainIntr+1] = ^mask.Timer
+	req[regMaskErrorWakeupIntr-regMaskMainIntr+1] = ^mask.Error
+	req[regMaskPassiveTargIntr-regMaskMainIntr+1] = ^mask.Passive
+	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
 		return err
 	}
 	// Clear interrupt status.
@@ -716,16 +722,6 @@ func (d *Device) resetInterruptMask(mask interrupts) error {
 	}
 	_, _, err := d.interruptStatus()
 	return err
-}
-
-func (d *Device) setInterruptMask(mask interrupts) error {
-	req := d.scratch[:5]
-	req[0] = regMaskMainIntr
-	req[regMaskMainIntr-regMaskMainIntr+1] = ^mask.Main
-	req[regMaskTimerNFCIntr-regMaskMainIntr+1] = ^mask.Timer
-	req[regMaskErrorWakeupIntr-regMaskMainIntr+1] = ^mask.Error
-	req[regMaskPassiveTargIntr-regMaskMainIntr+1] = ^mask.Passive
-	return d.Bus.Tx(i2cAddr, req, nil)
 }
 
 func (d *Device) interruptStatus() (intrs interrupts, mask interrupts, err error) {
