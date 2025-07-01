@@ -57,7 +57,7 @@ type interrupts struct {
 const (
 	// General timeout to guard against hangs, excessive
 	// receive times etc.
-	defTimeout = 500 * time.Millisecond
+	defTimeout = 200 * time.Millisecond
 
 	// Card detection thresholds.
 	ampSens   = 2
@@ -332,19 +332,20 @@ func (d *Device) Listen(timeout time.Duration) error {
 	}()
 	mask := interrupts{
 		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
-		// Timer:   0b1 << i_eon,
+		// Timer: 0b1 << i_eon,
 	}
 	if _, err := d.commandAndWait(cmdGotoSense, mask, timeout); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	if err := d.prepareRead(); err != nil {
+	if err := d.prepareRead(interrupts{}); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	// dbgf("cc: %x", cc)
 	// Initialize I-block to 1.
 	block := byte(0b1)
 	for {
-		n, err := d.Read(buf)
+		n, err := d.read(buf, timeout)
+		timeout = defTimeout
 		buf := buf[:n]
 		if err != nil && err != io.EOF {
 			return fmt.Errorf("st25r3916: listen: %w", err)
@@ -554,7 +555,7 @@ func (d *Device) RadioOn(prot Protocol) error {
 	return nil
 }
 
-func (d *Device) prepareRead() error {
+func (d *Device) prepareRead(extraMask interrupts) error {
 	d.eof = false
 	d.excludeCRC = true
 	if err := d.command(cmdStopAll); err != nil {
@@ -567,12 +568,22 @@ func (d *Device) prepareRead() error {
 		Main:  0b1 << i_rxe,
 		Timer: 0b1 << i_nre,
 		Error: 0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
-	}
+	}.Union(extraMask)
 	return d.setInterruptMask(mask)
 }
 
+func (i interrupts) Union(i2 interrupts) interrupts {
+	return interrupts{
+		Main:    i.Main | i2.Main,
+		Timer:   i.Timer | i2.Timer,
+		Error:   i.Error | i2.Error,
+		Passive: i.Passive | i2.Passive,
+	}
+}
+
 func (d *Device) Write(tx []byte) (int, error) {
-	if err := d.prepareRead(); err != nil {
+	// Prepare for reading, and listen for loss of external field.
+	if err := d.prepareRead(interrupts{Timer: 0b1 << i_eof}); err != nil {
 		return 0, fmt.Errorf("st25r3916: write: %w", err)
 	}
 	var transmitCmd byte
@@ -668,6 +679,9 @@ func (d *Device) waitForInterrupt(timeout time.Duration, quit <-chan struct{}) (
 			err = errors.New("collision")
 		case intrs.Timer&(0b1<<i_nre) != 0:
 			err = errors.New("response timeout")
+		case intrs.Timer&(0b1<<i_eof) != 0:
+			// Translate end of field in listen mode to EOF.
+			err = io.EOF
 		}
 		if err != nil || intrs != (interrupts{}) {
 			return intrs, err
