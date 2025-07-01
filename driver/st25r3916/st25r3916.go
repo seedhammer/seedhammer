@@ -69,6 +69,13 @@ const (
 	phaseSens = 2
 )
 
+var readMask = interrupts{
+	Main:    0b1 << i_rxe,
+	Timer:   0b1 << i_nre,
+	Error:   0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
+	Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
+}
+
 func (d *Device) Configure() error {
 	if d.timer == nil {
 		d.timer = time.NewTimer(0)
@@ -151,7 +158,7 @@ func (d *Device) enable() error {
 		return nil
 	}
 	mask := interrupts{Main: 0b1 << i_osc}
-	if err := d.setInterruptMask(mask); err != nil {
+	if err := d.resetInterruptMask(mask); err != nil {
 		return err
 	}
 	// Start oscillator.
@@ -179,6 +186,8 @@ func dbgf(f string, args ...any) {
 }
 
 func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
+	dbg("listen...")
+
 	// Generate random 4-byte UID, starting with 0x08 to indicate
 	// it is dynamically generated.
 	uid := make([]byte, 4)
@@ -229,7 +238,7 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 			0b1<<5 | // Include TB(1).
 			0b1<<6 | // Include TC(1).
 			0x8 // FSCI (64 byte frame size)
-		ATS_TA1 = 0x00   // Only 106kb/s bit rate.
+		ATS_TA1 = 0x00   // Bit rate 106kb/s only.
 		ATS_TB1 = 8<<4 | // FWI = FWImax (~77ms)
 			0 // SFGT = 0 (no guard time)
 		ATS_TC1 = 0 // No support for NAD nor DID.
@@ -241,7 +250,6 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 		ATS_TB1,
 		ATS_TC1,
 	}
-	// ATS := []byte{0x05, 0x78, 0x00, 0x81, 0x00}
 	mem := []byte{
 		0x04, 0xf7, 0x73, 0x08, 0x7c, 0x8f, 0x61, 0x81, 0x13, 0x48, 0x00, 0x00, 0xe1, 0x10, 0x3e, 0x00,
 		// page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x62, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x2e, 0x6f}
@@ -313,17 +321,30 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 			}
 		}
 	}()
-	if err := d.prepareRead(interrupts{}); err != nil {
+	if err := d.prepareRead(); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
+	mask := readMask.Union(interrupts{
+		Timer: 0b1<<i_eof | 0b1<<i_eon,
+	})
+	if err := d.resetInterruptMask(mask); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	// Initialize I-block number to 1 (13.2.4.2).
 	block := byte(0b1)
+	extField := false
 	for {
 		intrs, err := d.waitForInterrupt(timeout, quit)
 		if err != nil {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
+		if !extField && intrs.Timer&(0b1<<i_eof) != 0 {
+			// Ignore field off interrupts while the field has
+			// not yet been detected.
+			continue
+		}
 		if intrs.Timer&(0b1<<i_eon) != 0 {
+			extField = true
 			timeout = fieldOffTimeout
 		}
 		if intrs.Passive&(0b1<<i_wu_a_x|0b1<<i_wu_a) != 0 {
@@ -370,7 +391,7 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 			dirs = append(dirs, false)
 			writes = append(writes, sep...)
 			writes = append(writes, resp...)
-			if _, err := d.Write(resp); err != nil {
+			if _, err := d.write(resp); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
 			continue
@@ -473,7 +494,7 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 		dirs = append(dirs, false)
 		writes = append(writes, sep...)
 		writes = append(writes, resp...)
-		if _, err := d.Write(resp); err != nil {
+		if _, err := d.write(resp); err != nil {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
 	}
@@ -517,7 +538,7 @@ func (d *Device) RadioOn(prot Protocol) error {
 		mask := interrupts{
 			Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph,
 		}
-		if err := d.setInterruptMask(mask); err != nil {
+		if err := d.resetInterruptMask(mask); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
 		if err := d.writeRegs(regOpCtrl, 0b1<<wu); err != nil {
@@ -554,21 +575,12 @@ func (d *Device) RadioOn(prot Protocol) error {
 	return nil
 }
 
-func (d *Device) prepareRead(extraMask interrupts) error {
+func (d *Device) prepareRead() error {
 	d.excludeCRC = true
 	if err := d.command(cmdStopAll); err != nil {
 		return err
 	}
-	if err := d.command(cmdResetRXGain); err != nil {
-		return err
-	}
-	mask := interrupts{
-		Main:    0b1 << i_rxe,
-		Timer:   0b1<<i_nre | 0b1<<i_eon,
-		Error:   0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
-		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
-	}.Union(extraMask)
-	return d.setInterruptMask(mask)
+	return d.command(cmdResetRXGain)
 }
 
 func (i interrupts) Union(i2 interrupts) interrupts {
@@ -582,13 +594,20 @@ func (i interrupts) Union(i2 interrupts) interrupts {
 
 func (d *Device) Write(tx []byte) (int, error) {
 	d.eof = false
-	return d.write(tx)
+	if err := d.resetInterruptMask(readMask); err != nil {
+		return 0, fmt.Errorf("st25r3916: write: %w", err)
+	}
+	n, err := d.write(tx)
+	if err != nil {
+		err = fmt.Errorf("st25r3916: write: %w", err)
+	}
+	return n, err
 }
 
 func (d *Device) write(tx []byte) (int, error) {
 	// Prepare for reading, and listen for loss of external field.
-	if err := d.prepareRead(interrupts{Timer: 0b1 << i_eof}); err != nil {
-		return 0, fmt.Errorf("st25r3916: write: %w", err)
+	if err := d.prepareRead(); err != nil {
+		return 0, err
 	}
 	var transmitCmd byte
 	var bits byte
@@ -615,7 +634,7 @@ func (d *Device) write(tx []byte) (int, error) {
 			conf = 0b1 << antcl
 		}
 		if err := d.writeReg(regISO14443AConf, conf); err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+			return 0, err
 		}
 	case ISO15693:
 		d.excludeCRC = false
@@ -623,11 +642,11 @@ func (d *Device) write(tx []byte) (int, error) {
 	}
 	if transmitCmd != cmdTransmitREQA {
 		if err := d.writeFIFO(tx, bits); err != nil {
-			return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+			return 0, err
 		}
 	}
 	if err := d.command(transmitCmd); err != nil {
-		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+		return 0, err
 	}
 	return len(tx), nil
 }
@@ -686,15 +705,20 @@ func (d *Device) waitForInterrupt(timeout time.Duration, quit <-chan struct{}) (
 	}
 }
 
-func (d *Device) setInterruptMask(mask interrupts) error {
-	// Clear interrupt status.
-	if _, _, err := d.interruptStatus(); err != nil {
+func (d *Device) resetInterruptMask(mask interrupts) error {
+	if err := d.setInterruptMask(mask); err != nil {
 		return err
 	}
+	// Clear interrupt status.
 	select {
 	case <-d.interrupts:
 	default:
 	}
+	_, _, err := d.interruptStatus()
+	return err
+}
+
+func (d *Device) setInterruptMask(mask interrupts) error {
 	req := d.scratch[:5]
 	req[0] = regMaskMainIntr
 	req[regMaskMainIntr-regMaskMainIntr+1] = ^mask.Main
@@ -801,7 +825,10 @@ func (d *Device) Read(buf []byte) (int, error) {
 	}
 	n, err := d.read(buf)
 	if ierr != nil {
-		return n, ierr
+		err = ierr
+	}
+	if err != nil && err != io.EOF {
+		err = fmt.Errorf("st25r3916: read: %w", err)
 	}
 	return n, err
 }
@@ -822,12 +849,12 @@ func (d *Device) read(buf []byte) (int, error) {
 	req = d.scratch[:1]
 	req[0] = modeFIFO | readFIFO
 	if err := d.Bus.Tx(i2cAddr, req, buf[:n]); err != nil {
-		return 0, fmt.Errorf("st25r3916: read: %w", err)
+		return 0, err
 	}
 	var err error
 	switch {
 	case overflow:
-		err = errors.New("st25r3916: read: FIFO overflow")
+		err = errors.New("FIFO overflow")
 	case n == fifoLen:
 		err = io.EOF
 	}
@@ -912,7 +939,7 @@ func (d *Device) writeReg(reg, val byte) error {
 }
 
 func (d *Device) commandAndWait(cmd byte, mask interrupts, timeout time.Duration) (interrupts, error) {
-	if err := d.setInterruptMask(mask); err != nil {
+	if err := d.resetInterruptMask(mask); err != nil {
 		return interrupts{}, err
 	}
 	if err := d.command(cmd); err != nil {
