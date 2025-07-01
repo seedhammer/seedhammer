@@ -218,8 +218,8 @@ func (d *Device) Listen(timeout time.Duration) error {
 	if err := d.enablePassiveNFCA(true); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	// Set listen, iso-14443a mode, bit rate detection.
-	if err := d.writeReg(regModeDef, 0b1<<targ|0b1<<om3|omISO14443A); err != nil {
+	// Set listen, iso-14443a mode.
+	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	d.prot = ISO14443a
