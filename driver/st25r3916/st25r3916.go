@@ -186,8 +186,6 @@ func (d *Device) Listen(timeout time.Duration) error {
 	//   - Check FSDI (maximum data size)
 	//   - Synthesize ATS response.
 
-	/* Compute ATS                                                                 */
-
 	// Generate random 4-byte UID, starting with 0x08 to indicate
 	// it is dynamically generated.
 	uid := make([]byte, 4)
@@ -202,8 +200,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 	// Load PT memory with NFC-A card emulation responses.
 	req := []byte{
 		modeFIFO | loadPTMemory,
-		// Specify UID. The 0x08 prefix denotes dynamically generated.
-		0x08, uid[0], uid[1], uid[2],
+		0x08, uid[0], uid[1], uid[2], // UID.
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Unused UID storage.
 		// 0x08, 0x01, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		// ATQA.
@@ -215,10 +212,6 @@ func (d *Device) Listen(timeout time.Duration) error {
 	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	// // Set 7-byte UID mode.
-	// if err := d.writeReg(regAuxDef, 0b01<<nfc_id); err != nil {
-	// 	return fmt.Errorf("st25r3916: listen: %w", err)
-	// }
 	// Enable automatic handling of NFC-A anti-collision selection.
 	if err := d.enablePassiveNFCA(true); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
@@ -231,21 +224,6 @@ func (d *Device) Listen(timeout time.Duration) error {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	d.prot = ISO14443a
-	// Start sensing.
-	// if err := d.command(cmdGotoSense); err != nil {
-	// 	return fmt.Errorf("st25r3916: listen: %w", err)
-	// }
-	defer func() {
-		err := (func() error {
-			if err := d.command(cmdStopAll); err != nil {
-				return fmt.Errorf("st25r3916: radio: %w", err)
-			}
-			return nil
-		})()
-		if err != nil {
-			panic(err)
-		}
-	}()
 	// oldstate := byte(0)
 	buf := make([]byte, 100)
 	buf2 := make([]byte, 100)
@@ -318,8 +296,6 @@ func (d *Device) Listen(timeout time.Duration) error {
 	if len(cc) != ccSize {
 		panic("wrong cc size")
 	}
-	// dbgf("CC: %x", cc)
-	// ack := []byte{T2T_WRITE_ACK}
 	nwrites, nreads, ncmds := 0, 0, 0
 	writes := make([]byte, 0, 1000)
 	dirs := make([]bool, 0, 100)
@@ -336,18 +312,10 @@ func (d *Device) Listen(timeout time.Duration) error {
 			}
 		}
 	}()
-	// mask := interrupts{
-	// 	Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
-	// 	// Timer: 0b1 << i_eon,
-	// }
-	// if _, err := d.commandAndWait(cmdGotoSense, mask, timeout); err != nil {
-	// 	return fmt.Errorf("st25r3916: listen: %w", err)
-	// }
 	if err := d.prepareRead(interrupts{}); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	// dbgf("cc: %x", cc)
-	// Initialize I-block to 1.
+	// Initialize I-block number to 1 (13.2.4.2).
 	block := byte(0b1)
 	for {
 		intrs, err := d.waitForInterrupt(timeout, nil)
@@ -625,26 +593,19 @@ func (d *Device) write(tx []byte) (int, error) {
 	var bits byte
 	switch d.prot {
 	case ISO14443a:
-		const (
-			REQA = 0x26
-			// ACK  = 0x0a
-		)
+		const REQA = 0x26
 		var conf byte
 		transmitCmd = byte(cmdTransmitWithCRC)
 		// Simple detection of anti-collision frame.
 		anticol := len(tx) == 2 && tx[1] == 0x20 &&
 			(tx[0] == casLevel1 || tx[0] == casLevel2 || tx[0] == casLevel3)
 		reqa := len(tx) == 1 && tx[0] == REQA
-		// ack := len(tx) == 1 && tx[0] == ACK
 		switch {
 		case anticol, reqa:
 			d.excludeCRC = false
 		}
-		// if ack {
-		// 	bits = 4
-		// }
 		switch {
-		case anticol /* || ack */ :
+		case anticol:
 			transmitCmd = cmdTransmitWithoutCRC
 		case reqa:
 			transmitCmd = cmdTransmitREQA
