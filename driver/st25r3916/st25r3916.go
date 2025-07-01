@@ -178,7 +178,7 @@ func dbgf(f string, args ...any) {
 	fmt.Printf(f+"\n", args...)
 }
 
-func (d *Device) Listen(timeout time.Duration) error {
+func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 	dbg("listen...")
 	// Notes:
 	// RATS/ATS response: search for RFAL_ISODEP_CMD_RATS
@@ -318,7 +318,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 	// Initialize I-block number to 1 (13.2.4.2).
 	block := byte(0b1)
 	for {
-		intrs, err := d.waitForInterrupt(timeout, nil)
+		intrs, err := d.waitForInterrupt(timeout, quit)
 		if err != nil {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
