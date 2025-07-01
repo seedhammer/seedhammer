@@ -59,6 +59,11 @@ const (
 	// receive times etc.
 	defTimeout = 200 * time.Millisecond
 
+	// Once a field is on, we wait until it is off again.
+	// However, leave a long timeout in case the off detection
+	// somehow fails.
+	fieldOffTimeout = 10 * time.Second
+
 	// Card detection thresholds.
 	ampSens   = 2
 	phaseSens = 2
@@ -89,8 +94,8 @@ func (d *Device) Configure() error {
 		regIOConf1, 0b11<<out_cl|0b1<<lf_clk_off|0b01<<i2c_thd, // Disable the MCU_CLK pin, 400 kHz i2c.
 		regIOConf2, 0b1<<io_drv_lvl, // Increase IO drive strength, as recommended in table 20.
 		regResAMMod, 0b1<<fa3_f|0<<md_res, // Minimum non-overlap.
-		regExtFieldAct, 0b001<<trg_l|0b0001<<rfe_t, // Lower activation threshold.
-		regExtFieldDeact, 0b000<<trg_ld|0b000<<rfe_td, // Lower deactivation threshold.
+		// regExtFieldAct, 0b001<<trg_l|0b0001<<rfe_t, // Lower activation threshold.
+		// regExtFieldDeact, 0b000<<trg_ld|0b000<<rfe_td, // Lower deactivation threshold.
 		regPassiveTargetMod, 0x5f, // Reduce RFO resistance in modulated state.
 		regEMDSupConf, 0b1<<rx_start_emv, // Enable start on first 4 bits.
 		regStreamModeDef, modeISO15693, // Setup streaming mode for iso15693.
@@ -218,11 +223,11 @@ func (d *Device) Listen(timeout time.Duration) error {
 	if err := d.enablePassiveNFCA(true); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	// Set listen, iso-14443a mode.
-	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
+	if err := d.command(cmdGotoSense); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	if err := d.command(cmdGotoSense); err != nil {
+	// Set listen, iso-14443a mode.
+	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	d.prot = ISO14443a
@@ -338,7 +343,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 	// if _, err := d.commandAndWait(cmdGotoSense, mask, timeout); err != nil {
 	// 	return fmt.Errorf("st25r3916: listen: %w", err)
 	// }
-	if err := d.prepareRead(interrupts{Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a}); err != nil {
+	if err := d.prepareRead(interrupts{}); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	// dbgf("cc: %x", cc)
@@ -349,15 +354,17 @@ func (d *Device) Listen(timeout time.Duration) error {
 		if err != nil {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
+		if intrs.Timer&(0b1<<i_eon) != 0 {
+			timeout = fieldOffTimeout
+		}
 		if intrs.Passive&(0b1<<i_wu_a_x|0b1<<i_wu_a) != 0 {
-			timeout = defTimeout
 			if err := d.enablePassiveNFCA(false); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
-			if intrs.Main&(0b1<<i_rxe) == 0 {
-				// No data available yet.
-				continue
-			}
+		}
+		if intrs.Main&(0b1<<i_rxe) == 0 {
+			// No data available yet.
+			continue
 		}
 		n, err := d.read(buf)
 		buf := buf[:n]
@@ -383,6 +390,13 @@ func (d *Device) Listen(timeout time.Duration) error {
 			if len(buf) != 0 {
 				return fmt.Errorf("st25r3916: listen: unsupported S-block", err)
 			}
+			// Go to sleep, waiting for WUPA.
+			if err := d.enablePassiveNFCA(true); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+			if err := d.command(cmdGotoSleep); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
 			resp = append(resp, ISODEP_DESELECT|block)
 			dirs = append(dirs, false)
 			writes = append(writes, sep...)
@@ -390,7 +404,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 			if _, err := d.Write(resp); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
-			return nil
+			continue
 		case I_BLOCK, I_BLOCK + 1:
 			if len(buf) < 4 {
 				return fmt.Errorf("st25r3916: listen: S-block too short")
@@ -441,6 +455,10 @@ func (d *Device) Listen(timeout time.Duration) error {
 		case SLP_REQ:
 			if len(buf) < 1 || buf[0] != 0 {
 				return fmt.Errorf("st25r3916: listen: unknown SLP_REQ argument: %x", buf[0])
+			}
+			// Go to sleep, waiting for WUPA.
+			if err := d.enablePassiveNFCA(true); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
 			if err := d.command(cmdGotoSleep); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
@@ -576,9 +594,10 @@ func (d *Device) prepareRead(extraMask interrupts) error {
 		return err
 	}
 	mask := interrupts{
-		Main:  0b1 << i_rxe,
-		Timer: 0b1 << i_nre,
-		Error: 0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
+		Main:    0b1 << i_rxe,
+		Timer:   0b1<<i_nre | 0b1<<i_eon,
+		Error:   0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
+		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
 	}.Union(extraMask)
 	return d.setInterruptMask(mask)
 }
