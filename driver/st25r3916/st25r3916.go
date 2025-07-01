@@ -222,6 +222,9 @@ func (d *Device) Listen(timeout time.Duration) error {
 	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
+	if err := d.command(cmdGotoSense); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
 	d.prot = ISO14443a
 	// Start sensing.
 	// if err := d.command(cmdGotoSense); err != nil {
@@ -231,9 +234,6 @@ func (d *Device) Listen(timeout time.Duration) error {
 		err := (func() error {
 			if err := d.command(cmdStopAll); err != nil {
 				return fmt.Errorf("st25r3916: radio: %w", err)
-			}
-			if err := d.command(cmdGotoSleep); err != nil {
-				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
 			return nil
 		})()
@@ -384,9 +384,6 @@ func (d *Device) Listen(timeout time.Duration) error {
 				return fmt.Errorf("st25r3916: listen: unsupported S-block", err)
 			}
 			resp = append(resp, ISODEP_DESELECT|block)
-			// if err := d.writeReg(regAuxDef, 0b1<<no_crc_rx); err != nil {
-			// 	return fmt.Errorf("st25r3916: listen: %w", err)
-			// }
 			dirs = append(dirs, false)
 			writes = append(writes, sep...)
 			writes = append(writes, resp...)
@@ -445,8 +442,10 @@ func (d *Device) Listen(timeout time.Duration) error {
 			if len(buf) < 1 || buf[0] != 0 {
 				return fmt.Errorf("st25r3916: listen: unknown SLP_REQ argument: %x", buf[0])
 			}
-			fmt.Printf("HLTA %x\n", buf)
-			return nil
+			if err := d.command(cmdGotoSleep); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+			continue
 		// case T2T_READ:
 		// 	if len(buf) == 0 {
 		// 		return io.ErrUnexpectedEOF
@@ -491,7 +490,6 @@ func (d *Device) Listen(timeout time.Duration) error {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
 	}
-	return nil
 }
 
 func (d *Device) dumpMeasurements() {
