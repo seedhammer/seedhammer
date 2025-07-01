@@ -338,15 +338,28 @@ func (d *Device) Listen(timeout time.Duration) error {
 	// if _, err := d.commandAndWait(cmdGotoSense, mask, timeout); err != nil {
 	// 	return fmt.Errorf("st25r3916: listen: %w", err)
 	// }
-	if err := d.prepareRead(interrupts{}); err != nil {
+	if err := d.prepareRead(interrupts{Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a}); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	// dbgf("cc: %x", cc)
 	// Initialize I-block to 1.
 	block := byte(0b1)
 	for {
-		n, err := d.read(buf, timeout)
-		timeout = defTimeout
+		intrs, err := d.waitForInterrupt(timeout, nil)
+		if err != nil {
+			return fmt.Errorf("st25r3916: listen: %w", err)
+		}
+		if intrs.Passive&(0b1<<i_wu_a_x|0b1<<i_wu_a) != 0 {
+			timeout = defTimeout
+			if err := d.enablePassiveNFCA(false); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+			if intrs.Main&(0b1<<i_rxe) == 0 {
+				// No data available yet.
+				continue
+			}
+		}
+		n, err := d.read(buf)
 		buf := buf[:n]
 		if err != nil && err != io.EOF {
 			return fmt.Errorf("st25r3916: listen: %w", err)
@@ -557,7 +570,6 @@ func (d *Device) RadioOn(prot Protocol) error {
 }
 
 func (d *Device) prepareRead(extraMask interrupts) error {
-	d.eof = false
 	d.excludeCRC = true
 	if err := d.command(cmdStopAll); err != nil {
 		return err
@@ -583,6 +595,11 @@ func (i interrupts) Union(i2 interrupts) interrupts {
 }
 
 func (d *Device) Write(tx []byte) (int, error) {
+	d.eof = false
+	return d.write(tx)
+}
+
+func (d *Device) write(tx []byte) (int, error) {
 	// Prepare for reading, and listen for loss of external field.
 	if err := d.prepareRead(interrupts{Timer: 0b1 << i_eof}); err != nil {
 		return 0, fmt.Errorf("st25r3916: write: %w", err)
@@ -798,15 +815,19 @@ func (d *Device) configureProtocol(prot Protocol) error {
 }
 
 func (d *Device) Read(buf []byte) (int, error) {
-	return d.read(buf, defTimeout)
-}
-
-func (d *Device) read(buf []byte, timeout time.Duration) (int, error) {
 	var ierr error
 	if !d.eof {
-		_, ierr = d.waitForInterrupt(timeout, nil)
+		_, ierr = d.waitForInterrupt(defTimeout, nil)
 		d.eof = true
 	}
+	n, err := d.read(buf)
+	if ierr != nil {
+		return n, ierr
+	}
+	return n, err
+}
+
+func (d *Device) read(buf []byte) (int, error) {
 	req, fifoStatus := d.scratch[:1], d.scratch[1:3]
 	req[0] = modeReadReg | regFIFOStatus1
 	if err := d.Bus.Tx(i2cAddr, req, fifoStatus); err != nil {
@@ -824,15 +845,14 @@ func (d *Device) read(buf []byte, timeout time.Duration) (int, error) {
 	if err := d.Bus.Tx(i2cAddr, req, buf[:n]); err != nil {
 		return 0, fmt.Errorf("st25r3916: read: %w", err)
 	}
-	if ierr == nil {
-		switch {
-		case overflow:
-			ierr = errors.New("st25r3916: read: FIFO overflow")
-		case n == fifoLen:
-			ierr = io.EOF
-		}
+	var err error
+	switch {
+	case overflow:
+		err = errors.New("st25r3916: read: FIFO overflow")
+	case n == fifoLen:
+		err = io.EOF
 	}
-	return n, ierr
+	return n, err
 }
 
 func (d *Device) writeTXLen(bytes int, bits byte) error {
