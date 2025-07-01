@@ -70,6 +70,7 @@ const (
 	LCD_TE  = machine.GPIO12
 	LCD_DC  = machine.GPIO16
 	LCD_WRX = machine.GPIO17
+	LCD_RDX = machine.GPIO11
 	LCD_DB0 = machine.GPIO18
 
 	DRV_ENABLE = machine.GPIO10
@@ -176,6 +177,10 @@ func Init() (*Platform, error) {
 	for i := range p.display.buffers {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
 	}
+
+	// LCD RDX pin unused.
+	LCD_RDX.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	LCD_RDX.High()
 
 	lcd, err := ili9488.New(LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0, LCD_TE, lcdPIO)
 	if err != nil {
