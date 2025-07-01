@@ -197,9 +197,10 @@ func (d *Device) Listen(timeout time.Duration) error {
 	// Load PT memory with NFC-A card emulation responses.
 	req := []byte{
 		modeFIFO | loadPTMemory,
-		// UID.
-		// 0x08, uid[0], uid[1], uid[2], 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x08, 0x01, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		// Specify UID. The 0x08 prefix denotes dynamically generated.
+		0x08, uid[0], uid[1], uid[2],
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Unused UID storage.
+		// 0x08, 0x01, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		// ATQA.
 		// 0x04, 0x00,
 		0x04, 0x03, // NTAG 424
@@ -330,13 +331,13 @@ func (d *Device) Listen(timeout time.Duration) error {
 			}
 		}
 	}()
-	mask := interrupts{
-		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
-		// Timer: 0b1 << i_eon,
-	}
-	if _, err := d.commandAndWait(cmdGotoSense, mask, timeout); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
+	// mask := interrupts{
+	// 	Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
+	// 	// Timer: 0b1 << i_eon,
+	// }
+	// if _, err := d.commandAndWait(cmdGotoSense, mask, timeout); err != nil {
+	// 	return fmt.Errorf("st25r3916: listen: %w", err)
+	// }
 	if err := d.prepareRead(interrupts{}); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
@@ -350,8 +351,8 @@ func (d *Device) Listen(timeout time.Duration) error {
 		if err != nil && err != io.EOF {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
-		if len(buf) < 1 {
-			return io.ErrUnexpectedEOF
+		if len(buf) == 0 {
+			return io.EOF
 		}
 		ncmds++
 		if len(writes) > 0 {
