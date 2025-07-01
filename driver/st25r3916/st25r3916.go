@@ -166,11 +166,11 @@ func (d *Device) handleInterrupt(machine.Pin) {
 }
 
 func dbg(strs ...any) {
-	log.Println(strs...)
+	fmt.Println(strs...)
 }
 
 func dbgf(f string, args ...any) {
-	log.Printf(f, args...)
+	fmt.Printf(f+"\n", args...)
 }
 
 func (d *Device) Listen(timeout time.Duration) error {
@@ -312,11 +312,18 @@ func (d *Device) Listen(timeout time.Duration) error {
 	// ack := []byte{T2T_WRITE_ACK}
 	nwrites, nreads, ncmds := 0, 0, 0
 	writes := make([]byte, 0, 1000)
+	dirs := make([]bool, 0, 100)
 	sep := []byte{0xde, 0xad, 0xbe, 0xef}
 	defer func() {
 		dbgf("...done. stats nwrites %d nreads %d ncmds %d", nwrites, nreads, ncmds)
-		for _, msg := range bytes.Split(writes, sep) {
-			dbgf("%x", msg)
+		if len(writes) > 0 {
+			for i, msg := range bytes.Split(writes, sep) {
+				unit := "Tag      "
+				if dirs[i] {
+					unit = "NFC Tools"
+				}
+				dbgf("%s: %x", unit, msg)
+			}
 		}
 	}()
 	mask := interrupts{
@@ -345,8 +352,11 @@ func (d *Device) Listen(timeout time.Duration) error {
 			return io.ErrUnexpectedEOF
 		}
 		ncmds++
-		writes = append(writes, sep...)
+		if len(writes) > 0 {
+			writes = append(writes, sep...)
+		}
 		writes = append(writes, buf...)
+		dirs = append(dirs, true)
 		cmd := buf[0]
 		buf = buf[1:]
 		resp := buf2[:0]
@@ -361,6 +371,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 			// if err := d.writeReg(regAuxDef, 0b1<<no_crc_rx); err != nil {
 			// 	return fmt.Errorf("st25r3916: listen: %w", err)
 			// }
+			dirs = append(dirs, false)
 			writes = append(writes, sep...)
 			writes = append(writes, resp...)
 			if _, err := d.Write(resp); err != nil {
@@ -457,6 +468,7 @@ func (d *Device) Listen(timeout time.Duration) error {
 			continue
 			// return fmt.Errorf("st25r3916: listen: unknown type 4a command: %x/%x", cmd, buf)
 		}
+		dirs = append(dirs, false)
 		writes = append(writes, sep...)
 		writes = append(writes, resp...)
 		if _, err := d.Write(resp); err != nil {
