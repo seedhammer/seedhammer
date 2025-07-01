@@ -213,6 +213,10 @@ func (d *Device) Listen(timeout time.Duration) error {
 	// if err := d.writeReg(regAuxDef, 0b01<<nfc_id); err != nil {
 	// 	return fmt.Errorf("st25r3916: listen: %w", err)
 	// }
+	// Enable automatic handling of NFC-A anti-collision selection.
+	if err := d.enablePassiveNFCA(true); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
 	// Set listen, iso-14443a mode.
 	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
@@ -328,15 +332,12 @@ func (d *Device) Listen(timeout time.Duration) error {
 	}()
 	mask := interrupts{
 		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
-	}
-	if err := d.enablePassiveNFCA(true); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
+		// Timer:   0b1 << i_eon,
 	}
 	if _, err := d.commandAndWait(cmdGotoSense, mask, timeout); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	// Perform dummy write to set up chip for reading.
-	if _, err := d.Write(nil); err != nil {
+	if err := d.prepareRead(); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	// dbgf("cc: %x", cc)
@@ -553,14 +554,27 @@ func (d *Device) RadioOn(prot Protocol) error {
 	return nil
 }
 
-func (d *Device) Write(tx []byte) (int, error) {
+func (d *Device) prepareRead() error {
+	d.eof = false
+	d.excludeCRC = true
 	if err := d.command(cmdStopAll); err != nil {
-		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+		return err
 	}
 	if err := d.command(cmdResetRXGain); err != nil {
-		return 0, fmt.Errorf("st25r3916: transceive: %w", err)
+		return err
 	}
-	d.excludeCRC = true
+	mask := interrupts{
+		Main:  0b1 << i_rxe,
+		Timer: 0b1 << i_nre,
+		Error: 0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
+	}
+	return d.setInterruptMask(mask)
+}
+
+func (d *Device) Write(tx []byte) (int, error) {
+	if err := d.prepareRead(); err != nil {
+		return 0, fmt.Errorf("st25r3916: write: %w", err)
+	}
 	var transmitCmd byte
 	var bits byte
 	switch d.prot {
@@ -598,18 +612,6 @@ func (d *Device) Write(tx []byte) (int, error) {
 	case ISO15693:
 		d.excludeCRC = false
 		transmitCmd = cmdTransmitWithoutCRC
-	}
-	mask := interrupts{
-		Main:  0b1 << i_rxe,
-		Timer: 0b1 << i_nre,
-		Error: 0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
-	}
-	if err := d.setInterruptMask(mask); err != nil {
-		return 0, err
-	}
-	d.eof = false
-	if len(tx) == 0 {
-		return 0, nil
 	}
 	if transmitCmd != cmdTransmitREQA {
 		if err := d.writeFIFO(tx, bits); err != nil {
