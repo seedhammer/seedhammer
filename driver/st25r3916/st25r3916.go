@@ -318,8 +318,7 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 	if err := d.resetInterruptMask(mask); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
-	// Initialize I-block number to 1 (13.2.4.2).
-	block := byte(0b1)
+	var blockNo byte
 	extField := false
 	defer func() {
 		dbgf("...done. stats nwrites %d nreads %d ncmds %d extField %v", nwrites, nreads, ncmds, extField)
@@ -343,6 +342,8 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 			timeout = fieldOffTimeout
 		}
 		if intrs.Passive&(0b1<<i_wu_a_x|0b1<<i_wu_a) != 0 {
+			// Initialize I-block number to 1 (13.2.4.2).
+			blockNo = 0b1
 			if err := d.enablePassiveNFCA(false); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
@@ -390,7 +391,7 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 			if err := d.command(cmdGotoSleep); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
-			resp = append(resp, ISODEP_DESELECT|block)
+			resp = append(resp, ISODEP_DESELECT)
 			dirs = append(dirs, false)
 			writes = append(writes, sep...)
 			writes = append(writes, resp...)
@@ -402,8 +403,8 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 			if len(buf) < 4 {
 				return fmt.Errorf("st25r3916: listen: S-block too short")
 			}
-			block = 1 - block
-			resp = append(resp, I_BLOCK|block)
+			blockNo = 1 - blockNo
+			resp = append(resp, I_BLOCK|blockNo)
 			switch {
 			case bytes.Equal(buf, T4T_NDEF_SELECT_CAPDU):
 				resp = append(resp, T4T_NDEF_ACK...)
