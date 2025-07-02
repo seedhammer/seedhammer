@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 )
 
 type Tag struct {
@@ -30,6 +31,10 @@ type Tag struct {
 	scratch      [14]byte
 }
 
+// wakeupDelay is the time for the tag to power up after
+// entering the field.
+const wakeupDelay = 5 * time.Millisecond
+
 // Open a tag and read its UID from an NFC transceiver.
 // Size is the maximum number of bytes that can be received
 // without overflowing the transceiver FIFO.
@@ -40,6 +45,7 @@ func Open(bus io.ReadWriter, size int) (*Tag, error) {
 		bus:     bus,
 		bufSize: size,
 	}
+	time.Sleep(wakeupDelay)
 	req := tag.scratch[:3]
 	const maskLength = 0
 	req[0] = flagDataRate | // High speed

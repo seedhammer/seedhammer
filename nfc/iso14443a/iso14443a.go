@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 )
 
 type Tag struct {
@@ -15,11 +16,19 @@ type Tag struct {
 	scratch [12]byte
 }
 
+// _GTa[ANALOG] is the maximum time a tag is allowed to
+// activate once in a field.
+//
+// [ANALOG]: NFC Digital Protocol Technical Specification 1.0
+// table 114.
+const _GTa = 5 * time.Millisecond
+
 func Open(d io.ReadWriter) (*Tag, error) {
 	tag := &Tag{
 		bus:  d,
 		page: memStartPage,
 	}
+	time.Sleep(_GTa)
 	if _, err := tag.reqa(); err != nil {
 		return nil, fmt.Errorf("iso14443a: %w", err)
 	}
