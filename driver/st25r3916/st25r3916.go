@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"machine"
 	"time"
 )
@@ -32,6 +31,9 @@ type Bus interface {
 	Tx(addr uint16, w, r []byte) error
 }
 
+// ErrExternalField is returned when an external field is detected.
+var ErrExternalField = errors.New("st25r3916: external field conflict")
+
 // FIFOSize is the number of bytes that can be
 // read without risking overflow
 const FIFOSize = 512 - 2 // Make room for the CRC bytes.
@@ -41,8 +43,6 @@ type Protocol int
 const (
 	ISO15693 Protocol = iota
 	ISO14443a
-	Detect
-	Listen
 )
 
 // interrupts represent a set of interrupt statuses or
@@ -101,8 +101,9 @@ func (d *Device) Configure() error {
 		regIOConf1, 0b11<<out_cl|0b1<<lf_clk_off|0b01<<i2c_thd, // Disable the MCU_CLK pin, 400 kHz i2c.
 		regIOConf2, 0b1<<io_drv_lvl, // Increase IO drive strength, as recommended in table 20.
 		regResAMMod, 0b1<<fa3_f|0<<md_res, // Minimum non-overlap.
-		// regExtFieldAct, 0b001<<trg_l|0b0001<<rfe_t, // Lower activation threshold.
-		// regExtFieldDeact, 0b000<<trg_ld|0b000<<rfe_td, // Lower deactivation threshold.
+		regFieldOnGuardTime, 0xff, // ~39ms guard time.
+		regExtFieldAct, 0b001<<trg_l|0b0001<<rfe_t, // Lower activation threshold.
+		regExtFieldDeact, 0b000<<trg_ld|0b000<<rfe_td, // Lower deactivation threshold.
 		regPassiveTargetMod, 0x5f, // Reduce RFO resistance in modulated state.
 		regEMDSupConf, 0b1<<rx_start_emv, // Enable start on first 4 bits.
 		regStreamModeDef, modeISO15693, // Setup streaming mode for iso15693.
@@ -130,6 +131,29 @@ func (d *Device) Configure() error {
 	// Then issue the adjust regulator command.
 	if _, err := d.commandAndWait(cmdAdjustRegulator, interrupts{Timer: 0b1 << i_dct}, defTimeout); err != nil {
 		return fmt.Errorf("st25r3916: configure: %w", err)
+	}
+	// Generate random 4-byte UID, starting with 0x08 to indicate
+	// it is dynamically generated.
+	uid := make([]byte, 4)
+	rng, err := machine.GetRNG()
+	if err != nil {
+		// Should never happen.
+		panic(err)
+	}
+	binary.BigEndian.PutUint32(uid, rng)
+	// SAK for NFC Type 4A (4.8.2, table 17).
+	const sakT4A = 0b0_01_00_0_00
+	// Load PT memory with NFC-A card emulation responses.
+	req := []byte{
+		modeFIFO | loadPTMemory,
+		0x08, uid[0], uid[1], uid[2], // UID.
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Unused UID storage.
+		0x04, 0x03, // Same as NTAG 424
+		// SAK1, SAK2, SAK3.
+		sakT4A, sakT4A, sakT4A,
+	}
+	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	if err := d.RadioOff(); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
@@ -185,113 +209,74 @@ func dbgf(f string, args ...any) {
 	fmt.Printf(f+"\n", args...)
 }
 
-func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
-	dbg("listen...")
+var buf = make([]byte, 100)
+var buf2 = make([]byte, 100)
 
-	// Generate random 4-byte UID, starting with 0x08 to indicate
-	// it is dynamically generated.
-	uid := make([]byte, 4)
-	rng, err := machine.GetRNG()
-	if err != nil {
-		// Should never happen.
-		panic(err)
-	}
-	binary.BigEndian.PutUint32(uid, rng)
-	// SAK for NFC Type 4A (4.8.2, table 17).
-	const sakT4A = 0b0_01_00_0_00
-	// Load PT memory with NFC-A card emulation responses.
-	req := []byte{
-		modeFIFO | loadPTMemory,
-		0x08, uid[0], uid[1], uid[2], // UID.
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Unused UID storage.
-		0x04, 0x03, // Same as NTAG 424
-		// SAK1, SAK2, SAK3.
-		sakT4A, sakT4A, sakT4A,
-	}
-	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
-	// Enable automatic handling of NFC-A anti-collision selection.
-	if err := d.enablePassiveNFCA(true); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
-	if err := d.command(cmdGotoSense); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
-	// Set listen, iso-14443a mode.
-	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
-	d.prot = ISO14443a
-	buf := make([]byte, 100)
-	buf2 := make([]byte, 100)
-	// page0 := []byte{0x04, 0xf7, 0x73, 0x08, 0x7c, 0x8f, 0x61, 0x81, 0x13, 0x48, 0x00, 0x00, 0xe1, 0x10, 0x3e, 0x00}
-	// // page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x62, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x2e, 0x6f}
-	// // page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
-	// page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20}
-	// page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
+// page0 := []byte{0x04, 0xf7, 0x73, 0x08, 0x7c, 0x8f, 0x61, 0x81, 0x13, 0x48, 0x00, 0x00, 0xe1, 0x10, 0x3e, 0x00}
+// // page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x62, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x2e, 0x6f}
+// // page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
+// page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20}
+// page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
 
-	// ATS response (11.6.2).
-	const (
-		ATS_TL = 5        // Length.
-		ATS_T0 = 0b1<<4 | // Include TA(1).
-			0b1<<5 | // Include TB(1).
-			0b1<<6 | // Include TC(1).
-			0x8 // FSCI (64 byte frame size)
-		ATS_TA1 = 0x00   // Bit rate 106kb/s only.
-		ATS_TB1 = 8<<4 | // FWI = FWImax (~77ms)
-			0 // SFGT = 0 (no guard time)
-		ATS_TC1 = 0 // No support for NAD nor DID.
-	)
-	ATS := []byte{
+// ATS response (11.6.2).
+const (
+	ATS_TL = 5        // Length.
+	ATS_T0 = 0b1<<4 | // Include TA(1).
+		0b1<<5 | // Include TB(1).
+		0b1<<6 | // Include TC(1).
+		0x8 // FSCI (64 byte frame size)
+	ATS_TA1 = 0x00   // Bit rate 106kb/s only.
+	ATS_TB1 = 8<<4 | // FWI = FWImax (~77ms)
+		0 // SFGT = 0 (no guard time)
+	ATS_TC1 = 0 // No support for NAD nor DID.
+)
+const (
+	SLP_REQ = 0x50
+
+	T2T_READ      = 0x30
+	T2T_WRITE     = 0xa2
+	T2T_WRITE_ACK = 0x0a
+
+	blockSize = 4
+	readSize  = 16
+
+	T4T_RATS = 0xe0
+
+	ISODEP_DESELECT = 0xc2
+	I_BLOCK         = 0x02
+	R_ACK           = 0xa2
+	R_NAK           = 0xb2
+	R_BLOCK         = 0b10100010
+)
+
+var (
+	ATS = []byte{
 		ATS_TL,
 		ATS_T0,
 		ATS_TA1,
 		ATS_TB1,
 		ATS_TC1,
 	}
-	mem := []byte{
-		0x04, 0xf7, 0x73, 0x08, 0x7c, 0x8f, 0x61, 0x81, 0x13, 0x48, 0x00, 0x00, 0xe1, 0x10, 0x3e, 0x00,
-		// page4 := []byte{0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x62, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x2e, 0x6f}
-		// page8 := []byte{0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61}
-		0x03, 0x14, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20,
-		0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f, 0xfe, 0x00, 0x63, 0x65, 0x2f, 0x70, 0x6f, 0x64, 0x63, 0x61,
-	}
-	writeMem := make([]byte, 492)
-	copy(writeMem, mem)
-	const (
-		SLP_REQ = 0x50
-
-		T2T_READ      = 0x30
-		T2T_WRITE     = 0xa2
-		T2T_WRITE_ACK = 0x0a
-
-		blockSize = 4
-		readSize  = 16
-
-		T4T_RATS = 0xe0
-
-		ISODEP_DESELECT = 0xc2
-		I_BLOCK         = 0x02
-		R_ACK           = 0xa2
-		R_NAK           = 0xb2
-		R_BLOCK         = 0b10100010
-	)
 	// NFC Type 4 Tag Operation Specification, Table 10.
-	T4T_NDEF_SELECT_CAPDU := []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01, 0x00}
-	T4T_NDEF_SELECT_CAPDU2 := []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00, 0x00}
-	T4T_NDEF_ACK := []byte{0x90, 0x00}
-	T4T_NDEF_NAK := []byte{0x67, 0x00}
-	T4T_NDEF_CC_SELECT_CAPDU := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0xe1, 0x03}
+	T4T_NDEF_SELECT_CAPDU    = []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01, 0x00}
+	T4T_NDEF_SELECT_CAPDU2   = []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00, 0x00}
+	T4T_NDEF_ACK             = []byte{0x90, 0x00}
+	T4T_NDEF_NAK             = []byte{0x67, 0x00}
+	T4T_NDEF_CC_SELECT_CAPDU = []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0xe1, 0x03}
 	// T4T_NDEF_CC_SELECT_CAPDU2 := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0x01, 0x00}
-	T4T_NDEF_CC_READ_CAPDU := []byte{0x00, 0xb0, 0x00, 0x00, 0x0f}
-	T4T_NDEF_FILE_SELECT_CAPDU := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0x00, 0x01}
-	T4T_NDEF_FILE_READ_CAPDU := []byte{0x00, 0xb0, 0x00, 0x00, 0x02}
-	T4T_NDEF_FILE_READ2_CAPDU := []byte{0x00, 0xb0, 0x00, 0x02, 0x14}
-	const T4T_MAPPING_VERSION = 0x20
+	T4T_NDEF_CC_READ_CAPDU     = []byte{0x00, 0xb0, 0x00, 0x00, 0x0f}
+	T4T_NDEF_FILE_SELECT_CAPDU = []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0x00, 0x01}
+	T4T_NDEF_FILE_READ_CAPDU   = []byte{0x00, 0xb0, 0x00, 0x00, 0x02}
+	T4T_NDEF_FILE_READ2_CAPDU  = []byte{0x00, 0xb0, 0x00, 0x02, 0x14}
+	writes                     = make([]byte, 0, 1000)
+	dirs                       = make([]bool, 0, 100)
+	sep                        = []byte{0xde, 0xad, 0xbe, 0xef}
+	cc                         = make([]byte, 0, 15)
+)
+
+func init() {
 	// Table 5.
 	bo := binary.BigEndian
-	cc := make([]byte, 0, 15)
 	const ccSize = 15
 	cc = bo.AppendUint16(cc, ccSize) // Container size
 	cc = append(cc, T4T_MAPPING_VERSION)
@@ -308,11 +293,12 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 	if len(cc) != ccSize {
 		panic("wrong cc size")
 	}
-	nwrites, nreads, ncmds := 0, 0, 0
-	writes := make([]byte, 0, 1000)
-	dirs := make([]bool, 0, 100)
-	sep := []byte{0xde, 0xad, 0xbe, 0xef}
-	if err := d.prepareRead(); err != nil {
+}
+
+const T4T_MAPPING_VERSION = 0x20
+
+func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
+	if err := d.configureProtocol(ISO14443a); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
 	mask := readMask.Union(interrupts{
@@ -321,10 +307,20 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 	if err := d.resetInterruptMask(mask); err != nil {
 		return fmt.Errorf("st25r3916: listen: %w", err)
 	}
+	// Set listen, iso-14443a mode.
+	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
+	nwrites, nreads, ncmds := 0, 0, 0
+	writes := writes[:0]
+	dirs := dirs[:0]
+	if err := d.prepareRead(); err != nil {
+		return fmt.Errorf("st25r3916: listen: %w", err)
+	}
 	var blockNo byte
-	extField := false
+	seenReader := false
 	defer func() {
-		dbgf("...done. stats nwrites %d nreads %d ncmds %d extField %v", nwrites, nreads, ncmds, extField)
+		dbgf("...done. stats nwrites %d nreads %d ncmds %d extField %v", nwrites, nreads, ncmds, seenReader)
 		if len(writes) > 0 {
 			for i, msg := range bytes.Split(writes, sep) {
 				unit := "Tag      "
@@ -335,16 +331,17 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 			}
 		}
 	}()
+	t := timeout
 	for {
-		intrs, err := d.waitForInterrupt(timeout, quit)
+		intrs, err := d.waitForInterrupt(t, quit)
 		if err != nil {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
 		if intrs.Timer&(0b1<<i_eon) != 0 {
-			extField = true
-			timeout = fieldOffTimeout
+			t = fieldOffTimeout
 		}
 		if intrs.Passive&(0b1<<i_wu_a_x|0b1<<i_wu_a) != 0 {
+			seenReader = true
 			// Initialize I-block number to 1 (13.2.4.2).
 			blockNo = 0b1
 			if err := d.enablePassiveNFCA(false); err != nil {
@@ -352,12 +349,17 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 			}
 		}
 		if intrs.Timer&(0b1<<i_eof) != 0 {
-			if !extField {
-				// Ignore field off interrupts while the field has
-				// not yet been detected.
-				continue
+			if seenReader {
+				return io.EOF
 			}
-			return io.EOF
+			if err := d.enablePassiveNFCA(true); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+			if err := d.command(cmdGotoSense); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
+			t = timeout
+			continue
 		}
 		if intrs.Main&(0b1<<i_rxe) == 0 {
 			// No data available yet.
@@ -515,18 +517,19 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 	}
 }
 
-func (d *Device) dumpMeasurements() {
-	aad, err1 := d.readReg(regAmplitudeMeasAutoDisp)
-	amd, err2 := d.readReg(regAmplitudeMeasDisp)
-	pad, err3 := d.readReg(regPhaseMeasAutoDisp)
-	pmd, err4 := d.readReg(regPhaseMeasDisp)
-	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
-		panic("measurements failed")
-	}
-	log.Println("aad", aad, "amd", amd, "pad", pad, "pmd", pmd)
-}
-
 func (d *Device) Detect(quit <-chan struct{}) error {
+	if err := d.configureProtocol(ISO14443a); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
+	mask := interrupts{
+		Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph,
+	}
+	if err := d.resetInterruptMask(mask); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
+	if err := d.writeRegs(regOpCtrl, 0b1<<wu); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
 	if _, err := d.waitForInterrupt(0, quit); err != nil {
 		return fmt.Errorf("st25r3916: detect: %w", err)
 	}
@@ -540,49 +543,50 @@ func (d *Device) RadioOff() error {
 	return nil
 }
 
+// Attempts to turn on the field for communication through
+// the protocol. Reports [ErrExternalField] if an external
+// field is detected.
 func (d *Device) RadioOn(prot Protocol) error {
-	d.prot = prot
 	if err := d.configureProtocol(prot); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
-	switch d.prot {
-	case Detect:
-		mask := interrupts{
-			Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph,
-		}
-		if err := d.resetInterruptMask(mask); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
-		if err := d.writeRegs(regOpCtrl, 0b1<<wu); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
-	default:
-		if err := d.enable(); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
-		if err := d.command(cmdStopAll); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
-		flags := byte(0b1<<en | 0b11<<en_fd_c)
-		if err := d.writeReg(regOpCtrl, flags); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
-		if d.prot != Listen {
-			intrs, err := d.commandAndWait(cmdInitialFieldOn,
-				interrupts{Timer: 0b1<<i_cac | 0b1<<i_cat}, defTimeout)
-			if err != nil {
-				return fmt.Errorf("st25r3916: radio: %w", err)
-			}
-			if intrs.Timer&(0b1<<i_cat) == 0 {
-				return fmt.Errorf("st25r3916: radio: field conflict")
-			}
-			flags |= 0b1 << tx_en
-		}
-		// Enable receiver.
-		flags |= 0b1 << rx_en
-		if err := d.writeReg(regOpCtrl, flags); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
+	if err := d.enable(); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
+	if err := d.command(cmdStopAll); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
+	flags := byte(0b1<<en | 0b11<<en_fd_c)
+	if err := d.writeReg(regOpCtrl, flags); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
+	// Enable automatic handling of NFC-A anti-collision selection,
+	// in case we detect an external field and [Device.Listen] is called.
+	if err := d.enablePassiveNFCA(true); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
+	if err := d.command(cmdGotoSense); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
+	intrs, err := d.commandAndWait(
+		cmdInitialFieldOn,
+		interrupts{Timer: 0b1<<i_cac | 0b1<<i_cat},
+		defTimeout,
+	)
+	if err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
+	fieldOn := intrs.Timer&(0b1<<i_cat) != 0
+	// Enable receiver.
+	flags |= 0b1 << rx_en
+	if fieldOn {
+		flags |= 0b1 << tx_en
+	}
+	if err := d.writeReg(regOpCtrl, flags); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
+	if !fieldOn {
+		return ErrExternalField
 	}
 	return nil
 }
@@ -774,7 +778,7 @@ func (d *Device) configureProtocol(prot Protocol) error {
 	}
 	var conf config
 	switch prot {
-	case ISO14443a, Listen, Detect:
+	case ISO14443a:
 		conf = config{
 			opMode:      omISO14443A,
 			rxConf:      [...]byte{0x08, 0x2d, 0x00, 0x00},
