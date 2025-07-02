@@ -551,7 +551,7 @@ func (d *Device) RadioOn(prot Protocol) error {
 	}
 	mask := interrupts{
 		Main:    0b1 << i_rxe,
-		Timer:   0b1<<i_nre | 0b1<<i_eof | 0b1<<i_eon | 0b1<<i_cac | 0b1<<i_cat,
+		Timer:   0b1<<i_eof | 0b1<<i_eon | 0b1<<i_cac | 0b1<<i_cat,
 		Error:   0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
 		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
 	}
@@ -572,13 +572,13 @@ func (d *Device) RadioOn(prot Protocol) error {
 	if err := d.writeReg(regOpCtrl, flags); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
+	if err := d.enablePassiveNFCA(d.listen); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
 	if d.listen {
 		// Set up card emulation mode.
 
 		d.excludeCRC = true
-		if err := d.enablePassiveNFCA(true); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
 		if err := d.command(cmdGotoSense); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
