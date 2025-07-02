@@ -19,6 +19,8 @@ type Device struct {
 	Bus        Bus
 	Int        machine.Pin
 	prot       Protocol
+	listen     bool
+	extField   bool
 	interrupts chan struct{}
 	eof        bool
 	timer      *time.Timer
@@ -62,19 +64,16 @@ const (
 	// Once a field is on, we wait until it is off again.
 	// However, leave a long timeout in case the off detection
 	// somehow fails.
-	fieldOffTimeout = 10 * time.Second
+	fieldOnTimeout = 10 * time.Second
+
+	// fieldOffTimeouit is the timeout in listen mode while
+	// no tag has been seen.
+	fieldOffTimeout = 1 * time.Second
 
 	// Card detection thresholds.
 	ampSens   = 2
 	phaseSens = 2
 )
-
-var readMask = interrupts{
-	Main:    0b1 << i_rxe,
-	Timer:   0b1 << i_nre,
-	Error:   0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
-	Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
-}
 
 func (d *Device) Configure() error {
 	if d.timer == nil {
@@ -297,26 +296,10 @@ func init() {
 
 const T4T_MAPPING_VERSION = 0x20
 
-func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
-	if err := d.configureProtocol(ISO14443a); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
-	mask := readMask.Union(interrupts{
-		Timer: 0b1<<i_eof | 0b1<<i_eon,
-	})
-	if err := d.resetInterruptMask(mask); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
-	// Set listen, iso-14443a mode.
-	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
+func (d *Device) Listen() error {
 	nwrites, nreads, ncmds := 0, 0, 0
 	writes := writes[:0]
 	dirs := dirs[:0]
-	if err := d.prepareRead(); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
-	}
 	var blockNo byte
 	seenReader := false
 	defer func() {
@@ -331,35 +314,36 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 			}
 		}
 	}()
-	t := timeout
 	for {
-		intrs, err := d.waitForInterrupt(t, quit)
+		timeout := fieldOffTimeout
+		if d.extField {
+			timeout = fieldOnTimeout
+		}
+		intrs, err := d.waitForInterrupt(timeout, nil)
 		if err != nil {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
 		if intrs.Timer&(0b1<<i_eon) != 0 {
-			t = fieldOffTimeout
-		}
-		if intrs.Passive&(0b1<<i_wu_a_x|0b1<<i_wu_a) != 0 {
-			seenReader = true
-			// Initialize I-block number to 1 (13.2.4.2).
-			blockNo = 0b1
-			if err := d.enablePassiveNFCA(false); err != nil {
-				return fmt.Errorf("st25r3916: listen: %w", err)
-			}
+			d.extField = true
 		}
 		if intrs.Timer&(0b1<<i_eof) != 0 {
 			if seenReader {
 				return io.EOF
 			}
+			d.extField = false
 			if err := d.enablePassiveNFCA(true); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
 			if err := d.command(cmdGotoSense); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
-			t = timeout
 			continue
+		}
+		if intrs.Passive&(0b1<<i_wu_a_x|0b1<<i_wu_a) != 0 {
+			seenReader = true
+			if err := d.enablePassiveNFCA(false); err != nil {
+				return fmt.Errorf("st25r3916: listen: %w", err)
+			}
 		}
 		if intrs.Main&(0b1<<i_rxe) == 0 {
 			// No data available yet.
@@ -384,6 +368,8 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 		resp := buf2[:0]
 		switch cmd {
 		case T4T_RATS:
+			// Initialize I-block number to 1 (13.2.4.2).
+			blockNo = 0b1
 			resp = append(resp, ATS...)
 		case ISODEP_DESELECT:
 			if len(buf) != 0 {
@@ -556,47 +542,57 @@ func (d *Device) RadioOn(prot Protocol) error {
 	if err := d.command(cmdStopAll); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
+	if err := d.command(cmdResetRXGain); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
 	flags := byte(0b1<<en | 0b11<<en_fd_c)
 	if err := d.writeReg(regOpCtrl, flags); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
-	// Enable automatic handling of NFC-A anti-collision selection,
-	// in case we detect an external field and [Device.Listen] is called.
-	if err := d.enablePassiveNFCA(true); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
-	}
-	if err := d.command(cmdGotoSense); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
+	mask := interrupts{
+		Main:    0b1 << i_rxe,
+		Timer:   0b1<<i_nre | 0b1<<i_eof | 0b1<<i_eon | 0b1<<i_cac | 0b1<<i_cat,
+		Error:   0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
+		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
 	}
 	intrs, err := d.commandAndWait(
 		cmdInitialFieldOn,
-		interrupts{Timer: 0b1<<i_cac | 0b1<<i_cat},
+		mask,
 		defTimeout,
 	)
 	if err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
-	fieldOn := intrs.Timer&(0b1<<i_cat) != 0
+	d.listen = intrs.Timer&(0b1<<i_cat) == 0
 	// Enable receiver.
 	flags |= 0b1 << rx_en
-	if fieldOn {
+	if !d.listen {
 		flags |= 0b1 << tx_en
 	}
 	if err := d.writeReg(regOpCtrl, flags); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
-	if !fieldOn {
+	if d.listen {
+		// Set up card emulation mode.
+
+		d.excludeCRC = true
+		if err := d.enablePassiveNFCA(true); err != nil {
+			return fmt.Errorf("st25r3916: radio: %w", err)
+		}
+		if err := d.command(cmdGotoSense); err != nil {
+			return fmt.Errorf("st25r3916: radio: %w", err)
+		}
+		if err := d.configureProtocol(ISO14443a); err != nil {
+			return fmt.Errorf("st25r3916: radio: %w", err)
+		}
+		// Set target, iso-14443a mode.
+		if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
+			return fmt.Errorf("st25r3916: radio: %w", err)
+		}
+		d.extField = intrs.Timer&(0b1<<i_eon) != 0 && intrs.Timer&(0b1<<i_eof) == 0
 		return ErrExternalField
 	}
 	return nil
-}
-
-func (d *Device) prepareRead() error {
-	d.excludeCRC = true
-	if err := d.command(cmdStopAll); err != nil {
-		return err
-	}
-	return d.command(cmdResetRXGain)
 }
 
 func (i interrupts) Union(i2 interrupts) interrupts {
@@ -610,9 +606,6 @@ func (i interrupts) Union(i2 interrupts) interrupts {
 
 func (d *Device) Write(tx []byte) (int, error) {
 	d.eof = false
-	if err := d.resetInterruptMask(readMask); err != nil {
-		return 0, fmt.Errorf("st25r3916: write: %w", err)
-	}
 	n, err := d.write(tx)
 	if err != nil {
 		err = fmt.Errorf("st25r3916: write: %w", err)
@@ -621,8 +614,11 @@ func (d *Device) Write(tx []byte) (int, error) {
 }
 
 func (d *Device) write(tx []byte) (int, error) {
-	// Prepare for reading, and listen for loss of external field.
-	if err := d.prepareRead(); err != nil {
+	d.excludeCRC = true
+	if err := d.command(cmdStopAll); err != nil {
+		return 0, err
+	}
+	if err := d.command(cmdResetRXGain); err != nil {
 		return 0, err
 	}
 	var transmitCmd byte

@@ -62,7 +62,7 @@ func run() error {
 				time.Sleep(500 * time.Millisecond)
 				continue
 			}
-			if err := nfc.Listen(1000*time.Millisecond, nil); err != nil {
+			if err := nfc.Listen(); err != nil {
 				log.Println("nfc.Listen:", err)
 			}
 		case r != nil:
