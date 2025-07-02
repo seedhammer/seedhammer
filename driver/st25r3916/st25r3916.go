@@ -281,6 +281,7 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 	T4T_NDEF_SELECT_CAPDU := []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01, 0x00}
 	T4T_NDEF_SELECT_CAPDU2 := []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00, 0x00}
 	T4T_NDEF_ACK := []byte{0x90, 0x00}
+	T4T_NDEF_NAK := []byte{0x67, 0x00}
 	T4T_NDEF_CC_SELECT_CAPDU := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0xe1, 0x03}
 	// T4T_NDEF_CC_SELECT_CAPDU2 := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0x01, 0x00}
 	T4T_NDEF_CC_READ_CAPDU := []byte{0x00, 0xb0, 0x00, 0x00, 0x0f}
@@ -452,8 +453,8 @@ func (d *Device) Listen(timeout time.Duration, quit <-chan struct{}) error {
 				// Write length = 0x0d
 				resp = append(resp, T4T_NDEF_ACK...)
 			default:
+				resp = append(resp, T4T_NDEF_NAK...)
 				dbgf("C-APDU: %x", buf)
-				continue
 				// return fmt.Errorf("st25r3916: listen: unknown C-APDU")
 			}
 		case SLP_REQ:
@@ -526,12 +527,9 @@ func (d *Device) dumpMeasurements() {
 }
 
 func (d *Device) Detect(quit <-chan struct{}) error {
-	intrs, err := d.waitForInterrupt(0, quit)
-	if err != nil {
+	if _, err := d.waitForInterrupt(0, quit); err != nil {
 		return fmt.Errorf("st25r3916: detect: %w", err)
 	}
-	_ = intrs
-	// fmt.Printf("intrs: %+v\n", intrs)
 	return nil
 }
 
