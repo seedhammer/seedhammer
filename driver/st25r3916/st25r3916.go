@@ -20,7 +20,7 @@ type Device struct {
 	Int        machine.Pin
 	prot       Protocol
 	listen     bool
-	extField   bool
+	extField   fieldState
 	interrupts chan struct{}
 	eof        bool
 	timer      *time.Timer
@@ -73,6 +73,14 @@ const (
 	// Card detection thresholds.
 	ampSens   = 2
 	phaseSens = 2
+)
+
+type fieldState int
+
+const (
+	fieldOff fieldState = iota
+	fieldOn
+	fieldActive
 )
 
 func (d *Device) Configure() error {
@@ -301,9 +309,8 @@ func (d *Device) Listen() error {
 	writes := writes[:0]
 	dirs := dirs[:0]
 	var blockNo byte
-	seenReader := false
 	defer func() {
-		dbgf("...done. stats nwrites %d nreads %d ncmds %d extField %v", nwrites, nreads, ncmds, seenReader)
+		dbgf("...done. stats nwrites %d nreads %d ncmds %d extField %v", nwrites, nreads, ncmds, d.extField)
 		if len(writes) > 0 {
 			for i, msg := range bytes.Split(writes, sep) {
 				unit := "Tag      "
@@ -315,41 +322,7 @@ func (d *Device) Listen() error {
 		}
 	}()
 	for {
-		timeout := fieldOffTimeout
-		if d.extField {
-			timeout = fieldOnTimeout
-		}
-		intrs, err := d.waitForInterrupt(timeout, nil)
-		if err != nil {
-			return fmt.Errorf("st25r3916: listen: %w", err)
-		}
-		if intrs.Timer&(0b1<<i_eon) != 0 {
-			d.extField = true
-		}
-		if intrs.Timer&(0b1<<i_eof) != 0 {
-			if seenReader {
-				return io.EOF
-			}
-			d.extField = false
-			if err := d.enablePassiveNFCA(true); err != nil {
-				return fmt.Errorf("st25r3916: listen: %w", err)
-			}
-			if err := d.command(cmdGotoSense); err != nil {
-				return fmt.Errorf("st25r3916: listen: %w", err)
-			}
-			continue
-		}
-		if intrs.Passive&(0b1<<i_wu_a_x|0b1<<i_wu_a) != 0 {
-			seenReader = true
-			if err := d.enablePassiveNFCA(false); err != nil {
-				return fmt.Errorf("st25r3916: listen: %w", err)
-			}
-		}
-		if intrs.Main&(0b1<<i_rxe) == 0 {
-			// No data available yet.
-			continue
-		}
-		n, err := d.read(buf)
+		n, err := d.Read(buf)
 		buf := buf[:n]
 		if err != nil && err != io.EOF {
 			return fmt.Errorf("st25r3916: listen: %w", err)
@@ -386,7 +359,7 @@ func (d *Device) Listen() error {
 			dirs = append(dirs, false)
 			writes = append(writes, sep...)
 			writes = append(writes, resp...)
-			if _, err := d.write(resp); err != nil {
+			if _, err := d.Write(resp); err != nil {
 				return fmt.Errorf("st25r3916: listen: %w", err)
 			}
 			continue
@@ -497,10 +470,32 @@ func (d *Device) Listen() error {
 		dirs = append(dirs, false)
 		writes = append(writes, sep...)
 		writes = append(writes, resp...)
-		if _, err := d.write(resp); err != nil {
+		if _, err := d.Write(resp); err != nil {
 			return fmt.Errorf("st25r3916: listen: %w", err)
 		}
 	}
+}
+
+func (d *Device) updateExtField(intrs interrupts) error {
+	if intrs.Timer&(0b1<<i_eon) != 0 {
+		d.extField = max(fieldOn, d.extField)
+	}
+	if intrs.Timer&(0b1<<i_eof) != 0 {
+		d.extField = fieldOff
+		if err := d.enablePassiveNFCA(true); err != nil {
+			return err
+		}
+		if err := d.command(cmdGotoSense); err != nil {
+			return err
+		}
+	}
+	if intrs.Passive&(0b1<<i_wu_a_x|0b1<<i_wu_a) != 0 {
+		d.extField = fieldActive
+		if err := d.enablePassiveNFCA(false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *Device) Detect(quit <-chan struct{}) error {
@@ -533,6 +528,8 @@ func (d *Device) RadioOff() error {
 // the protocol. Reports [ErrExternalField] if an external
 // field is detected.
 func (d *Device) RadioOn(prot Protocol) error {
+	d.eof = false
+	d.extField = fieldOff
 	if err := d.configureProtocol(prot); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
@@ -572,6 +569,9 @@ func (d *Device) RadioOn(prot Protocol) error {
 	if err := d.writeReg(regOpCtrl, flags); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
+	if err := d.updateExtField(intrs); err != nil {
+		return fmt.Errorf("st25r3916: radio: %w", err)
+	}
 	if err := d.enablePassiveNFCA(d.listen); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
@@ -589,7 +589,6 @@ func (d *Device) RadioOn(prot Protocol) error {
 		if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
 		}
-		d.extField = intrs.Timer&(0b1<<i_eon) != 0 && intrs.Timer&(0b1<<i_eof) == 0
 		return ErrExternalField
 	}
 	return nil
@@ -823,15 +822,34 @@ func (d *Device) configureProtocol(prot Protocol) error {
 }
 
 func (d *Device) Read(buf []byte) (int, error) {
-	var ierr error
-	if !d.eof {
-		_, ierr = d.waitForInterrupt(defTimeout, nil)
+	for !d.eof {
+		timeout := defTimeout
+		if d.listen {
+			timeout = fieldOffTimeout
+		}
+		if d.extField >= fieldOn {
+			timeout = fieldOnTimeout
+		}
+		intrs, err := d.waitForInterrupt(timeout, nil)
+		if err != nil {
+			return 0, fmt.Errorf("st25r3916: read: %w", err)
+		}
+		wasAct := d.extField == fieldActive
+		if err := d.updateExtField(intrs); err != nil {
+			return 0, fmt.Errorf("st25r3916: read: %w", err)
+		}
+		if wasAct && d.extField == fieldOff {
+			// Treat the turning off of a previously active field
+			// as EOF.
+			return 0, io.EOF
+		}
+		if intrs.Main&(0b1<<i_rxe) == 0 {
+			// No data available yet.
+			continue
+		}
 		d.eof = true
 	}
 	n, err := d.read(buf)
-	if ierr != nil {
-		err = ierr
-	}
 	if err != nil && err != io.EOF {
 		err = fmt.Errorf("st25r3916: read: %w", err)
 	}
