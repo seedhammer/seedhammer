@@ -59,7 +59,7 @@ type interrupts struct {
 const (
 	// General timeout to guard against hangs, excessive
 	// receive times etc.
-	defTimeout = 200 * time.Millisecond
+	defTimeout = 1 * time.Second
 
 	// Once a field is on, we wait until it is off again.
 	// However, leave a long timeout in case the off detection
@@ -551,7 +551,7 @@ func (d *Device) RadioOn(prot Protocol) error {
 	}
 	mask := interrupts{
 		Main:    0b1 << i_rxe,
-		Timer:   0b1<<i_eof | 0b1<<i_eon | 0b1<<i_cac | 0b1<<i_cat,
+		Timer:   0b1<<i_nre | 0b1<<i_eof | 0b1<<i_eon | 0b1<<i_cac | 0b1<<i_cat,
 		Error:   0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
 		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
 	}
