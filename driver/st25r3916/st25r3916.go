@@ -863,11 +863,11 @@ func (d *Device) read(buf []byte) (int, error) {
 		return 0, err
 	}
 	fifoLen := int(fifoStatus[1]&0b1100_0000)<<2 | int(fifoStatus[0])
-	overflow := fifoStatus[1]&(0b1<<fifo_ovr) != 0
 	// Exclude the CRC bytes left in the FIFO.
 	if d.excludeCRC {
 		fifoLen = max(fifoLen-2, 0)
 	}
+	overflow := fifoStatus[1]&(0b1<<fifo_ovr) != 0
 	n := min(fifoLen, len(buf))
 	req = d.scratch[:1]
 	req[0] = modeFIFO | readFIFO
@@ -878,6 +878,9 @@ func (d *Device) read(buf []byte) (int, error) {
 	switch {
 	case overflow:
 		err = errors.New("FIFO overflow")
+	case len(buf) < fifoLen:
+		// We don't support reading the FIFO contents in multiple reads.
+		err = io.ErrShortBuffer
 	case n == fifoLen:
 		err = io.EOF
 	}
