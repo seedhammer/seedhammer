@@ -4,17 +4,20 @@ package type4
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 )
 
 // Tag emulates a writable empty tag.
 type Tag struct {
-	d     Device
-	state protoState
+	d            Device
+	state        protoState
+	blockNo      byte
+	nextWriteOff int
 
-	buf  [128]byte
-	resp [128]byte
+	buf  [maxFrameSize]byte
+	resp [maxFrameSize]byte
 }
 
 type Device interface {
@@ -33,7 +36,8 @@ type protoState int
 
 const (
 	initState protoState = iota
-	isoDepState
+	activeState
+	ndefState
 	ccFileState
 	fileState
 )
@@ -63,93 +67,91 @@ const (
 	ATS_TB1 = 8<<4 | // FWI = FWImax (~77ms)
 		0 // SFGT = 0 (no guard time)
 	ATS_TC1 = 0 // No support for NAD nor DID.
-)
-const (
-	SLP_REQ = 0x50
 
-	T2T_READ      = 0x30
-	T2T_WRITE     = 0xa2
-	T2T_WRITE_ACK = 0x0a
+	ndefFileID   = 0x0001
+	maxFrameSize = 256
+	maxNDEFSize  = 8192
+	blockSize    = 4
+	readSize     = 16
 
-	blockSize = 4
-	readSize  = 16
+	cmdRATS = 0xe0
 
-	T4T_RATS = 0xe0
-
-	ISODEP_DESELECT = 0xc2
-	I_BLOCK         = 0x02
-	R_ACK           = 0xa2
-	R_NAK           = 0xb2
-	R_BLOCK         = 0b10100010
+	isodepDESELECT        = 0xc2
+	isodepI_BLOCK         = 0x02
+	isodepR_ACK           = 0xa2
+	isodepR_NAK           = 0xb2
+	isodepR_BLOCK         = 0b10100010
+	isodepMAPPING_VERSION = 0x20
+	isodepCLA             = 0x00 // The only CLA we support.
+	isodepREAD            = 0xb0
+	isodepWRITE           = 0xd6
 )
 
 var (
-	ATS = []byte{
+	cmdSLP_REQ = []byte{0x50, 0x00}
+	ATS        = []byte{
 		ATS_TL,
 		ATS_T0,
 		ATS_TA1,
 		ATS_TB1,
 		ATS_TC1,
 	}
-	// NFC Type 4 Tag Operation Specification, Table 10.
-	T4T_NDEF_SELECT_CAPDU    = []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01, 0x00}
-	T4T_NDEF_SELECT_CAPDU2   = []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00, 0x00}
-	T4T_NDEF_ACK             = []byte{0x90, 0x00}
-	T4T_NDEF_NAK             = []byte{0x67, 0x00}
-	T4T_NDEF_CC_SELECT_CAPDU = []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0xe1, 0x03}
-	// T4T_NDEF_CC_SELECT_CAPDU2 := []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0x01, 0x00}
-	T4T_NDEF_CC_READ_CAPDU     = []byte{0x00, 0xb0, 0x00, 0x00, 0x0f}
-	T4T_NDEF_FILE_SELECT_CAPDU = []byte{0x00, 0xa4, 0x00, 0x0c, 0x02, 0x00, 0x01}
-	T4T_NDEF_FILE_READ_CAPDU   = []byte{0x00, 0xb0, 0x00, 0x00, 0x02}
-	T4T_NDEF_FILE_READ2_CAPDU  = []byte{0x00, 0xb0, 0x00, 0x02, 0x14}
-	writes                     = make([]byte, 0, 1000)
-	dirs                       = make([]bool, 0, 100)
-	sep                        = []byte{0xde, 0xad, 0xbe, 0xef}
-	cc                         = make([]byte, 0, 15)
+	// NFC Type 4 Tag Operation Specification commands.
+	isodepACK         = []byte{0x90, 0x00}
+	isodepNAK         = []byte{0x67, 0x00}
+	isodepTAG_SELECT  = []byte{0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01, 0x00}
+	isodepCC_SELECT   = []byte{0xa4, 0x00, 0x0c, 0x02, 0xe1, 0x03}
+	isodepFILE_SELECT = []byte{0xa4, 0x00, 0x0c, 0x02, 0x00, 0x01}
+	writes            = make([]byte, 0, 1000)
+	dirs              = make([]bool, 0, 100)
+	sep               = []byte{0xde, 0xad, 0xbe, 0xef}
+	capContainer      = make([]byte, 0, 15)
+	emptyFile         = []byte{
+		0x00, 0x00, // Length 0.
+	}
 )
+
+var bo = binary.BigEndian
 
 func init() {
 	// Table 5.
-	bo := binary.BigEndian
-	const ccSize = 15
-	cc = bo.AppendUint16(cc, ccSize) // Container size
-	cc = append(cc, T4T_MAPPING_VERSION)
-	cc = bo.AppendUint16(cc, 0x3b) // ReadBinary chunk size
-	cc = bo.AppendUint16(cc, 0x34) // UpdateBinary chunk size
+	capContainer = bo.AppendUint16(capContainer, uint16(cap(capContainer))) // Container size
+	capContainer = append(capContainer, isodepMAPPING_VERSION)
+	capContainer = bo.AppendUint16(capContainer, 0x3b) // ReadBinary chunk size
+	capContainer = bo.AppendUint16(capContainer, 0x34) // UpdateBinary chunk size
 
 	// Control block TLV. Section 5.1.2.1.
-	cc = append(cc, 0x04)
-	cc = append(cc, 0x06)
-	cc = bo.AppendUint16(cc, 0x0001) // File identifier.
-	cc = bo.AppendUint16(cc, 0x0032) // Maximum NDEF size.
-	cc = append(cc, 0x00)            // Read allowed.
-	cc = append(cc, 0x00)            // Write allowed.
-	if len(cc) != ccSize {
-		panic("wrong cc size")
-	}
+	capContainer = append(capContainer, 0x04)
+	capContainer = append(capContainer, 0x06)
+	capContainer = bo.AppendUint16(capContainer, ndefFileID)  // File identifier.
+	capContainer = bo.AppendUint16(capContainer, maxNDEFSize) // Maximum NDEF size.
+	capContainer = append(capContainer, 0x00)                 // Read allowed.
+	capContainer = append(capContainer, 0x00)                 // Write allowed.
 }
-
-const T4T_MAPPING_VERSION = 0x20
 
 // Read file contents written by a NFC writer.
 func (t *Tag) Read(b []byte) (int, error) {
 	nwrites, nreads, ncmds := 0, 0, 0
 	writes := writes[:0]
 	dirs := dirs[:0]
-	var blockNo byte
 	defer func() {
 		dbgf("...done. stats nwrites %d nreads %d ncmds %d", nwrites, nreads, ncmds)
 		if len(writes) > 0 {
 			for i, msg := range bytes.Split(writes, sep) {
-				unit := "Tag      "
+				unit := "Tag   "
 				if dirs[i] {
-					unit = "NFC Tools"
+					unit = "Reader"
 				}
 				dbgf("%s: %x", unit, msg)
 			}
 		}
 	}()
+	bytesRead := 0
+	var readErr error
 	for {
+		if bytesRead > 0 || readErr != nil {
+			return bytesRead, readErr
+		}
 		n, err := t.d.Read(t.buf[:])
 		buf := t.buf[:n]
 		if err != nil {
@@ -166,107 +168,134 @@ func (t *Tag) Read(b []byte) (int, error) {
 		}
 		writes = append(writes, buf...)
 		dirs = append(dirs, true)
-		cmd := buf[0]
-		buf = buf[1:]
 		resp := t.resp[:0]
-		// switch d.state {
-		// case initState:
-		switch cmd {
-		case T4T_RATS:
-			// Initialize I-block number to 1 (13.2.4.2).
-			blockNo = 0b1
-			resp = append(resp, ATS...)
-		case ISODEP_DESELECT:
-			if len(buf) != 0 {
-				return 0, fmt.Errorf("type4: unsupported S-block")
+		switch t.state {
+		case initState:
+			switch {
+			case len(buf) == 2 && buf[0] == cmdRATS:
+				// Initialize I-block number to 1 (13.2.4.2).
+				t.blockNo = 0b1
+				t.state = activeState
+				resp = append(resp, ATS...)
+			case bytes.Equal(buf, cmdSLP_REQ):
+				// Go to sleep, waiting for WUPA.
+				if err := t.Sleep(); err != nil {
+					return 0, fmt.Errorf("type4: %w", err)
+				}
 			}
-			// Go to sleep, waiting for WUPA.
-			if err := t.Sleep(); err != nil {
-				return 0, fmt.Errorf("type4: %w", err)
+		case activeState, ndefState, ccFileState, fileState:
+			switch {
+			case len(buf) == 1 && buf[0] == isodepDESELECT:
+				// Go to sleep, waiting for WUPA.
+				if err := t.Sleep(); err != nil {
+					return 0, fmt.Errorf("type4: %w", err)
+				}
+				resp = append(resp, isodepDESELECT)
+			case len(buf) == 1 && (buf[0]&^0b1) == isodepR_NAK:
+				rbno := buf[0] & 0b1
+				if rbno != t.blockNo {
+					// Send R(ACK) back (13.2.5.10).
+					resp = append(resp, isodepR_ACK|t.blockNo)
+				}
+			case (buf[0] &^ 0b1) == isodepI_BLOCK:
+				buf = buf[1:]
+				t.blockNo = 1 - t.blockNo
+				resp = append(resp, isodepI_BLOCK|t.blockNo)
+				if len(buf) < 4 || buf[0] != isodepCLA {
+					break
+				}
+				buf = buf[1:]
+				switch {
+				case bytes.Equal(buf, isodepTAG_SELECT):
+					t.state = ndefState
+					resp = append(resp, isodepACK...)
+				case t.state >= ndefState && bytes.Equal(buf, isodepCC_SELECT):
+					t.state = ccFileState
+					resp = append(resp, isodepACK...)
+				case t.state >= ndefState && bytes.Equal(buf, isodepFILE_SELECT):
+					t.state = fileState
+					t.nextWriteOff = 0
+					resp = append(resp, isodepACK...)
+				case t.state >= ccFileState && len(buf) == 4 && buf[0] == isodepREAD:
+					buf = buf[1:]
+					var ok bool
+					resp, ok = t.read(resp, buf)
+					if !ok {
+						break
+					}
+					resp = append(resp, isodepACK...)
+				case t.state >= ccFileState && buf[0] == isodepWRITE:
+					buf = buf[1:]
+					bytesRead, readErr = t.write(b, buf)
+					if readErr != nil && readErr != io.EOF {
+						break
+					}
+					resp = append(resp, isodepACK...)
+				}
+				if len(resp) == 1 {
+					resp = append(resp, isodepNAK...)
+				}
 			}
-			resp = append(resp, ISODEP_DESELECT)
+		}
+		if len(resp) > 0 {
 			dirs = append(dirs, false)
 			writes = append(writes, sep...)
 			writes = append(writes, resp...)
 			if _, err := t.d.Write(resp); err != nil {
 				return 0, fmt.Errorf("type4: %w", err)
 			}
-			continue
-		case R_NAK, R_NAK + 1:
-			rbno := cmd & 0b1
-			if rbno != blockNo {
-				// Send R(NAK) back (13.2.5.10).
-				resp = append(resp, R_ACK|blockNo)
-			}
-		case I_BLOCK, I_BLOCK + 1:
-			if len(buf) < 4 {
-				// return fmt.Errorf("type4: listen: S-block too short")
-				continue
-			}
-			blockNo = 1 - blockNo
-			resp = append(resp, I_BLOCK|blockNo)
-			switch {
-			case bytes.Equal(buf, T4T_NDEF_SELECT_CAPDU):
-				resp = append(resp, T4T_NDEF_ACK...)
-			case bytes.Equal(buf, T4T_NDEF_SELECT_CAPDU2) ||
-				bytes.Equal(buf, []byte{0x00, 0xa4, 0x04, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}):
-				resp = append(resp, 0x6A, 0x82) // Not found.
-			case bytes.Equal(buf, T4T_NDEF_CC_SELECT_CAPDU):
-				//  ||
-				// bytes.Equal(buf, T4T_NDEF_CC_SELECT_CAPDU2):
-				resp = append(resp, T4T_NDEF_ACK...)
-			case bytes.Equal(buf, T4T_NDEF_CC_READ_CAPDU):
-				resp = append(resp, cc...)
-				resp = append(resp, T4T_NDEF_ACK...)
-			case bytes.Equal(buf, T4T_NDEF_FILE_SELECT_CAPDU):
-				resp = append(resp, T4T_NDEF_ACK...)
-			case bytes.Equal(buf, T4T_NDEF_FILE_READ_CAPDU):
-				// resp = append(resp, 0x00, 0x03) // File length.
-				resp = append(resp, 0x00, 0x14) // File length.
-				resp = append(resp, T4T_NDEF_ACK...)
-			case bytes.Equal(buf, T4T_NDEF_FILE_READ2_CAPDU):
-				// resp = append(resp, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x48, 0x69, 0x20, 0x4e, 0x69, 0x63, 0x6b, 0x21, 0x20,
-				// 	0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f)
-				resp = append(resp, 0xd1, 0x01, 0x10, 0x55, 0x04, 0x62, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x2e, 0x6f, 0x72, 0x67, 0x2f, 0x64, 0x65, 0x2f)
-				// resp = append(resp, 0xd1, 0x00, 0x00)
-				resp = append(resp, T4T_NDEF_ACK...)
-			case bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x00, 0x02, 0x00, 0x00}): // T4T_Update_Binary
-				// Write length = 0
-				resp = append(resp, T4T_NDEF_ACK...)
-			case bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x02, 0x0d, 0xd1, 0x01, 0x09, 0x54, 0x02, 0x65, 0x6e, 0x62, 0x6f, 0x69, 0x6e, 0x67, 0x21}) ||
-				bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x02, 0x13, 0xd1, 0x01, 0x0f, 0x54, 0x02, 0x65, 0x6e, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21}) ||
-				bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x00, 0x0f, 0x00, 0x00, 0xd1, 0x01, 0x09, 0x54, 0x02, 0x65, 0x6e, 0x62, 0x6f, 0x69, 0x6e, 0x67, 0x21}): // T4T_Update_Binary
-				// Write data
-				resp = append(resp, T4T_NDEF_ACK...)
-			case bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x00, 0x02, 0x00, 0x0d}) ||
-				bytes.Equal(buf, []byte{0x00, 0xd6, 0x00, 0x00, 0x02, 0x00, 0x13}):
-				// Write length = 0x0d
-				resp = append(resp, T4T_NDEF_ACK...)
-			default:
-				resp = append(resp, T4T_NDEF_NAK...)
-				dbgf("C-APDU: %x", buf)
-				// return fmt.Errorf("type4: listen: unknown C-APDU")
-			}
-		case SLP_REQ:
-			if len(buf) < 1 || buf[0] != 0 {
-				return 0, fmt.Errorf("type4: invalid SLP_REQ")
-			}
-			// Go to sleep, waiting for WUPA.
-			if err := t.Sleep(); err != nil {
-				return 0, fmt.Errorf("type4: %w", err)
-			}
-			continue
-		default:
-			continue
-			// return fmt.Errorf("type4: listen: unknown type 4a command: %x/%x", cmd, buf)
-		}
-		dirs = append(dirs, false)
-		writes = append(writes, sep...)
-		writes = append(writes, resp...)
-		if _, err := t.d.Write(resp); err != nil {
-			return 0, fmt.Errorf("type4: %w", err)
 		}
 	}
+}
+
+func (t *Tag) read(out, in []byte) ([]byte, bool) {
+	off := int(bo.Uint16(in))
+	in = in[2:]
+	size := int(in[0])
+	in = in[1:]
+	var file []byte
+	switch t.state {
+	case ccFileState:
+		file = capContainer
+	case fileState:
+		file = emptyFile
+	}
+	if off+size > len(file) {
+		return out, false
+	}
+	out = append(out, file[off:off+size]...)
+	return out, true
+}
+
+func (t *Tag) write(out, in []byte) (int, error) {
+	if len(in) < 3 {
+		return 0, errors.New("type4: write request too short")
+	}
+	off := int(bo.Uint16(in))
+	in = in[2:]
+	size := int(in[0])
+	in = in[1:]
+	if len(in) != size {
+		return 0, errors.New("type4: invalid size in write request")
+	}
+	// Chop off writes to the first 2 size bytes.
+	off -= 2
+	if off < 0 {
+		in = in[min(len(in), -off):]
+		off = 0
+		t.nextWriteOff = 0
+	}
+	if len(in) > 0 && off != t.nextWriteOff {
+		// We don't support random writes.
+		return 0, errors.New("type4: non-contiguous write")
+	}
+	t.nextWriteOff = off + len(in)
+	n := copy(out, in)
+	in = in[n:]
+	if len(in) > 0 {
+		return n, errors.New("type4: buffer overflow")
+	}
+	return n, nil
 }
 
 func (t *Tag) Sleep() error {
