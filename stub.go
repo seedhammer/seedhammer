@@ -15,6 +15,7 @@ import (
 	"seedhammer.com/nfc/iso14443a"
 	"seedhammer.com/nfc/iso15693"
 	"seedhammer.com/nfc/ndef"
+	"seedhammer.com/nfc/type4"
 )
 
 func main() {
@@ -43,6 +44,7 @@ func run() error {
 		Int: DATA_INT,
 	}
 	trans := iso15693.NewTransceiver(nfc, st25r3916.FIFOSize)
+	t4temu := new(type4.Tag)
 	contents := make([]byte, 8*1024)
 	defer nfc.RadioOff()
 	for {
@@ -55,17 +57,16 @@ func run() error {
 			continue
 		}
 		r, err := poll(nfc, trans)
-		switch {
-		case err != nil:
+		if err != nil {
 			if !errors.Is(err, st25r3916.ErrExternalField) {
 				log.Printf("Poll: %v", err)
 				time.Sleep(500 * time.Millisecond)
 				continue
 			}
-			if err := nfc.Listen(); err != nil {
-				log.Println("nfc.Listen:", err)
-			}
-		case r != nil:
+			t4temu.Reset(nfc)
+			r = t4temu
+		}
+		if r != nil {
 			// buf := make([]byte, 512)
 			// for {
 			// 	n, err := r.Read(buf)
