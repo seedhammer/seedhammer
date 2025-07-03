@@ -545,7 +545,7 @@ func (d *Device) RadioOn(prot Protocol) error {
 	if err := d.command(cmdResetRXGain); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
-	flags := byte(0b1<<en | 0b11<<en_fd_c)
+	flags := byte(0b1<<en | 0b01<<en_fd_c)
 	if err := d.writeReg(regOpCtrl, flags); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
