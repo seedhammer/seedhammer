@@ -74,7 +74,6 @@ const (
 	LCD_DB0 = machine.GPIO18
 
 	DRV_ENABLE = machine.GPIO10
-	enableDrv  = true
 
 	STEPPER_UART = machine.GPIO9
 	X_ADDR       = 0b00
@@ -119,10 +118,6 @@ const (
 	// Voltage range for engraving.
 	minVoltage = 20_000
 	maxVoltage = 28_000
-	// Current limit for engraving. Note that the needle
-	// sense current above only limits the activation current,
-	// whereas this limits the average current.
-	currentLimit = 3_000
 
 	// stallThreshold is the TMC2209 SGTHRS for triggering a
 	// stall.
@@ -261,7 +256,7 @@ func (d nfcDev) FIFOSize() int {
 
 func configEngraver(bus *multiplexI2C) (*engraver, error) {
 	DRV_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	DRV_ENABLE.Set(!enableDrv)
+	DRV_ENABLE.Set(false)
 	usbpd := ap33772s.New(bus, USBPD_INT)
 	if err := usbpd.Configure(); err != nil {
 		return nil, err
@@ -443,13 +438,31 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 		return err
 	}
 	defer e.adjustVoltage(idleVoltage*1000, idleVoltage*1000)
-	if err := e.PD.LimitCurrent(currentLimit); err != nil {
+
+	// Staggered power up.
+	// At this point, the USB power supply should be ready to supply the
+	// promised current. To be safe, wait a bit before drawing power.
+	time.Sleep(500 * time.Millisecond)
+	// Enable the power circuitry, in particular charge the engraving capacitors.
+	DRV_ENABLE.Set(true)
+	defer func() {
+		// Disable the power circuitry.
+		DRV_ENABLE.Set(false)
+		// Wait a bit for the discharge circuit to empty the capacitors.
+		time.Sleep(500 * time.Millisecond)
+	}()
+
+	// Wait a bit before enabling each stepper,
+	time.Sleep(200 * time.Millisecond)
+	if err := e.XAxis.Enable(true); err != nil {
 		return err
 	}
-	defer e.PD.LimitCurrent(0)
-	// Set up pins.
-	DRV_ENABLE.Set(enableDrv)
-	defer DRV_ENABLE.Set(!enableDrv)
+	defer e.XAxis.Enable(false)
+	time.Sleep(200 * time.Millisecond)
+	if err := e.YAxis.Enable(true); err != nil {
+		return err
+	}
+	defer e.YAxis.Enable(false)
 	// Wait for standstill tuning of the drivers.
 	time.Sleep(tmc2209.StandstillTuningPeriod)
 

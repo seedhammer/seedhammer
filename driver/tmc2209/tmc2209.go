@@ -146,22 +146,39 @@ func (d *Device) Configure() error {
 		return fmt.Errorf("tmc2209: set IHOLD/IRUN: %w", err)
 	}
 
-	chopconf, err := d.read(CHOPCONF)
-	if err != nil {
-		return fmt.Errorf("tmc2209: read CHOPCONF: %w", err)
+	if err := d.Enable(false); err != nil {
+		return err
 	}
-	// Set microstep resolution.
-	chopconf &^= 0b1111 << mres_shift
-	chopconf |= (8 - stepExp) << mres_shift
-	// Disable step interpolation.
-	chopconf &^= intpol
-	d.write(CHOPCONF, chopconf)
 
 	// Reset GSTAT.
 	if err := d.write(GSTAT, 0b111); err != nil {
 		return fmt.Errorf("tmc2209: set GSTAT: %w", err)
 	}
 
+	return nil
+}
+
+func (d *Device) Enable(en bool) error {
+	chopconf, err := d.read(CHOPCONF)
+	if err != nil {
+		return fmt.Errorf("tmc2209: enable: %w", err)
+	}
+	// Set microstep resolution.
+	chopconf &^= 0b1111 << mres_shift
+	chopconf |= (8 - stepExp) << mres_shift
+	// Disable step interpolation.
+	chopconf &^= intpol
+	// Stash TOFF, and set it to zero to disable the driver.
+	const toffMask = 0b1111
+	const toff = 3
+	if en {
+		chopconf |= toff
+	} else {
+		chopconf &^= toffMask
+	}
+	if err := d.write(CHOPCONF, chopconf); err != nil {
+		return fmt.Errorf("tmc2209: enable: %w", err)
+	}
 	return nil
 }
 
