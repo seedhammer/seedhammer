@@ -31,8 +31,13 @@ type Bus interface {
 	Tx(addr uint16, w, r []byte) error
 }
 
-// ErrExternalField is returned when an external field is detected.
-var ErrExternalField = errors.New("st25r3916: external field conflict")
+var (
+	// ErrExternalField is returned when an external field is detected.
+	ErrExternalField = errors.New("st25r3916: external field conflict")
+	// ErrExternalFieldOff is returned when an operation is interrupted
+	// by an external field turning off.
+	ErrExternalFieldOff = errors.New("st25r3916: external field turned off")
+)
 
 // FIFOSize is the number of bytes that can be
 // read without risking overflow
@@ -576,21 +581,23 @@ func (d *Device) Read(buf []byte) (int, error) {
 		if err := d.updateExtField(intrs); err != nil {
 			return 0, fmt.Errorf("st25r3916: read: %w", err)
 		}
-		if wasAct && d.extField == fieldOff {
-			// Treat the turning off of a previously active field
-			// as EOF.
-			return 0, io.EOF
-		}
+		var n int
 		if intrs.Main&(0b1<<i_rxe) != 0 {
 			// Data available.
-			break
+			n, err = d.read(buf)
+			if err != nil && err != io.EOF {
+				err = fmt.Errorf("st25r3916: read: %w", err)
+			}
+		}
+		if err == nil && wasAct && d.extField == fieldOff {
+			// Treat the turning off of a previously active field
+			// as EOF.
+			err = ErrExternalFieldOff
+		}
+		if n > 0 || err != nil {
+			return n, err
 		}
 	}
-	n, err := d.read(buf)
-	if err != nil && err != io.EOF {
-		err = fmt.Errorf("st25r3916: read: %w", err)
-	}
-	return n, err
 }
 
 func (d *Device) read(buf []byte) (int, error) {
