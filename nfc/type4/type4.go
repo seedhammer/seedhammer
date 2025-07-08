@@ -9,6 +9,8 @@ import (
 	"io"
 )
 
+const ChunkSize = 128
+
 // Tag emulates a writable empty tag.
 type Tag struct {
 	d            Device
@@ -52,18 +54,20 @@ func dbgf(f string, args ...any) {
 
 // ATS response (11.6.2).
 const (
-	ATS_TL = 5        // Length.
-	ATS_T0 = 0b1<<4 | // Include TA(1).
+	atsTL = 5        // Length.
+	atsT0 = 0b1<<4 | // Include TA(1).
 		0b1<<5 | // Include TB(1).
 		0b1<<6 | // Include TC(1).
-		0x8 // FSCI (64 byte frame size)
-	ATS_TA1 = 0x00   // Bit rate 106kb/s only.
-	ATS_TB1 = 8<<4 | // FWI = FWImax (~77ms)
+		fsci
+	atsTA1 = 0x00   // Bit rate 106kb/s only.
+	atsTB1 = 8<<4 | // FWI = FWImax (~77ms)
 		0 // SFGT = 0 (no guard time)
-	ATS_TC1 = 0 // No support for NAD nor DID.
+	atsTC1 = 0 // No support for NAD nor DID.
 
-	ndefFileID   = 0x0001
+	fsci = 8
+	// FSCI 8 corresponds to frame size 256 (table 66).
 	maxFrameSize = 256
+	ndefFileID   = 0x0001
 	maxNDEFSize  = 8192
 	blockSize    = 4
 	readSize     = 16
@@ -83,12 +87,12 @@ const (
 
 var (
 	cmdSLP_REQ = []byte{0x50, 0x00}
-	ATS        = []byte{
-		ATS_TL,
-		ATS_T0,
-		ATS_TA1,
-		ATS_TB1,
-		ATS_TC1,
+	ats        = []byte{
+		atsTL,
+		atsT0,
+		atsTA1,
+		atsTB1,
+		atsTC1,
 	}
 	// NFC Type 4 Tag Operation Specification commands.
 	isodepACK         = []byte{0x90, 0x00}
@@ -108,8 +112,8 @@ func init() {
 	// Table 5.
 	capContainer = bo.AppendUint16(capContainer, uint16(cap(capContainer))) // Container size
 	capContainer = append(capContainer, isodepMAPPING_VERSION)
-	capContainer = bo.AppendUint16(capContainer, 0x3b) // ReadBinary chunk size
-	capContainer = bo.AppendUint16(capContainer, 0x34) // UpdateBinary chunk size
+	capContainer = bo.AppendUint16(capContainer, ChunkSize) // ReadBinary chunk size
+	capContainer = bo.AppendUint16(capContainer, ChunkSize) // UpdateBinary chunk size
 
 	// Control block TLV. Section 5.1.2.1.
 	capContainer = append(capContainer, 0x04)
@@ -170,7 +174,7 @@ func (t *Tag) Read(b []byte) (int, error) {
 				// Initialize I-block number to 1 (13.2.4.2).
 				t.blockNo = 0b1
 				t.state = activeState
-				resp = append(resp, ATS...)
+				resp = append(resp, ats...)
 			case bytes.Equal(buf, cmdSLP_REQ):
 				// Go to sleep, waiting for WUPA.
 				if err := t.d.Sleep(); err != nil {
