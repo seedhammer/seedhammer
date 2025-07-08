@@ -96,9 +96,6 @@ var (
 	isodepTAG_SELECT  = []byte{0xa4, 0x04, 0x00, 0x07, 0xd2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01, 0x00}
 	isodepCC_SELECT   = []byte{0xa4, 0x00, 0x0c, 0x02, 0xe1, 0x03}
 	isodepFILE_SELECT = []byte{0xa4, 0x00, 0x0c, 0x02, 0x00, 0x01}
-	writes            = make([]byte, 0, 1000)
-	dirs              = make([]bool, 0, 100)
-	sep               = []byte{0xde, 0xad, 0xbe, 0xef}
 	capContainer      = make([]byte, 0, 15)
 	emptyFile         = []byte{
 		0x00, 0x00, // Length 0.
@@ -123,13 +120,17 @@ func init() {
 	capContainer = append(capContainer, 0x00)                 // Write allowed.
 }
 
+var (
+	writes = make([]byte, 0, 1000)
+	dirs   = make([]bool, 0, 100)
+	sep    = []byte{0xde, 0xad, 0xbe, 0xef}
+)
+
 // Read file contents written by a NFC writer.
 func (t *Tag) Read(b []byte) (int, error) {
-	nwrites, nreads, ncmds := 0, 0, 0
 	writes := writes[:0]
 	dirs := dirs[:0]
 	defer func() {
-		dbgf("...done. stats nwrites %d nreads %d ncmds %d", nwrites, nreads, ncmds)
 		if len(writes) > 0 {
 			for i, msg := range bytes.Split(writes, sep) {
 				unit := "Tag   "
@@ -156,7 +157,6 @@ func (t *Tag) Read(b []byte) (int, error) {
 				return 0, io.EOF
 			}
 		}
-		ncmds++
 		if len(writes) > 0 {
 			writes = append(writes, sep...)
 		}
@@ -173,17 +173,19 @@ func (t *Tag) Read(b []byte) (int, error) {
 				resp = append(resp, ATS...)
 			case bytes.Equal(buf, cmdSLP_REQ):
 				// Go to sleep, waiting for WUPA.
-				if err := t.Sleep(); err != nil {
+				if err := t.d.Sleep(); err != nil {
 					return 0, fmt.Errorf("type4: %w", err)
 				}
+				readErr = io.EOF
 			}
 		case activeState, ndefState, ccFileState, fileState:
 			switch {
 			case len(buf) == 1 && buf[0] == isodepDESELECT:
 				// Go to sleep, waiting for WUPA.
-				if err := t.Sleep(); err != nil {
+				if err := t.d.Sleep(); err != nil {
 					return 0, fmt.Errorf("type4: %w", err)
 				}
+				readErr = io.EOF
 				resp = append(resp, isodepDESELECT)
 			case len(buf) == 1 && (buf[0]&^0b1) == isodepR_NAK:
 				rbno := buf[0] & 0b1
@@ -290,9 +292,4 @@ func (t *Tag) write(out, in []byte) (int, error) {
 		return n, errors.New("type4: buffer overflow")
 	}
 	return n, nil
-}
-
-func (t *Tag) Sleep() error {
-	t.state = initState
-	return t.d.Sleep()
 }

@@ -63,8 +63,9 @@ func run() error {
 				time.Sleep(500 * time.Millisecond)
 				continue
 			}
-			t4temu.Reset(nfc)
+		out:
 			for {
+				t4temu.Reset(nfc)
 				// nr := ndef.NewReader(t4temu)
 				// n, err := nr.Read(contents)
 				// if n > 0 {
@@ -72,13 +73,18 @@ func run() error {
 				// 	m, err := bip39.Parse(contents[:n])
 				// 	log.Println("message", m, err)
 				// }
-				n, err := t4temu.Read(contents)
-				if n > 0 {
-					log.Println("t4t read:", contents[:n])
-				}
-				if err != nil {
-					log.Println("listen break:", err)
-					break
+				for {
+					n, err := t4temu.Read(contents)
+					if n > 0 {
+						log.Println("t4t read:", contents[:n])
+					}
+					if err != nil {
+						if err != io.EOF {
+							log.Println("listen err:", err)
+							break out
+						}
+						break
+					}
 				}
 			}
 			continue

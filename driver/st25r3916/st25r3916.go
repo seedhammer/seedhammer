@@ -34,9 +34,9 @@ type Bus interface {
 var (
 	// ErrExternalField is returned when an external field is detected.
 	ErrExternalField = errors.New("st25r3916: external field conflict")
-	// ErrExternalFieldOff is returned when an operation is interrupted
+	// errExternalFieldOff is returned when an operation is interrupted
 	// by an external field turning off.
-	ErrExternalFieldOff = errors.New("st25r3916: external field turned off")
+	errExternalFieldOff = errors.New("st25r3916: external field turned off")
 )
 
 // FIFOSize is the number of bytes that can be
@@ -311,7 +311,6 @@ func (d *Device) RadioOn(prot Protocol) error {
 	}
 	if d.listen {
 		// Set up card emulation mode.
-
 		d.excludeCRC = true
 		if err := d.command(cmdGotoSense); err != nil {
 			return fmt.Errorf("st25r3916: radio: %w", err)
@@ -592,7 +591,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 		if err == nil && wasAct && d.extField == fieldOff {
 			// Treat the turning off of a previously active field
 			// as EOF.
-			err = ErrExternalFieldOff
+			err = errExternalFieldOff
 		}
 		if n > 0 || err != nil {
 			return n, err
