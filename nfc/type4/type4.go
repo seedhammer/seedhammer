@@ -9,7 +9,7 @@ import (
 	"io"
 )
 
-const ChunkSize = 128
+const chunkSize = 128
 
 // Tag emulates a writable empty tag.
 type Tag struct {
@@ -18,8 +18,9 @@ type Tag struct {
 	blockNo      byte
 	nextWriteOff int
 
-	buf  [maxFrameSize]byte
-	resp [maxFrameSize]byte
+	buf       [maxFrameSize]byte
+	resp      [maxFrameSize]byte
+	readBytes int
 }
 
 type Device interface {
@@ -32,6 +33,7 @@ type Device interface {
 func (t *Tag) Reset(d Device) {
 	t.d = d
 	t.state = initState
+	t.readBytes = 0
 }
 
 type protoState int
@@ -43,14 +45,6 @@ const (
 	ccFileState
 	fileState
 )
-
-func dbg(strs ...any) {
-	fmt.Println(strs...)
-}
-
-func dbgf(f string, args ...any) {
-	fmt.Printf(f+"\n", args...)
-}
 
 // ATS response (11.6.2).
 const (
@@ -112,8 +106,8 @@ func init() {
 	// Table 5.
 	capContainer = bo.AppendUint16(capContainer, uint16(cap(capContainer))) // Container size
 	capContainer = append(capContainer, isodepMAPPING_VERSION)
-	capContainer = bo.AppendUint16(capContainer, ChunkSize) // ReadBinary chunk size
-	capContainer = bo.AppendUint16(capContainer, ChunkSize) // UpdateBinary chunk size
+	capContainer = bo.AppendUint16(capContainer, chunkSize) // ReadBinary chunk size
+	capContainer = bo.AppendUint16(capContainer, chunkSize) // UpdateBinary chunk size
 
 	// Control block TLV. Section 5.1.2.1.
 	capContainer = append(capContainer, 0x04)
@@ -124,32 +118,19 @@ func init() {
 	capContainer = append(capContainer, 0x00)                 // Write allowed.
 }
 
-var (
-	writes = make([]byte, 0, 1000)
-	dirs   = make([]bool, 0, 100)
-	sep    = []byte{0xde, 0xad, 0xbe, 0xef}
-)
-
 // Read file contents written by a NFC writer.
 func (t *Tag) Read(b []byte) (int, error) {
-	writes := writes[:0]
-	dirs := dirs[:0]
-	defer func() {
-		if len(writes) > 0 {
-			for i, msg := range bytes.Split(writes, sep) {
-				unit := "Tag   "
-				if dirs[i] {
-					unit = "Reader"
-				}
-				dbgf("%s: %x", unit, msg)
-			}
-		}
-	}()
-	bytesRead := 0
 	var readErr error
 	for {
-		if bytesRead > 0 || readErr != nil {
-			return bytesRead, readErr
+		if readErr != nil {
+			return 0, readErr
+		}
+		if t.readBytes > 0 {
+			d := t.buf[:t.readBytes]
+			n := copy(b, d)
+			t.readBytes -= n
+			copy(d, d[n:])
+			return n, nil
 		}
 		n, err := t.d.Read(t.buf[:])
 		buf := t.buf[:n]
@@ -161,11 +142,6 @@ func (t *Tag) Read(b []byte) (int, error) {
 				return 0, io.EOF
 			}
 		}
-		if len(writes) > 0 {
-			writes = append(writes, sep...)
-		}
-		writes = append(writes, buf...)
-		dirs = append(dirs, true)
 		resp := t.resp[:0]
 		switch t.state {
 		case initState:
@@ -180,6 +156,8 @@ func (t *Tag) Read(b []byte) (int, error) {
 				if err := t.d.Sleep(); err != nil {
 					return 0, fmt.Errorf("type4: %w", err)
 				}
+				t.state = initState
+				t.nextWriteOff = 0
 				readErr = io.EOF
 			}
 		case activeState, ndefState, ccFileState, fileState:
@@ -189,6 +167,8 @@ func (t *Tag) Read(b []byte) (int, error) {
 				if err := t.d.Sleep(); err != nil {
 					return 0, fmt.Errorf("type4: %w", err)
 				}
+				t.state = initState
+				t.nextWriteOff = 0
 				readErr = io.EOF
 				resp = append(resp, isodepDESELECT)
 			case len(buf) == 1 && (buf[0]&^0b1) == isodepR_NAK:
@@ -226,7 +206,9 @@ func (t *Tag) Read(b []byte) (int, error) {
 					resp = append(resp, isodepACK...)
 				case t.state >= ccFileState && buf[0] == isodepWRITE:
 					buf = buf[1:]
-					bytesRead, readErr = t.write(b, buf)
+					// Note that we're re-using the receive buffer to
+					// hold the written data.
+					t.readBytes, readErr = t.write(t.buf[:], buf)
 					if readErr != nil && readErr != io.EOF {
 						break
 					}
@@ -238,9 +220,6 @@ func (t *Tag) Read(b []byte) (int, error) {
 			}
 		}
 		if len(resp) > 0 {
-			dirs = append(dirs, false)
-			writes = append(writes, sep...)
-			writes = append(writes, resp...)
 			if _, err := t.d.Write(resp); err != nil {
 				return 0, fmt.Errorf("type4: %w", err)
 			}
@@ -278,15 +257,19 @@ func (t *Tag) write(out, in []byte) (int, error) {
 	if len(in) != size {
 		return 0, errors.New("type4: invalid size in write request")
 	}
+	eof := false
 	// Chop off writes to the first 2 size bytes.
 	off -= 2
 	if off < 0 {
 		in = in[min(len(in), -off):]
 		off = 0
+		if t.nextWriteOff != 0 {
+			eof = true
+		}
 		t.nextWriteOff = 0
 	}
 	if len(in) > 0 && off != t.nextWriteOff {
-		// We don't support random writes.
+		// Reject random writes.
 		return 0, errors.New("type4: non-contiguous write")
 	}
 	t.nextWriteOff = off + len(in)
@@ -294,6 +277,9 @@ func (t *Tag) write(out, in []byte) (int, error) {
 	in = in[n:]
 	if len(in) > 0 {
 		return n, errors.New("type4: buffer overflow")
+	}
+	if eof {
+		return n, io.EOF
 	}
 	return n, nil
 }

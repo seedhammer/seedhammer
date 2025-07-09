@@ -45,7 +45,7 @@ func run() error {
 	}
 	trans := iso15693.NewTransceiver(nfc, st25r3916.FIFOSize)
 	t4temu := new(type4.Tag)
-	contents := make([]byte, max(type4.ChunkSize, 8*1024))
+	contents := make([]byte, 8*1024)
 	defer nfc.RadioOff()
 	for {
 		if err := nfc.Configure(); err != nil {
