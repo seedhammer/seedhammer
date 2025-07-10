@@ -31,8 +31,6 @@ type Bus interface {
 }
 
 var (
-	// ErrExternalField is returned when an external field is detected.
-	ErrExternalField = errors.New("st25r3916: external field conflict")
 	// errExternalFieldOff is returned when an operation is interrupted
 	// by an external field turning off.
 	errExternalFieldOff = errors.New("st25r3916: external field turned off")
@@ -85,8 +83,7 @@ const (
 	fieldActive
 )
 
-func (d *Device) Configure() error {
-	d.extField = fieldOff
+func (d *Device) reset() error {
 	if d.timer == nil {
 		d.timer = time.NewTimer(0)
 	}
@@ -97,7 +94,7 @@ func (d *Device) Configure() error {
 	d.Int.SetInterrupt(machine.PinRising, d.handleInterrupt)
 	// Reset.
 	if err := d.command(cmdSetDefault); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+		return err
 	}
 	// Initialize according to the datasheet, section 4.1 "Power-on sequence".
 	datasheetSetup := d.scratch[:3]
@@ -105,7 +102,7 @@ func (d *Device) Configure() error {
 	datasheetSetup[1] = 0x04
 	datasheetSetup[2] = 0x10
 	if err := d.Bus.Tx(i2cAddr, datasheetSetup, nil); err != nil {
-		return fmt.Errorf("st25r3916: configure: %w", err)
+		return err
 	}
 	if err := d.writeRegs(
 		regIOConf1, 0b11<<out_cl|0b1<<lf_clk_off|0b01<<i2c_thd, // Disable the MCU_CLK pin, 400 kHz i2c.
@@ -122,13 +119,13 @@ func (d *Device) Configure() error {
 		regAmplitudeMeasCtrl, ampSens<<am_d|0b1<<am_ae|0b1<<am_aam|0b10<<am_aew, // Set amplitude measurement ∆am, auto-averaging reference.
 		regPhaseMeasCtrl, phaseSens<<pm_d|0b1<<pm_ae|0b1<<pm_aam|0b10<<pm_aew, // Set phase measurement ∆pm, auto-averaging reference.
 	); err != nil {
-		return fmt.Errorf("st25r3916: configure: %w", err)
+		return err
 	}
 	if err := d.enablePassiveNFCA(false); err != nil {
-		return fmt.Errorf("st25r3916: configure: %w", err)
+		return err
 	}
 	if err := d.enable(); err != nil {
-		return fmt.Errorf("st25r3916: configure: %w", err)
+		return err
 	}
 	// Adjust regulators.
 	if err := d.writeRegs(
@@ -136,11 +133,11 @@ func (d *Device) Configure() error {
 		regRegulatorCtrl, 0b1<<reg_s,
 		regRegulatorCtrl, 0b0<<reg_s,
 	); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
+		return err
 	}
 	// Then issue the adjust regulator command.
 	if _, err := d.commandAndWait(cmdAdjustRegulator, interrupts{Timer: 0b1 << i_dct}, defTimeout); err != nil {
-		return fmt.Errorf("st25r3916: configure: %w", err)
+		return err
 	}
 	// Generate random 4-byte UID, starting with 0x08 to indicate
 	// it is dynamically generated.
@@ -163,12 +160,9 @@ func (d *Device) Configure() error {
 		sakT4A, sakT4A, sakT4A,
 	}
 	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
-		return fmt.Errorf("st25r3916: listen: %w", err)
+		return err
 	}
-	if err := d.RadioOff(); err != nil {
-		return fmt.Errorf("st25r3916: %w", err)
-	}
-	return nil
+	return d.RadioOff()
 }
 
 func (d *Device) enablePassiveNFCA(en bool) error {
@@ -212,11 +206,12 @@ func (d *Device) handleInterrupt(machine.Pin) {
 }
 
 func (d *Device) updateExtField(intrs interrupts) error {
-	if intrs.Timer&(0b1<<i_eon) != 0 {
+	if intrs.Timer&(0b1<<i_eon|0b1<<i_cac) != 0 {
 		d.extField = max(fieldOn, d.extField)
 	}
-	if intrs.Timer&(0b1<<i_eof) != 0 {
+	if intrs.Timer&(0b1<<i_cat|0b1<<i_eof) != 0 {
 		d.extField = fieldOff
+		d.excludeCRC = true
 		if err := d.enablePassiveNFCA(true); err != nil {
 			return err
 		}
@@ -233,23 +228,38 @@ func (d *Device) updateExtField(intrs interrupts) error {
 	return nil
 }
 
-func (d *Device) Detect(quit <-chan struct{}) error {
+// Wait for detection of a tag or external field, and
+// attempt to turn on the field. Return false if an external
+// field was detection.
+func (d *Device) Detect(quit <-chan struct{}) (bool, error) {
+	if d.extField > fieldOff {
+		return false, nil
+	}
+	// According to AN5320, "Wake-up mode for ST25R3916", the
+	// only way to reset the sensor calibration is to reset
+	// the device.
+	if err := d.reset(); err != nil {
+		return false, fmt.Errorf("st25r3916: detect: %w", err)
+	}
 	if err := d.configureProtocol(ISO14443a); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
+		return false, fmt.Errorf("st25r3916: detect: %w", err)
 	}
 	mask := interrupts{
 		Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph,
 	}
 	if err := d.resetInterruptMask(mask); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
+		return false, fmt.Errorf("st25r3916: detect: %w", err)
 	}
 	if err := d.writeRegs(regOpCtrl, 0b1<<wu); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
+		return false, fmt.Errorf("st25r3916: detect: %w", err)
 	}
 	if _, err := d.waitForInterrupt(0, quit); err != nil {
-		return fmt.Errorf("st25r3916: detect: %w", err)
+		return false, fmt.Errorf("st25r3916: detect: %w", err)
 	}
-	return nil
+	if err := d.radioOn(); err != nil {
+		return false, fmt.Errorf("st25r3916: detect: %w", err)
+	}
+	return d.extField == fieldOff, nil
 }
 
 func (d *Device) RadioOff() error {
@@ -259,28 +269,19 @@ func (d *Device) RadioOff() error {
 	return nil
 }
 
-// Attempts to turn on the field for communication through
-// the protocol. Reports [ErrExternalField] if an external
-// field is detected.
-func (d *Device) RadioOn(prot Protocol) error {
-	if d.extField > fieldOff {
-		return ErrExternalField
-	}
-	if err := d.configureProtocol(prot); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
-	}
+func (d *Device) radioOn() error {
 	if err := d.enable(); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
+		return err
 	}
 	if err := d.command(cmdStopAll); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
+		return err
 	}
 	if err := d.command(cmdResetRXGain); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
+		return err
 	}
 	flags := byte(0b1<<en | 0b01<<en_fd_c)
 	if err := d.writeReg(regOpCtrl, flags); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
+		return err
 	}
 	mask := interrupts{
 		Main:    0b1 << i_rxe,
@@ -294,37 +295,31 @@ func (d *Device) RadioOn(prot Protocol) error {
 		defTimeout,
 	)
 	if err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
-	}
-	listen := intrs.Timer&(0b1<<i_cat) == 0
-	// Enable receiver.
-	flags |= 0b1 << rx_en
-	if !listen {
-		flags |= 0b1 << tx_en
-	}
-	if err := d.writeReg(regOpCtrl, flags); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
+		return err
 	}
 	if err := d.updateExtField(intrs); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
+		return err
 	}
-	if err := d.enablePassiveNFCA(listen); err != nil {
-		return fmt.Errorf("st25r3916: radio: %w", err)
-	}
-	if listen {
-		// Set up card emulation mode.
-		d.excludeCRC = true
-		if err := d.command(cmdGotoSense); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
-		if err := d.configureProtocol(ISO14443a); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
-		}
+	// Enable receiver.
+	flags |= 0b1 << rx_en
+	if d.extField == fieldOff {
+		// Enable field.
+		flags |= 0b1 << tx_en
+	} else {
 		// Set target, iso-14443a mode.
 		if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
-			return fmt.Errorf("st25r3916: radio: %w", err)
+			return err
 		}
-		return ErrExternalField
+	}
+	if err := d.writeReg(regOpCtrl, flags); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *Device) SetProtocol(prot Protocol) error {
+	if err := d.configureProtocol(prot); err != nil {
+		return fmt.Errorf("st25r3916: protocol: %w", err)
 	}
 	return nil
 }
@@ -576,12 +571,13 @@ func (d *Device) Read(buf []byte) (int, error) {
 		}
 		intrs, err := d.waitForInterrupt(timeout, nil)
 		if err != nil {
+			// In case of timeout, retry field collision
+			// detection.
 			d.extField = fieldOff
 			return 0, fmt.Errorf("st25r3916: read: %w", err)
 		}
 		wasAct := d.extField == fieldActive
 		if err := d.updateExtField(intrs); err != nil {
-			d.extField = fieldOff
 			return 0, fmt.Errorf("st25r3916: read: %w", err)
 		}
 		var n int

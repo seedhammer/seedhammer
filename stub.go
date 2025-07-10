@@ -2,7 +2,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -48,59 +47,36 @@ func run() error {
 	contents := make([]byte, 8*1024)
 	defer nfc.RadioOff()
 	for {
-		if err := nfc.Configure(); err != nil {
-			return err
-		}
-		if err := nfc.Detect(nil); err != nil {
+		active, err := nfc.Detect(nil)
+		if err != nil {
 			log.Printf("Detect: %v", err)
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-		r, err := poll(nfc, trans)
+		var r io.Reader
+		if active {
+			r, err = poll(nfc, trans)
+		} else {
+			t4temu.Reset(nfc)
+			r = t4temu
+		}
 		if err != nil {
-			if !errors.Is(err, st25r3916.ErrExternalField) {
-				log.Printf("Poll: %v", err)
-				time.Sleep(500 * time.Millisecond)
-				continue
-			}
-		out:
-			for {
-				t4temu.Reset(nfc)
-				// nr := ndef.NewReader(t4temu)
-				// n, err := nr.Read(contents)
-				// if n > 0 {
-				// 	log.Printf("Succes! %q", string(contents[:n]))
-				// 	m, err := bip39.Parse(contents[:n])
-				// 	log.Println("message", m, err)
-				// }
-				for {
-					n, err := t4temu.Read(contents)
-					if n > 0 {
-						log.Println("t4t read:", contents[:n])
-					}
-					if err != nil {
-						if err != io.EOF {
-							log.Println("listen err:", err)
-							break out
-						}
-						break
-					}
-				}
-			}
+			log.Printf("Poll: %v", err)
+			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-		if r != nil {
-			// buf := make([]byte, 512)
-			// for {
-			// 	n, err := r.Read(buf)
-			// 	log.Printf("%s\n", buf[:n])
-			// 	if err != nil {
-			// 		if err != io.EOF {
-			// 			return err
-			// 		}
-			// 		break
-			// 	}
-			// }
+		if r == nil {
+			continue
+		}
+		buf := make([]byte, 512)
+		for {
+			n, err := r.Read(buf)
+			log.Printf("%s (%v)\n", buf[:n], err)
+			if err != nil {
+				break
+			}
+		}
+		if false {
 			nr := ndef.NewReader(r)
 			n, err := nr.Read(contents)
 			if err == nil || err == io.EOF {
@@ -116,7 +92,7 @@ func run() error {
 }
 
 func poll(d *st25r3916.Device, trans *iso15693.Transceiver) (io.Reader, error) {
-	if err := d.RadioOn(st25r3916.ISO15693); err != nil {
+	if err := d.SetProtocol(st25r3916.ISO15693); err != nil {
 		return nil, err
 	}
 	tag15693, err := iso15693.Open(trans, trans.DecodedSize())
@@ -124,7 +100,7 @@ func poll(d *st25r3916.Device, trans *iso15693.Transceiver) (io.Reader, error) {
 		return tag15693, nil
 	}
 	log.Printf("iso15693: %v", err)
-	if err := d.RadioOn(st25r3916.ISO14443a); err != nil {
+	if err := d.SetProtocol(st25r3916.ISO14443a); err != nil {
 		return nil, err
 	}
 	tag14443, err := iso14443a.Open(d)
