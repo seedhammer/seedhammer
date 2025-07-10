@@ -1,32 +1,58 @@
 package type5
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"io"
 	"testing"
 )
 
-const uid uint64 = 0x0908070605040302
-
 func TestReader(t *testing.T) {
-	tag := &Tag{
-		t:    t,
-		data: bytes.Repeat([]byte{1, 2, 3, 4, 5, 6}, 100),
+	tests := [][]byte{
+		bytes.Repeat([]byte{0xde, 0xad, 0xbe, 0xef}, 100),
+		bytes.Repeat([]byte{1, 2, 3, 4}, 10000),
 	}
-	r, err := NewReader(tag, 512)
-	if err != nil {
-		t.Fatal(err)
+	for _, data := range tests {
+		var capContainer []byte
+		mlen := len(data) / 8
+		if mlen <= 255 {
+			capContainer = []byte{
+				ccMagic1,
+				0x40,                // Mapping version 1.0, read/write allowed.
+				byte(len(data) / 8), // Data length.
+				0x00,                // No extra features.
+			}
+		} else {
+			capContainer = []byte{
+				ccMagic2,
+				0x40,       // Mapping version 1.0, read/write allowed.
+				0x00,       // 8-byte capability container.
+				0x01,       // Read multiple supported.
+				0x00, 0x00, // RFU.
+			}
+			capContainer = binary.BigEndian.AppendUint16(capContainer, uint16(mlen))
+		}
+		tag := &Tag{
+			uid: 0x0908070605040302,
+			mem: append(capContainer, data...),
+		}
+		r, err := NewReader(tag, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Buffer reading to ensure a minimum read size.
+		bufr := bufio.NewReaderSize(r, 128)
+		got, err := io.ReadAll(bufr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, data) {
+			t.Errorf("\nread\n%x\nexpected\n%x", got, data)
+		}
 	}
-	if r.UID != uid {
-		t.Errorf("got uid %x, expected %x", r.UID, uid)
-	}
-	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("uid %x: %x\n", r.UID, got)
 }
 
 func TestTransceiverEncode(t *testing.T) {
@@ -75,38 +101,80 @@ func TestTransceiverDecode(t *testing.T) {
 
 // Tag implements a NFC forum type 2 tag.
 type Tag struct {
-	t    *testing.T
-	data []byte
-	resp []byte
+	uid   uint64
+	state tagState
+	mem   []byte
+	resp  []byte
 }
 
-func (r *Tag) Read(b []byte) (int, error) {
-	n := copy(b, r.resp)
-	r.resp = r.resp[:0]
+const blockSize = 4
+
+type tagState int
+
+const (
+	tagActive tagState = iota
+	tagSelected
+)
+
+func (t *Tag) Read(b []byte) (int, error) {
+	n := copy(b, t.resp)
+	if n < len(t.resp) {
+		return n, io.ErrShortBuffer
+	}
+	t.resp = t.resp[:0]
 	return n, io.EOF
 }
 
-func (r *Tag) Write(b []byte) (int, error) {
-	n := len(b)
-	r.resp = r.resp[:0]
+func (t *Tag) Write(req []byte) (int, error) {
+	n := len(req)
+	if len(t.resp) > 0 {
+		return 0, errors.New("write: double write")
+	}
+	if len(req) < 2 {
+		return 0, errors.New("read: double read or short write")
+	}
+	flags := req[0]
+	if flags&flagDataRate == 0 {
+		return 0, errors.New("read: data rate flag not set")
+	}
+	flags &^= flagDataRate
+	cmd := req[1]
+	req = req[2:]
 	switch {
-	case bytes.Equal(b, []byte{flagDataRate | flagInventory | flagNbSlots, cmdInventory, 0x00}):
-		r.resp = append(r.resp,
+	case flags == flagInventory|flagNbSlots && cmd == cmdInventory:
+		t.resp = append(t.resp,
 			0x00, // OK
 			0x00, // DSFID
 		)
-		r.resp = bo.AppendUint64(r.resp, uid)
-	case bytes.HasPrefix(b, []byte{flagDataRate | flagAddress, cmdReadMultipleBlocks}):
-		b = b[:2]
-		if len(b) < 10 {
+		t.resp = bo.AppendUint64(t.resp, t.uid)
+	case flags == flagAddress && cmd == cmdSelect && len(req) == 8:
+		if bo.Uint64(req) != t.uid {
 			break
 		}
-		if bo.Uint64(b) != uid {
-			break
+		t.resp = append(t.resp, 0x00) // OK
+		t.state = tagSelected
+	case t.state == tagSelected && flags == flagSelect && cmd == cmdReadMultipleBlocks && len(req) == 2:
+		bno := int(req[0])
+		nblocks := int(req[1]) + 1
+		start := bno * blockSize
+		end := start + nblocks*blockSize
+		if end > len(t.mem) {
+			return 0, errors.New("write: memory read out of bounds")
 		}
-		b = b[8:]
-		bno, nblocks := int(b[0]), int(b[1])
-
+		t.resp = append(t.resp, 0x00) // OK
+		t.resp = append(t.resp, t.mem[start:end]...)
+	case t.state == tagSelected && flags == flagSelect && cmd == cmdExtReadMultipleBlocks && len(req) == 4:
+		bno := int(bo.Uint16(req))
+		nblocks := int(bo.Uint16(req[2:])) + 1
+		start := bno * blockSize
+		end := start + nblocks*blockSize
+		if end > len(t.mem) {
+			return 0, errors.New("write: memory read out of bounds")
+		}
+		t.resp = append(t.resp, 0x00) // OK
+		t.resp = append(t.resp, t.mem[start:end]...)
+	default:
+		return 0, errors.New("write: unknown command")
 	}
 	return n, nil
 }

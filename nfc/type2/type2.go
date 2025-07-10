@@ -11,9 +11,10 @@ import (
 
 // Reader implements a NFC Forum type 2 reader.
 type Reader struct {
-	bus     io.ReadWriter
-	block   uint8
-	scratch [12]byte
+	bus       io.ReadWriter
+	block     uint8
+	memBlocks int
+	scratch   [readSize]byte
 }
 
 // _GTa[ANALOG] is the maximum time a tag is allowed to
@@ -25,8 +26,7 @@ const _GTa = 5 * time.Millisecond
 
 func NewReader(d io.ReadWriter) (*Reader, error) {
 	tag := &Reader{
-		bus:   d,
-		block: memStartBlock,
+		bus: d,
 	}
 	time.Sleep(_GTa)
 	if _, err := tag.sensReq(); err != nil {
@@ -37,9 +37,30 @@ func NewReader(d io.ReadWriter) (*Reader, error) {
 		return nil, fmt.Errorf("type2: %w", err)
 	}
 	if (sak>>5)&0b11 != 0b00 {
-		return nil, fmt.Errorf("type2: tag not recognized")
+		return nil, errors.New("type2: tag not recognized")
 	}
+
+	memBlocks, err := tag.readCC()
+	if err != nil {
+		return nil, fmt.Errorf("type2: %w", err)
+	}
+	tag.memBlocks = memBlocks
 	return tag, nil
+}
+
+func (t *Reader) readCC() (int, error) {
+	if err := t.issueRead(ccBlock); err != nil {
+		return 0, fmt.Errorf("cc: %w", err)
+	}
+	cc := t.scratch[:readSize]
+	if _, err := io.ReadFull(t.bus, cc); err != nil {
+		return 0, fmt.Errorf("cc: %w", err)
+	}
+	if magic := cc[0]; magic != ccMagic {
+		return 0, fmt.Errorf("cc: invalid magic: %x", magic)
+	}
+	memBlocks := int(cc[2]) * 8 / blockSize
+	return memBlocks, nil
 }
 
 func (t *Reader) sensReq() (uint16, error) {
@@ -82,7 +103,7 @@ func (t *Reader) selectTag() (byte, error) {
 		// Copy (partial) UID response to request.
 		copy(uid, resp)
 		bcc_val := uid[4]
-		bcc_calc := uid[0] ^ uid[1] ^ uid[2] ^ uid[3]
+		bcc_calc := bcc(uid)
 		if bcc_val != bcc_calc {
 			return 0, errors.New("select: BCC mismatch")
 		}
@@ -107,15 +128,27 @@ func (t *Reader) selectTag() (byte, error) {
 // Read from the tag user memory. The buffer must be at least
 // 16 bytes long.
 func (t *Reader) Read(rx []byte) (int, error) {
-	if err := t.issueRead(t.block); err != nil {
+	if t.block == uint8(t.memBlocks) {
+		return 0, io.EOF
+	}
+	bno := t.block + ccBlock + 1
+	if err := t.issueRead(bno); err != nil {
 		return 0, fmt.Errorf("type2: read: %w", err)
 	}
-
 	n, err := t.bus.Read(rx)
 	if err != nil && err != io.EOF {
 		return n, fmt.Errorf("type2: read: %w", err)
 	}
-	t.block += uint8(n / blockSize)
+	// Trim reads that go beyond the end block.
+	nblocks := n / blockSize
+	t.block += uint8(nblocks)
+	rem := int(t.block) - t.memBlocks
+	rem = max(0, rem)
+	t.block -= uint8(rem)
+	n -= rem * blockSize
+	if t.block == uint8(t.memBlocks) {
+		return n, io.EOF
+	}
 	return n, nil
 }
 
@@ -127,6 +160,10 @@ func (t *Reader) issueRead(block byte) error {
 	return err
 }
 
+func bcc(uid []byte) byte {
+	return uid[0] ^ uid[1] ^ uid[2] ^ uid[3]
+}
+
 const (
 	cmdSENS_REQ = 0x26
 
@@ -135,9 +172,15 @@ const (
 	// blockSize in bytes.
 	blockSize = 4
 	// The start page of user memory.
-	memStartBlock = 3
+	ccBlock = 3
+	// The number of bytes returned from a read
+	// operation.
+	readSize = 16
 
 	casLevel1 = 0x93
 	casLevel2 = 0x95
 	casLevel3 = 0x97
+
+	ccSize  = 4
+	ccMagic = 0xe1
 )

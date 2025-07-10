@@ -11,160 +11,197 @@ import (
 
 // Reader implements a type 5 tag reader.
 type Reader struct {
-	UID uint64
-
 	bus io.ReadWriter
-	// bufSize is the largest unmber of bytes to request
-	// from bus.
-	bufSize int
+	cc  capContainer
+	// fifoSize is the maximum receive size.
+	fifoSize int
 	// blockNo is the block number to issue the next
 	// read from.
 	blockNo int
-	// blocksRem tracks the remaining number of blocks
-	// in the read.
-	blocksRem int
-	// blockSize is the block size determined in the
-	// first [Read].
-	blockSize int
-	// seenResponse tracks whether the response flags
-	// have been processed for a transceive.
-	seenResponse bool
-	scratch      [14]byte
+	// Reserve enough space for two blocks and a status byte.
+	scratch [2*maxSupportedBlockSize + 1]byte
 }
 
 // wakeupDelay is the time for the tag to power up after
 // entering the field.
 const wakeupDelay = 5 * time.Millisecond
 
+type capContainer struct {
+	FirstBlock   int
+	BlockSize    int
+	MemoryBlocks int
+}
+
 // NewReader creates a reader from an NFC transceiver.
 // Size is the maximum number of bytes that can be received
 // without overflowing the transceiver FIFO.
 // Note that the transceiver is expected to implement the
 // iso15693-2 codec. Use [Transceiver] if not.
-func NewReader(bus io.ReadWriter, size int) (*Reader, error) {
+func NewReader(bus io.ReadWriter, fifoSize int) (*Reader, error) {
 	tag := &Reader{
-		bus:     bus,
-		bufSize: size,
+		bus:      bus,
+		fifoSize: fifoSize,
 	}
+	// Wait for tag to power up.
 	time.Sleep(wakeupDelay)
-	req := tag.scratch[:3]
+
+	uid, err := tag.inventory()
+	if err != nil {
+		return nil, fmt.Errorf("type5: %w", err)
+	}
+	if err := tag.selectUID(uid); err != nil {
+		return nil, fmt.Errorf("type5: %w", err)
+	}
+	cc, err := tag.readCC()
+	if err != nil {
+		return nil, fmt.Errorf("type5: %w", err)
+	}
+	tag.cc = cc
+	return tag, nil
+}
+
+func (t *Reader) readCC() (capContainer, error) {
+	const nblocks = 2
+	// Read 2 blocks containing the
+	// capability container (up to 8 bytes).
+	if err := t.readMultiple(0, nblocks); err != nil {
+		return capContainer{}, fmt.Errorf("cc: %w", err)
+	}
+	cc := t.scratch[:]
+	n, err := t.read(cc)
+	if err != nil && err != io.EOF {
+		return capContainer{}, fmt.Errorf("cc: %w", err)
+	}
+	cc = cc[:n]
+	// Minimum block size is 4.
+	if len(cc) < 4*nblocks {
+		return capContainer{}, fmt.Errorf("cc: short read: %d", len(cc))
+	}
+	blockSize := n / nblocks
+	magic := cc[0]
+	switch magic {
+	case ccMagic1, ccMagic2:
+	default:
+		return capContainer{}, fmt.Errorf("cc: invalid magic: %x", magic)
+	}
+	mlen := int(cc[2])
+	ccSize := 4
+	if mlen == 0 {
+		// 8-byte capability container.
+		ccSize = 8
+		mlen = int(binary.BigEndian.Uint16(cc[6:]))
+	}
+	if ccSize%blockSize != 0 {
+		return capContainer{}, fmt.Errorf("cc: unsupported block size: %d", blockSize)
+	}
+	return capContainer{
+		FirstBlock:   ccSize / blockSize,
+		BlockSize:    blockSize,
+		MemoryBlocks: 8 * mlen / blockSize,
+	}, nil
+}
+
+func (t *Reader) selectUID(uid uint64) error {
+	req := t.scratch[:2+8]
+	req[0] = flagDataRate | // High speed
+		flagAddress // Address particular tag.
+	req[1] = cmdSelect
+	bo.PutUint64(req[2:], uid)
+	if _, err := t.bus.Write(req); err != nil {
+		return fmt.Errorf("select: %w", err)
+	}
+	resp := t.scratch[:]
+	if _, err := t.read(resp); err != nil && err != io.EOF {
+		return fmt.Errorf("select: %w", err)
+	}
+	return nil
+}
+
+func (t *Reader) inventory() (uint64, error) {
+	req := t.scratch[:3]
 	const maskLength = 0
 	req[0] = flagDataRate | // High speed
 		flagInventory | // Inventory options
 		flagNbSlots // 1 Slot
 	req[1] = cmdInventory
 	req[2] = maskLength
-	if err := tag.write(req); err != nil {
-		return nil, fmt.Errorf("type5: inventory: %w", err)
+	if _, err := t.bus.Write(req); err != nil {
+		return 0, fmt.Errorf("inventory: %w", err)
 	}
-	dsfidUID := tag.scratch[:]
-	n, err := tag.read(dsfidUID)
+	dsfidUID := t.scratch[:]
+	n, err := t.read(dsfidUID)
 	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("type5: inventory: %w", err)
+		return 0, fmt.Errorf("inventory: %w", err)
 	}
-	if n != 9 {
-		return nil, fmt.Errorf("type5: unexpected Inventory response length: %d", n)
+	dsfidUID = dsfidUID[:n]
+	if len(dsfidUID) != 9 {
+		return 0, fmt.Errorf("inventory: unexpected response length: %d", n)
 	}
 	// UID is after the 1-byte DSFID.
-	tag.UID = bo.Uint64(dsfidUID[1:])
-	return tag, nil
-}
-
-func (t *Reader) write(tx []byte) error {
-	t.seenResponse = false
-	_, err := t.bus.Write(tx)
-	return err
+	uid := bo.Uint64(dsfidUID[1:])
+	return uid, nil
 }
 
 // Read from the tag.
 func (t *Reader) Read(rx []byte) (int, error) {
-	if len(rx) < maxBlockSize {
-		return 0, fmt.Errorf("type5: read: %w", io.ErrShortBuffer)
+	bufLen := min(len(rx), t.fifoSize)
+	// Issue the maximum number of blocks that fit
+	// in bufLen. Subtract 1 for the response flag byte.
+	nblocks := (bufLen - 1) / t.cc.BlockSize
+	if nblocks == 0 {
+		return 0, io.ErrShortBuffer
 	}
-	// First read, with unknown block size.
-	if t.blockSize == 0 {
-		// Read a single block.
-		if err := t.issueRead(1); err != nil {
-			return 0, fmt.Errorf("type5: read: %w", err)
-		}
+	// Don't read past the end of memory.
+	nblocks = min(t.cc.MemoryBlocks-t.blockNo, nblocks)
+	if nblocks == 0 {
+		return 0, io.EOF
 	}
-	for {
-		n, err := t.read(rx)
-		if t.blockSize == 0 {
-			if n == 0 {
-				// Empty first block. We must have reached the
-				// end of the tag memory.
-				return 0, io.EOF
-			}
-			// First read is 1 block.
-			t.blockSize = n
-		}
-		t.blocksRem -= n / t.blockSize
-		if err != nil {
-			if err != io.EOF {
-				return n, fmt.Errorf("type5: read: %w", err)
-			}
-			if t.blocksRem > 0 {
-				// EOF reached.
-				return n, io.EOF
-			}
-			// Issue the maximal number of blocks that fits
-			// len(rx) minus the response flag byte.
-			nblocks := (t.bufSize - 1) / t.blockSize
-			if err := t.issueRead(nblocks); err != nil {
-				return 0, fmt.Errorf("type5: read: %w", err)
-			}
-		}
-		if n > 0 {
-			return n, nil
-		}
+	bno := t.cc.FirstBlock + t.blockNo
+	if err := t.readMultiple(bno, nblocks); err != nil {
+		return 0, fmt.Errorf("type5: read: %w", err)
 	}
+	n, err := t.read(rx)
+	if err != nil {
+		return n, fmt.Errorf("type5: read: %w", err)
+	}
+	t.blockNo += nblocks
+	if t.blockNo == t.cc.MemoryBlocks {
+		return n, io.EOF
+	}
+	return n, nil
 }
 
-func (t *Reader) issueRead(nblocks int) error {
+func (t *Reader) readMultiple(blockNo, nblocks int) error {
 	var req []byte
 	switch {
-	case t.blockNo <= 0xff && nblocks <= 0xff+1:
-		req = t.scratch[:12]
-		req[0] = flagDataRate | // High speed
-			flagAddress // Address particular tag.
+	case blockNo <= 0xff && nblocks <= 0xff+1:
+		req = t.scratch[:4]
+		req[0] = flagDataRate | flagSelect
 		req[1] = cmdReadMultipleBlocks
-		bo.PutUint64(req[2:], t.UID)
-		req[10] = byte(t.blockNo)
-		req[11] = byte(nblocks - 1) // block count, zero based.
-	case t.blockNo <= 0xffff && nblocks <= 0xffff+1:
-		req = t.scratch[:14]
-		req[0] = flagDataRate | // High speed
-			flagAddress // Address particular tag.
+		req[2] = byte(blockNo)
+		req[3] = byte(nblocks - 1) // block count, zero based.
+	case blockNo <= 0xffff && nblocks <= 0xffff+1:
+		req = t.scratch[:6]
+		req[0] = flagDataRate | flagSelect
 		req[1] = cmdExtReadMultipleBlocks
-		bo.PutUint64(req[2:], t.UID)
-		bo.PutUint16(req[10:], uint16(t.blockNo))
+		bo.PutUint16(req[2:], uint16(blockNo))
 		// Block count is zero-based.
-		bo.PutUint16(req[12:], uint16(nblocks-1))
+		bo.PutUint16(req[4:], uint16(nblocks-1))
 	default:
-		return io.EOF
+		return errors.New("read out of bounds")
 	}
-	if _, err := t.bus.Write(req); err != nil {
-		return err
-	}
-	t.blocksRem = nblocks
-	t.blockNo += nblocks
-	return nil
+	_, err := t.bus.Write(req)
+	return err
 }
 
 func (t *Reader) read(rx []byte) (int, error) {
 	n, err := t.bus.Read(rx)
-	if t.seenResponse {
-		return n, err
-	}
-	t.seenResponse = false
-
 	rx = rx[:n]
 	if len(rx) == 0 {
-		if err != nil {
+		if err != nil && err != io.EOF {
 			return 0, err
 		}
-		return 0, fmt.Errorf("read: response too short")
+		return 0, io.ErrUnexpectedEOF
 	}
 	// Process response flags.
 	respFlags := rx[0]
@@ -176,12 +213,12 @@ func (t *Reader) read(rx []byte) (int, error) {
 			return 0, err
 		}
 		if len(rx) == 0 {
-			return 0, fmt.Errorf("read: response too short")
+			return 0, io.ErrUnexpectedEOF
 		}
 		errCode := rx[0]
 		return 0, fmt.Errorf("read: tag error response (code %#.2x)", errCode)
 	}
-	return len(rx), err
+	return len(rx), nil
 }
 
 const (
@@ -335,6 +372,9 @@ func crcCITT(data []byte) uint16 {
 var bo = binary.LittleEndian
 
 const (
+	ccMagic1 = 0xe1
+	ccMagic2 = 0xe2
+
 	cmdInventory             = 0x01
 	cmdReadSingleBlock       = 0x20
 	cmdReadMultipleBlocks    = 0x23
@@ -361,4 +401,6 @@ const (
 
 	// maxBlockSize in bytes according to the specification.
 	maxBlockSize = 256 / 8
+	// Support up to 8 byte blocks.
+	maxSupportedBlockSize = 8
 )

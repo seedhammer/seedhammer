@@ -22,25 +22,6 @@ func NewReader(rd io.Reader) *Reader {
 }
 
 func (r *Reader) Read(buf []byte) (int, error) {
-	// Read the capability container magic, and
-	// skip the rest. We don't need the tag memory
-	// information.
-	magic, err := r.r.ReadByte()
-	if err != nil {
-		return 0, fmt.Errorf("ndef: %w", err)
-	}
-	discard := 0
-	switch magic {
-	case ccMagic4:
-		discard = 3
-	case ccMagic8:
-		discard = 7
-	default:
-		return 0, fmt.Errorf("ndef: unknown container magic")
-	}
-	if _, err := r.r.Discard(discard); err != nil {
-		return 0, fmt.Errorf("ndef: %w", err)
-	}
 	// Read until a NDEF message is reached.
 	var length int
 	for {
@@ -128,9 +109,6 @@ func (r *Reader) Read(buf []byte) (int, error) {
 }
 
 const (
-	ccMagic4 = 0xe1
-	ccMagic8 = 0xe2
-
 	ndefType = 0x03
 
 	uriPrefixNone     = 0x00

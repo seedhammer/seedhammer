@@ -66,17 +66,23 @@ func run() error {
 			if r == nil {
 				continue
 			}
-			r = ndef.NewReader(r)
 		} else {
 			r = t4temu
 		}
+		if false {
+			r = ndef.NewReader(r)
+		}
+		tot := 0
 		for {
 			n, err := r.Read(contents)
-			log.Printf("%s (%v)\n", contents[:n], err)
+			contents := contents[:n]
+			log.Printf("%x (size=%d) (err=%v)\n", contents, len(contents), err)
+			tot += len(contents)
 			if err != nil {
 				break
 			}
 		}
+		// log.Println("total bytes read:", tot)
 	}
 }
 
