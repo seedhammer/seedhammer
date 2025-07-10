@@ -82,7 +82,7 @@ func poll(d *st25r3916.Device, trans *iso15693.Transceiver) (io.Reader, error) {
 	if err := d.SetProtocol(st25r3916.ISO15693); err != nil {
 		return nil, err
 	}
-	tag15693, err := iso15693.Open(trans, trans.DecodedSize())
+	tag15693, err := iso15693.Open(trans, trans.ReadCapacity())
 	if err == nil {
 		return tag15693, nil
 	}

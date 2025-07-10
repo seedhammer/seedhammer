@@ -195,10 +195,14 @@ const (
 	data_10_1_4 = 0x20
 	data_11_1_4 = 0x80
 
-	frameSize   = 1 + 1 // SOF + EOF
-	crcSize     = 2     // 16-bit CRC
-	_1of4Size   = 4     // 1-of-4 encoding takes 4 bytes per byte.
-	crcResidual = 0x0f47
+	transFrameSize = 1 + 1 // SOF + EOF
+	crcSize        = 2     // 16-bit CRC
+	_1of4Size      = 4     // 1-of-4 encoding takes 4 bytes per byte.
+	crcResidual    = 0x0f47
+	// Two bytes of readFrameSize: 5 bits SOF, 5 bits EOF, 6 bits of padding.
+	readFrameSize = (5 + 5 + 6) / 8
+	// Every bit is encoded as two Manchester bits.
+	manchesterRate = 2
 )
 
 // Transceiver implements the iso15693-2 physical framing, encoding
@@ -219,9 +223,10 @@ func NewTransceiver(bus io.ReadWriter, size int) *Transceiver {
 	}
 }
 
-func (t *Transceiver) DecodedSize() int {
-	// Report the transmission size; receive sizes are smaller.
-	return (cap(t.buf)-frameSize)/_1of4Size - crcSize
+// ReadCapacity reports the maximum number of bytes that fits
+// the transceiver buffer.
+func (t *Transceiver) ReadCapacity() int {
+	return (cap(t.buf)-readFrameSize)/manchesterRate - crcSize
 }
 
 func (t *Transceiver) Write(tx []byte) (int, error) {
@@ -254,14 +259,8 @@ func (t *Transceiver) Read(rx []byte) (int, error) {
 	if sof != rxSOF || eof != rxEOF {
 		return 0, errors.New("invalid framing")
 	}
-	const (
-		// Two bytes of framing: 5 bits SOF, 5 bits EOF, 6 bits of padding.
-		framing = (5 + 5 + 6) / 8
-		// Every bit is encoded as two Manchester bits.
-		manchesterRate = 2
-	)
 	// The number of payload bytes.
-	rxlen := (len(buf) - framing) / manchesterRate
+	rxlen := (len(buf) - readFrameSize) / manchesterRate
 	if len(rx) < rxlen {
 		return 0, io.ErrShortBuffer
 	}
@@ -294,7 +293,7 @@ func (t *Transceiver) Read(rx []byte) (int, error) {
 	if crc != crcResidual {
 		return 0, errors.New("CRC mismatch")
 	}
-	return rxlen - 2, io.EOF
+	return rxlen - crcSize, io.EOF
 }
 
 func encode1of4(buf []byte, b byte) []byte {
