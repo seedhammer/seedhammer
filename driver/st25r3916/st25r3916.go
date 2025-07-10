@@ -15,15 +15,17 @@ import (
 )
 
 type Device struct {
-	Bus        Bus
-	Int        machine.Pin
+	Bus    Bus
+	Int    machine.Pin
+	cancel chan struct{}
+
 	prot       Protocol
 	extField   fieldState
 	interrupts chan struct{}
 	timer      *time.Timer
 	excludeCRC bool
 
-	scratch [100]byte
+	scratch [256]byte
 }
 
 type Bus interface {
@@ -37,7 +39,7 @@ var (
 )
 
 // FIFOSize is the number of bytes that can be
-// read without risking overflow
+// read without risking overflow.
 const FIFOSize = 512 - 2 // Make room for the CRC bytes.
 
 type Protocol int
@@ -89,6 +91,9 @@ func (d *Device) reset() error {
 	}
 	if d.interrupts == nil {
 		d.interrupts = make(chan struct{}, 1)
+	}
+	if d.cancel == nil {
+		d.cancel = make(chan struct{})
 	}
 	d.Int.Configure(machine.PinConfig{Mode: machine.PinInput})
 	d.Int.SetInterrupt(machine.PinRising, d.handleInterrupt)
@@ -194,7 +199,7 @@ func (d *Device) enable() error {
 		return err
 	}
 	// Wait for oscillator stable.
-	_, err = d.waitForInterrupt(defTimeout, nil)
+	_, err = d.waitForInterrupt(defTimeout)
 	return err
 }
 
@@ -231,7 +236,7 @@ func (d *Device) updateExtField(intrs interrupts) error {
 // Wait for detection of a tag or external field, and
 // attempt to turn on the field. Return false if an external
 // field was detection.
-func (d *Device) Detect(quit <-chan struct{}) (bool, error) {
+func (d *Device) Detect() (bool, error) {
 	if d.extField > fieldOff {
 		return false, nil
 	}
@@ -253,7 +258,7 @@ func (d *Device) Detect(quit <-chan struct{}) (bool, error) {
 	if err := d.writeRegs(regOpCtrl, 0b1<<wu); err != nil {
 		return false, fmt.Errorf("st25r3916: detect: %w", err)
 	}
-	if _, err := d.waitForInterrupt(0, quit); err != nil {
+	if _, err := d.waitForInterrupt(0); err != nil {
 		return false, fmt.Errorf("st25r3916: detect: %w", err)
 	}
 	if err := d.radioOn(); err != nil {
@@ -267,6 +272,10 @@ func (d *Device) RadioOff() error {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
 	return nil
+}
+
+func (d *Device) Close() {
+	close(d.cancel)
 }
 
 func (d *Device) radioOn() error {
@@ -401,7 +410,7 @@ func (d *Device) write(tx []byte) (int, error) {
 	return len(tx), nil
 }
 
-func (d *Device) waitForInterrupt(timeout time.Duration, quit <-chan struct{}) (interrupts, error) {
+func (d *Device) waitForInterrupt(timeout time.Duration) (interrupts, error) {
 	if !d.timer.Stop() {
 		select {
 		case <-d.timer.C:
@@ -417,7 +426,7 @@ func (d *Device) waitForInterrupt(timeout time.Duration, quit <-chan struct{}) (
 	for {
 		select {
 		case <-d.interrupts:
-		case <-quit:
+		case <-d.cancel:
 			return interrupts{}, errors.New("cancelled")
 		case <-tim:
 			return interrupts{}, errors.New("timeout")
@@ -569,7 +578,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 				timeout = fieldOnTimeout
 			}
 		}
-		intrs, err := d.waitForInterrupt(timeout, nil)
+		intrs, err := d.waitForInterrupt(timeout)
 		if err != nil {
 			// In case of timeout, retry field collision
 			// detection.
@@ -714,7 +723,7 @@ func (d *Device) commandAndWait(cmd byte, mask interrupts, timeout time.Duration
 	if err := d.command(cmd); err != nil {
 		return interrupts{}, err
 	}
-	return d.waitForInterrupt(timeout, nil)
+	return d.waitForInterrupt(timeout)
 }
 
 func (d *Device) command(cmd byte) error {

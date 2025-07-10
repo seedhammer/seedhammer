@@ -9,7 +9,6 @@ import (
 	"os"
 	"time"
 
-	"seedhammer.com/bip39"
 	"seedhammer.com/driver/st25r3916"
 	"seedhammer.com/nfc/iso14443a"
 	"seedhammer.com/nfc/iso15693"
@@ -47,7 +46,7 @@ func run() error {
 	contents := make([]byte, 8*1024)
 	defer nfc.RadioOff()
 	for {
-		active, err := nfc.Detect(nil)
+		active, err := nfc.Detect()
 		if err != nil {
 			log.Printf("Detect: %v", err)
 			time.Sleep(500 * time.Millisecond)
@@ -56,37 +55,25 @@ func run() error {
 		var r io.Reader
 		if active {
 			r, err = poll(nfc, trans)
+			if err != nil {
+				log.Printf("Poll: %v", err)
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+			if r == nil {
+				continue
+			}
+			r = ndef.NewReader(r)
 		} else {
 			t4temu.Reset(nfc)
 			r = t4temu
 		}
-		if err != nil {
-			log.Printf("Poll: %v", err)
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-		if r == nil {
-			continue
-		}
-		buf := make([]byte, 512)
 		for {
-			n, err := r.Read(buf)
-			log.Printf("%s (%v)\n", buf[:n], err)
+			n, err := r.Read(contents)
+			log.Printf("%s (%v)\n", contents[:n], err)
 			if err != nil {
 				break
 			}
-		}
-		if false {
-			nr := ndef.NewReader(r)
-			n, err := nr.Read(contents)
-			if err == nil || err == io.EOF {
-				log.Printf("Succes! %q", string(contents[:n]))
-				m, err := bip39.Parse(contents[:n])
-				log.Println("message", m, err)
-				continue
-			}
-			// Ignore read errors.
-			log.Printf("ndef: %v", err)
 		}
 	}
 }
