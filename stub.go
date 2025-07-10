@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"seedhammer.com/driver/st25r3916"
-	"seedhammer.com/nfc/iso14443a"
 	"seedhammer.com/nfc/ndef"
+	"seedhammer.com/nfc/type2"
 	"seedhammer.com/nfc/type4"
 	"seedhammer.com/nfc/type5"
 )
@@ -57,7 +57,6 @@ func run() error {
 			r, err = poll(nfc, trans)
 			if err != nil {
 				log.Printf("Poll: %v", err)
-				time.Sleep(500 * time.Millisecond)
 				continue
 			}
 			if r == nil {
@@ -82,7 +81,7 @@ func poll(d *st25r3916.Device, trans *type5.Transceiver) (io.Reader, error) {
 	if err := d.SetProtocol(st25r3916.ISO15693); err != nil {
 		return nil, err
 	}
-	tag15693, err := type5.Open(trans, trans.ReadCapacity())
+	tag15693, err := type5.NewReader(trans, trans.ReadCapacity())
 	if err == nil {
 		return tag15693, nil
 	}
@@ -90,7 +89,7 @@ func poll(d *st25r3916.Device, trans *type5.Transceiver) (io.Reader, error) {
 	if err := d.SetProtocol(st25r3916.ISO14443a); err != nil {
 		return nil, err
 	}
-	tag14443, err := iso14443a.Open(d)
+	tag14443, err := type2.NewReader(d)
 	if err != nil {
 		log.Printf("iso14443: %v", err)
 		// Ignore read errors.
