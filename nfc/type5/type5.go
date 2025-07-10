@@ -66,7 +66,7 @@ func NewReader(bus io.ReadWriter, size int) (*Reader, error) {
 		return nil, fmt.Errorf("type5: unexpected Inventory response length: %d", n)
 	}
 	// UID is after the 1-byte DSFID.
-	tag.UID = binary.LittleEndian.Uint64(dsfidUID[1:])
+	tag.UID = bo.Uint64(dsfidUID[1:])
 	return tag, nil
 }
 
@@ -129,7 +129,7 @@ func (t *Reader) issueRead(nblocks int) error {
 		req[0] = flagDataRate | // High speed
 			flagAddress // Address particular tag.
 		req[1] = cmdReadMultipleBlocks
-		binary.LittleEndian.PutUint64(req[2:], t.UID)
+		bo.PutUint64(req[2:], t.UID)
 		req[10] = byte(t.blockNo)
 		req[11] = byte(nblocks - 1) // block count, zero based.
 	case t.blockNo <= 0xffff && nblocks <= 0xffff+1:
@@ -137,10 +137,10 @@ func (t *Reader) issueRead(nblocks int) error {
 		req[0] = flagDataRate | // High speed
 			flagAddress // Address particular tag.
 		req[1] = cmdExtReadMultipleBlocks
-		binary.LittleEndian.PutUint64(req[2:], t.UID)
-		binary.LittleEndian.PutUint16(req[10:], uint16(t.blockNo))
+		bo.PutUint64(req[2:], t.UID)
+		bo.PutUint16(req[10:], uint16(t.blockNo))
 		// Block count is zero-based.
-		binary.LittleEndian.PutUint16(req[12:], uint16(nblocks-1))
+		bo.PutUint16(req[12:], uint16(nblocks-1))
 	default:
 		return io.EOF
 	}
@@ -331,6 +331,8 @@ func crcCITT(data []byte) uint16 {
 	}
 	return ^crc
 }
+
+var bo = binary.LittleEndian
 
 const (
 	cmdInventory             = 0x01
