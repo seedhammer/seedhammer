@@ -18,7 +18,6 @@ type Device struct {
 	Bus        Bus
 	Int        machine.Pin
 	prot       Protocol
-	listen     bool
 	extField   fieldState
 	interrupts chan struct{}
 	timer      *time.Timer
@@ -87,6 +86,7 @@ const (
 )
 
 func (d *Device) Configure() error {
+	d.extField = fieldOff
 	if d.timer == nil {
 		d.timer = time.NewTimer(0)
 	}
@@ -263,7 +263,9 @@ func (d *Device) RadioOff() error {
 // the protocol. Reports [ErrExternalField] if an external
 // field is detected.
 func (d *Device) RadioOn(prot Protocol) error {
-	d.extField = fieldOff
+	if d.extField > fieldOff {
+		return ErrExternalField
+	}
 	if err := d.configureProtocol(prot); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
@@ -294,10 +296,10 @@ func (d *Device) RadioOn(prot Protocol) error {
 	if err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
-	d.listen = intrs.Timer&(0b1<<i_cat) == 0
+	listen := intrs.Timer&(0b1<<i_cat) == 0
 	// Enable receiver.
 	flags |= 0b1 << rx_en
-	if !d.listen {
+	if !listen {
 		flags |= 0b1 << tx_en
 	}
 	if err := d.writeReg(regOpCtrl, flags); err != nil {
@@ -306,10 +308,10 @@ func (d *Device) RadioOn(prot Protocol) error {
 	if err := d.updateExtField(intrs); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
-	if err := d.enablePassiveNFCA(d.listen); err != nil {
+	if err := d.enablePassiveNFCA(listen); err != nil {
 		return fmt.Errorf("st25r3916: radio: %w", err)
 	}
-	if d.listen {
+	if listen {
 		// Set up card emulation mode.
 		d.excludeCRC = true
 		if err := d.command(cmdGotoSense); err != nil {
@@ -566,18 +568,20 @@ func (d *Device) configureProtocol(prot Protocol) error {
 func (d *Device) Read(buf []byte) (int, error) {
 	for {
 		timeout := defTimeout
-		if d.listen {
+		if d.extField > fieldOff {
 			timeout = fieldOffTimeout
-		}
-		if d.extField >= fieldOn {
-			timeout = fieldOnTimeout
+			if d.extField >= fieldOn {
+				timeout = fieldOnTimeout
+			}
 		}
 		intrs, err := d.waitForInterrupt(timeout, nil)
 		if err != nil {
+			d.extField = fieldOff
 			return 0, fmt.Errorf("st25r3916: read: %w", err)
 		}
 		wasAct := d.extField == fieldActive
 		if err := d.updateExtField(intrs); err != nil {
+			d.extField = fieldOff
 			return 0, fmt.Errorf("st25r3916: read: %w", err)
 		}
 		var n int
