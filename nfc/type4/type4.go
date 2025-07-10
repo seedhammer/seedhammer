@@ -19,7 +19,6 @@ type Tag struct {
 	nextWriteOff int
 
 	buf       [maxFrameSize]byte
-	resp      [maxFrameSize]byte
 	readBytes int
 }
 
@@ -142,7 +141,10 @@ func (t *Tag) Read(b []byte) (int, error) {
 				return 0, io.EOF
 			}
 		}
-		resp := t.resp[:0]
+		var readData []byte
+		// Re-use the receive buffer for the response. This is
+		// ok because the request is read before being overwritten.
+		resp := t.buf[:0]
 		switch t.state {
 		case initState:
 			switch {
@@ -206,12 +208,11 @@ func (t *Tag) Read(b []byte) (int, error) {
 					resp = append(resp, isodepACK...)
 				case t.state >= ccFileState && buf[0] == isodepWRITE:
 					buf = buf[1:]
-					// Note that we're re-using the receive buffer to
-					// hold the written data.
-					t.readBytes, readErr = t.write(t.buf[:], buf)
+					readData, readErr = t.write(buf)
 					if readErr != nil && readErr != io.EOF {
 						break
 					}
+					t.readBytes = len(readData)
 					resp = append(resp, isodepACK...)
 				}
 				if len(resp) == 1 {
@@ -224,6 +225,8 @@ func (t *Tag) Read(b []byte) (int, error) {
 				return 0, fmt.Errorf("type4: %w", err)
 			}
 		}
+		// Re-use the receive buffer to hold written data (if any).
+		copy(t.buf[:], readData)
 	}
 }
 
@@ -246,16 +249,16 @@ func (t *Tag) read(out, in []byte) ([]byte, bool) {
 	return out, true
 }
 
-func (t *Tag) write(out, in []byte) (int, error) {
+func (t *Tag) write(in []byte) ([]byte, error) {
 	if len(in) < 3 {
-		return 0, errors.New("type4: write request too short")
+		return nil, errors.New("type4: write request too short")
 	}
 	off := int(bo.Uint16(in))
 	in = in[2:]
 	size := int(in[0])
 	in = in[1:]
 	if len(in) != size {
-		return 0, errors.New("type4: invalid size in write request")
+		return nil, errors.New("type4: invalid size in write request")
 	}
 	eof := false
 	// Chop off writes to the first 2 size bytes.
@@ -270,16 +273,11 @@ func (t *Tag) write(out, in []byte) (int, error) {
 	}
 	if len(in) > 0 && off != t.nextWriteOff {
 		// Reject random writes.
-		return 0, errors.New("type4: non-contiguous write")
+		return nil, errors.New("type4: non-contiguous write")
 	}
 	t.nextWriteOff = off + len(in)
-	n := copy(out, in)
-	in = in[n:]
-	if len(in) > 0 {
-		return n, errors.New("type4: buffer overflow")
-	}
 	if eof {
-		return n, io.EOF
+		return in, io.EOF
 	}
-	return n, nil
+	return in, nil
 }

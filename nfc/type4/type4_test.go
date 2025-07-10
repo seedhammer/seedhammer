@@ -22,7 +22,7 @@ func TestWriteFiles(t *testing.T) {
 	r.SelectFile()
 	files := [][]byte{
 		[]byte{1, 2, 3, 4},
-		[]byte{5, 4, 0, 0},
+		bytes.Repeat([]byte{5, 4, 0, 0}, 100),
 	}
 	for _, f := range files {
 		r.WriteFile(f)
@@ -38,22 +38,20 @@ func TestWriteFiles(t *testing.T) {
 		}
 	}
 	for _, f := range files {
-		n := 0
-		for n < len(buf) {
-			var nn int
-			nn, err := tag.Read(buf[n:])
-			n += nn
+		for {
+			n, err := tag.Read(buf)
+			if got, want := buf[:n], f[:n]; !bytes.Equal(got, want) {
+				r.DumpTranscript()
+				t.Fatalf("read %x, expected %x", got, want)
+			}
+			f = f[n:]
 			if err != nil {
-				if err == io.EOF {
+				if err == io.EOF && len(f) == 0 {
 					break
 				}
+				r.DumpTranscript()
 				t.Fatal(err)
 			}
-		}
-		buf = buf[:n]
-		if got, want := buf, f; !bytes.Equal(got, want) {
-			r.DumpTranscript()
-			t.Fatalf("read %x, expected %x", got, want)
 		}
 	}
 }
@@ -162,12 +160,24 @@ func (r *Reader) SelectFile() {
 }
 
 func (r *Reader) WriteFile(f []byte) {
-	var req []byte
 	const offset = 0
+	off := uint16(0)
+	// Write length.
+	r.writeFileChunk(off, bo.AppendUint16(nil, uint16(len(f))))
+	off += 2
+	for len(f) > 0 {
+		n := min(chunkSize, len(f))
+		r.writeFileChunk(off, f[:n])
+		f = f[n:]
+		off += uint16(n)
+	}
+}
+
+func (r *Reader) writeFileChunk(off uint16, f []byte) {
+	var req []byte
 	req = append(req, isodepWRITE)
-	req = bo.AppendUint16(req, offset)
-	req = append(req, byte(len(f))+2)
-	req = bo.AppendUint16(req, uint16(len(f)))
+	req = bo.AppendUint16(req, off)
+	req = append(req, byte(len(f)))
 	req = append(req, f...)
 	r.msgISODEP(
 		req,
