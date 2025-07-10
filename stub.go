@@ -42,7 +42,7 @@ func run() error {
 		Int: DATA_INT,
 	}
 	trans := type5.NewTransceiver(nfc, st25r3916.FIFOSize)
-	t4temu := new(type4.Tag)
+	t4temu := type4.NewTag(nfc)
 	contents := make([]byte, 8*1024)
 	defer nfc.RadioOff()
 	for {
@@ -54,6 +54,10 @@ func run() error {
 		}
 		var r io.Reader
 		if active {
+			// Reset the tag emulator when the
+			// external field is off.
+			t4temu.Reset()
+
 			r, err = poll(nfc, trans)
 			if err != nil {
 				log.Printf("Poll: %v", err)
@@ -64,7 +68,6 @@ func run() error {
 			}
 			r = ndef.NewReader(r)
 		} else {
-			t4temu.Reset(nfc)
 			r = t4temu
 		}
 		for {

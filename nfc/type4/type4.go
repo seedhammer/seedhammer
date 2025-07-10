@@ -29,10 +29,16 @@ type Device interface {
 	io.ReadWriter
 }
 
-func (t *Tag) Reset(d Device) {
-	t.d = d
+func NewTag(d Device) *Tag {
+	return &Tag{
+		d: d,
+	}
+}
+
+func (t *Tag) Reset() {
 	t.state = initState
 	t.readBytes = 0
+	t.nextWriteOff = 0
 }
 
 type protoState int
@@ -135,6 +141,7 @@ func (t *Tag) Read(b []byte) (int, error) {
 		buf := t.buf[:n]
 		if err != nil {
 			if err != io.EOF {
+				t.Reset()
 				return 0, fmt.Errorf("type4: %w", err)
 			}
 			if len(buf) == 0 {
@@ -158,8 +165,7 @@ func (t *Tag) Read(b []byte) (int, error) {
 				if err := t.d.Sleep(); err != nil {
 					return 0, fmt.Errorf("type4: %w", err)
 				}
-				t.state = initState
-				t.nextWriteOff = 0
+				t.Reset()
 				readErr = io.EOF
 			}
 		case activeState, ndefState, ccFileState, fileState:
@@ -169,8 +175,7 @@ func (t *Tag) Read(b []byte) (int, error) {
 				if err := t.d.Sleep(); err != nil {
 					return 0, fmt.Errorf("type4: %w", err)
 				}
-				t.state = initState
-				t.nextWriteOff = 0
+				t.Reset()
 				readErr = io.EOF
 				resp = append(resp, isodepDESELECT)
 			case len(buf) == 1 && (buf[0]&^0b1) == isodepR_NAK:

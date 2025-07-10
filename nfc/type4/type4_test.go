@@ -9,7 +9,6 @@ import (
 )
 
 func TestWriteFiles(t *testing.T) {
-	tag := new(Tag)
 	r := &Reader{t: t}
 	r.MsgSleep()
 	r.MsgRATS()
@@ -27,7 +26,7 @@ func TestWriteFiles(t *testing.T) {
 	for _, f := range files {
 		r.WriteFile(f)
 	}
-	tag.Reset(r)
+	tag := NewTag(r)
 	buf := make([]byte, 8192)
 	// That that sleep and deselect commands result in sleeps
 	// and EOF.
