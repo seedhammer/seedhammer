@@ -11,9 +11,9 @@ import (
 
 	"seedhammer.com/driver/st25r3916"
 	"seedhammer.com/nfc/iso14443a"
-	"seedhammer.com/nfc/iso15693"
 	"seedhammer.com/nfc/ndef"
 	"seedhammer.com/nfc/type4"
+	"seedhammer.com/nfc/type5"
 )
 
 func main() {
@@ -41,7 +41,7 @@ func run() error {
 		Bus: dataI2C,
 		Int: DATA_INT,
 	}
-	trans := iso15693.NewTransceiver(nfc, st25r3916.FIFOSize)
+	trans := type5.NewTransceiver(nfc, st25r3916.FIFOSize)
 	t4temu := new(type4.Tag)
 	contents := make([]byte, 8*1024)
 	defer nfc.RadioOff()
@@ -78,11 +78,11 @@ func run() error {
 	}
 }
 
-func poll(d *st25r3916.Device, trans *iso15693.Transceiver) (io.Reader, error) {
+func poll(d *st25r3916.Device, trans *type5.Transceiver) (io.Reader, error) {
 	if err := d.SetProtocol(st25r3916.ISO15693); err != nil {
 		return nil, err
 	}
-	tag15693, err := iso15693.Open(trans, trans.ReadCapacity())
+	tag15693, err := type5.Open(trans, trans.ReadCapacity())
 	if err == nil {
 		return tag15693, nil
 	}

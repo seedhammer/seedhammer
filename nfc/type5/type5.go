@@ -1,5 +1,5 @@
-// Package iso15693 implements the ISO/IEC 15693 (NFC-V) protocol.
-package iso15693
+// Package type5 implements the NFC Forum type 5 protocols.
+package type5
 
 import (
 	"encoding/binary"
@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-type Tag struct {
+// Reader implements a type 5 tag reader.
+type Reader struct {
 	UID uint64
 
 	bus io.ReadWriter
@@ -35,13 +36,13 @@ type Tag struct {
 // entering the field.
 const wakeupDelay = 5 * time.Millisecond
 
-// Open a tag and read its UID from an NFC transceiver.
+// NewReader creates a reader from an NFC transceiver.
 // Size is the maximum number of bytes that can be received
 // without overflowing the transceiver FIFO.
 // Note that the transceiver is expected to implement the
 // iso15693-2 codec. Use [Transceiver] if not.
-func Open(bus io.ReadWriter, size int) (*Tag, error) {
-	tag := &Tag{
+func NewReader(bus io.ReadWriter, size int) (*Reader, error) {
+	tag := &Reader{
 		bus:     bus,
 		bufSize: size,
 	}
@@ -54,37 +55,37 @@ func Open(bus io.ReadWriter, size int) (*Tag, error) {
 	req[1] = cmdInventory
 	req[2] = maskLength
 	if err := tag.write(req); err != nil {
-		return nil, fmt.Errorf("iso15693: Inventory: %w", err)
+		return nil, fmt.Errorf("type5: inventory: %w", err)
 	}
 	dsfidUID := tag.scratch[:]
 	n, err := tag.read(dsfidUID)
 	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("iso15693: Inventory: %w", err)
+		return nil, fmt.Errorf("type5: inventory: %w", err)
 	}
 	if n != 9 {
-		return nil, fmt.Errorf("iso15693: unexpected Inventory response length: %d", n)
+		return nil, fmt.Errorf("type5: unexpected Inventory response length: %d", n)
 	}
 	// UID is after the 1-byte DSFID.
 	tag.UID = binary.LittleEndian.Uint64(dsfidUID[1:])
 	return tag, nil
 }
 
-func (t *Tag) write(tx []byte) error {
+func (t *Reader) write(tx []byte) error {
 	t.seenResponse = false
 	_, err := t.bus.Write(tx)
 	return err
 }
 
 // Read from the tag.
-func (t *Tag) Read(rx []byte) (int, error) {
+func (t *Reader) Read(rx []byte) (int, error) {
 	if len(rx) < maxBlockSize {
-		return 0, fmt.Errorf("iso15693: read: %w", io.ErrShortBuffer)
+		return 0, fmt.Errorf("type5: read: %w", io.ErrShortBuffer)
 	}
 	// First read, with unknown block size.
 	if t.blockSize == 0 {
 		// Read a single block.
 		if err := t.issueRead(1); err != nil {
-			return 0, fmt.Errorf("iso15693: read: %w", err)
+			return 0, fmt.Errorf("type5: read: %w", err)
 		}
 	}
 	for {
@@ -101,7 +102,7 @@ func (t *Tag) Read(rx []byte) (int, error) {
 		t.blocksRem -= n / t.blockSize
 		if err != nil {
 			if err != io.EOF {
-				return n, fmt.Errorf("iso15693: read: %w", err)
+				return n, fmt.Errorf("type5: read: %w", err)
 			}
 			if t.blocksRem > 0 {
 				// EOF reached.
@@ -111,7 +112,7 @@ func (t *Tag) Read(rx []byte) (int, error) {
 			// len(rx) minus the response flag byte.
 			nblocks := (t.bufSize - 1) / t.blockSize
 			if err := t.issueRead(nblocks); err != nil {
-				return 0, fmt.Errorf("iso15693: read: %w", err)
+				return 0, fmt.Errorf("type5: read: %w", err)
 			}
 		}
 		if n > 0 {
@@ -120,7 +121,7 @@ func (t *Tag) Read(rx []byte) (int, error) {
 	}
 }
 
-func (t *Tag) issueRead(nblocks int) error {
+func (t *Reader) issueRead(nblocks int) error {
 	var req []byte
 	switch {
 	case t.blockNo <= 0xff && nblocks <= 0xff+1:
@@ -151,7 +152,7 @@ func (t *Tag) issueRead(nblocks int) error {
 	return nil
 }
 
-func (t *Tag) read(rx []byte) (int, error) {
+func (t *Reader) read(rx []byte) (int, error) {
 	n, err := t.bus.Read(rx)
 	if t.seenResponse {
 		return n, err
@@ -195,7 +196,7 @@ const (
 	data_10_1_4 = 0x20
 	data_11_1_4 = 0x80
 
-	transFrameSize = 1 + 1 // SOF + EOF
+	writeFrameSize = 1 + 1 // SOF + EOF
 	crcSize        = 2     // 16-bit CRC
 	_1of4Size      = 4     // 1-of-4 encoding takes 4 bytes per byte.
 	crcResidual    = 0x0f47
@@ -223,8 +224,12 @@ func NewTransceiver(bus io.ReadWriter, size int) *Transceiver {
 	}
 }
 
-// ReadCapacity reports the maximum number of bytes that fits
-// the transceiver buffer.
+// WriteCapacity reports the maximum size of a [Write].
+func (t *Transceiver) WriteCapacity() int {
+	return (cap(t.buf)-writeFrameSize)/_1of4Size - crcSize
+}
+
+// ReadCapacity reports the maximum size of a [Read].
 func (t *Transceiver) ReadCapacity() int {
 	return (cap(t.buf)-readFrameSize)/manchesterRate - crcSize
 }
