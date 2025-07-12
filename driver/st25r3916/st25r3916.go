@@ -32,12 +32,6 @@ type Bus interface {
 	Tx(addr uint16, w, r []byte) error
 }
 
-var (
-	// errExternalFieldOff is returned when an operation is interrupted
-	// by an external field turning off.
-	errExternalFieldOff = errors.New("st25r3916: external field turned off")
-)
-
 // FIFOSize is the number of bytes that can be
 // read without risking overflow.
 const FIFOSize = 512 - 2 // Make room for the CRC bytes.
@@ -235,7 +229,7 @@ func (d *Device) updateExtField(intrs interrupts) error {
 
 // Wait for detection of a tag or external field, and
 // attempt to turn on the field. Return false if an external
-// field was detection.
+// field is on.
 func (d *Device) Detect() (bool, error) {
 	if d.extField > fieldOff {
 		return false, nil
@@ -600,7 +594,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 		if err == nil && wasAct && d.extField == fieldOff {
 			// Treat the turning off of a previously active field
 			// as EOF.
-			err = errExternalFieldOff
+			err = io.EOF
 		}
 		if n > 0 || err != nil {
 			return n, err

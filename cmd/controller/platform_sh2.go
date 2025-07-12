@@ -24,7 +24,8 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/gui"
 	"seedhammer.com/image/rgb565"
-	"seedhammer.com/nfc/iso15693"
+	"seedhammer.com/nfc/poller"
+	"seedhammer.com/nfc/type5"
 )
 
 const (
@@ -43,7 +44,7 @@ type Platform struct {
 
 	lcdDev   *ili9488.Device
 	engraver gui.Engraver
-	nfc      gui.NFCDevice
+	nfc      *nfcDev
 	touch    struct {
 		dev     *ft6x36.Device
 		ints    chan struct{}
@@ -196,41 +197,36 @@ func Init() (*Platform, error) {
 	p.touch.dev = touch
 
 	nfc := &st25r3916.Device{Bus: mi2c, Int: NFC_INT}
-	if err := nfc.Configure(); err != nil {
-		return nil, fmt.Errorf("nfc: %w", err)
-	}
 	p.nfc = newNFCDevice(nfc)
 	return p, nil
 }
 
 type nfcDev struct {
 	*st25r3916.Device
-	trans    *iso15693.Transceiver
+	trans    *type5.Transceiver
 	iso15693 bool
 }
 
 func newNFCDevice(d *st25r3916.Device) *nfcDev {
 	return &nfcDev{
 		Device: d,
-		trans:  iso15693.NewTransceiver(d, st25r3916.FIFOSize),
+		trans:  type5.NewTransceiver(d, st25r3916.FIFOSize),
 	}
 }
 
-func (d *nfcDev) RadioOn(mode gui.NFCRadioMode) error {
+func (d *nfcDev) SetProtocol(mode poller.Protocol) error {
 	d.iso15693 = false
 	var prot st25r3916.Protocol
 	switch mode {
-	case gui.ModeDetect:
-		prot = st25r3916.Detect
-	case gui.ModeISO14443a:
+	case poller.ISO14443a:
 		prot = st25r3916.ISO14443a
-	case gui.ModeISO15693:
+	case poller.ISO15693:
 		d.iso15693 = true
 		prot = st25r3916.ISO15693
 	default:
 		panic("unsupported mode")
 	}
-	return d.Device.RadioOn(prot)
+	return d.Device.SetProtocol(prot)
 }
 
 func (d *nfcDev) Write(buf []byte) (int, error) {
@@ -247,9 +243,9 @@ func (d *nfcDev) Read(buf []byte) (int, error) {
 	return d.Device.Read(buf)
 }
 
-func (d nfcDev) FIFOSize() int {
+func (d nfcDev) ReadCapacity() int {
 	if d.iso15693 {
-		return d.trans.DecodedSize()
+		return d.trans.ReadCapacity()
 	}
 	return st25r3916.FIFOSize
 }
@@ -497,8 +493,8 @@ func (p *Platform) Features() gui.Features {
 	return 0
 }
 
-func (p *Platform) NFCDevice() gui.NFCDevice {
-	return p.nfc
+func (p *Platform) NFCDevice() (poller.Device, func()) {
+	return p.nfc, p.nfc.Device.Close
 }
 
 func (p *Platform) Engraver() (gui.Engraver, error) {

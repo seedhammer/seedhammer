@@ -7,7 +7,6 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"io"
 	"log"
 	"math"
 	"runtime"
@@ -33,6 +32,7 @@ import (
 	"seedhammer.com/gui/saver"
 	"seedhammer.com/gui/text"
 	"seedhammer.com/gui/widget"
+	"seedhammer.com/nfc/poller"
 	"seedhammer.com/nonstandard"
 	"seedhammer.com/seedqr"
 )
@@ -2799,7 +2799,7 @@ type Platform interface {
 	Wakeup()
 	PlateSizes() []backup.PlateSize
 	Engraver() (Engraver, error)
-	NFCDevice() NFCDevice
+	NFCDevice() (poller.Device, func())
 	EngraverParams() engrave.Params
 	CameraFrame(size image.Point)
 	Now() time.Time
@@ -2831,22 +2831,6 @@ type Engraver interface {
 	Close()
 }
 
-type NFCDevice interface {
-	Detect(quit <-chan struct{}) error
-	FIFOSize() int
-	RadioOn(mode NFCRadioMode) error
-	RadioOff() error
-	io.ReadWriter
-}
-
-type NFCRadioMode int
-
-const (
-	ModeDetect NFCRadioMode = iota
-	ModeISO14443a
-	ModeISO15693
-)
-
 const idleTimeout = 3 * time.Minute
 
 func Run(pl Platform, version string) func(yield func() bool) {
@@ -2866,12 +2850,11 @@ func Run(pl Platform, version string) func(yield func() bool) {
 			ctx: ctx,
 		}
 		scans := make(chan any, 1)
-		quit := make(chan struct{})
-		defer close(quit)
-		if nfcdev := pl.NFCDevice(); nfcdev != nil {
+		if nfcdev, close := pl.NFCDevice(); nfcdev != nil {
+			defer close()
 			wakeup := pl.Wakeup
 			go func() {
-				for scan := range Scan(nfcdev, quit) {
+				for scan := range Scan(nfcdev) {
 					scans <- scan
 					wakeup()
 				}

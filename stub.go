@@ -2,18 +2,14 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"log"
 	"machine"
 	"os"
-	"time"
 
 	"seedhammer.com/driver/st25r3916"
-	"seedhammer.com/nfc/ndef"
-	"seedhammer.com/nfc/type2"
-	"seedhammer.com/nfc/type4"
+	"seedhammer.com/nfc/poller"
 	"seedhammer.com/nfc/type5"
 )
 
@@ -42,79 +38,67 @@ func run() error {
 		Bus: dataI2C,
 		Int: DATA_INT,
 	}
-	trans := type5.NewTransceiver(nfc, st25r3916.FIFOSize)
-	t4temu := type4.NewTag(nfc)
-	bufr := bufio.NewReaderSize(nil, 256)
-	contents := make([]byte, 4096)
-	defer nfc.RadioOff()
-outer:
+	dev := newNFCDevice(nfc)
+	defer dev.RadioOff()
+	p := poller.New(dev)
 	for {
-		active, err := nfc.Detect()
+		got, err := io.ReadAll(p)
+		if len(got) > 0 {
+			log.Println(string(got))
+		}
 		if err != nil {
-			log.Printf("Detect: %v", err)
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-		var r io.Reader
-		if active {
-			// Reset the tag emulator when the
-			// external field is off.
-			t4temu.Reset()
-
-			r, err = poll(nfc, trans)
-			if err != nil {
-				log.Printf("Poll: %v", err)
-				continue
-			}
-			if r == nil {
-				continue
-			}
-			bufr.Reset(r)
-			r = ndef.NewMessageReader(bufr)
-		} else {
-			bufr.Reset(t4temu)
-			r = bufr
-		}
-		r = ndef.NewRecordReader(r)
-		tot := 0
-		for {
-			n, err := r.Read(contents)
-			tot += n
-			if n > 0 {
-				contents := contents[:n]
-				log.Printf("%s (size=%d) (err=%v)\n", contents, len(contents), err)
-			}
-			if err != nil {
-				if err != io.EOF {
-					log.Printf("read: %v", err)
-					continue outer
-				}
-			}
-			if n == 0 {
-				break
+			if err != io.EOF {
+				log.Printf("read err: %v", err)
 			}
 		}
-		// log.Println("total bytes read:", tot)
 	}
 }
 
-func poll(d *st25r3916.Device, trans *type5.Transceiver) (io.Reader, error) {
-	if err := d.SetProtocol(st25r3916.ISO15693); err != nil {
-		return nil, err
+type nfcDev struct {
+	*st25r3916.Device
+	trans    *type5.Transceiver
+	iso15693 bool
+}
+
+func newNFCDevice(d *st25r3916.Device) *nfcDev {
+	return &nfcDev{
+		Device: d,
+		trans:  type5.NewTransceiver(d, st25r3916.FIFOSize),
 	}
-	tag15693, err := type5.NewReader(trans, trans.ReadCapacity())
-	if err == nil {
-		return tag15693, nil
+}
+
+func (d *nfcDev) SetProtocol(mode poller.Protocol) error {
+	d.iso15693 = false
+	var prot st25r3916.Protocol
+	switch mode {
+	case poller.ISO14443a:
+		prot = st25r3916.ISO14443a
+	case poller.ISO15693:
+		d.iso15693 = true
+		prot = st25r3916.ISO15693
+	default:
+		panic("unsupported mode")
 	}
-	log.Printf("iso15693: %v", err)
-	if err := d.SetProtocol(st25r3916.ISO14443a); err != nil {
-		return nil, err
+	return d.Device.SetProtocol(prot)
+}
+
+func (d *nfcDev) Write(buf []byte) (int, error) {
+	if d.iso15693 {
+		return d.trans.Write(buf)
 	}
-	tag14443, err := type2.NewReader(d)
-	if err != nil {
-		log.Printf("iso14443: %v", err)
-		// Ignore read errors.
-		return nil, nil
+	return d.Device.Write(buf)
+}
+
+func (d *nfcDev) Read(buf []byte) (int, error) {
+	if d.iso15693 {
+		return d.trans.Read(buf)
 	}
-	return tag14443, nil
+	return d.Device.Read(buf)
+}
+
+func (d nfcDev) ReadCapacity() int {
+	if d.iso15693 {
+		return d.trans.ReadCapacity()
+	}
+	return st25r3916.FIFOSize
 }
