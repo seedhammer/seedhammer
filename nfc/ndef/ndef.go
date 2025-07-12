@@ -11,8 +11,10 @@ import (
 // MessageReader is an [io.Reader] for parsing NDEF
 // messages from NDEF TLV blocks.
 type MessageReader struct {
-	r       *bufio.Reader
+	r       io.Reader
 	scratch [2]byte
+	length  int
+	skip    bool
 }
 
 // RecordReader is an [io.Reader] for parsing NDEF
@@ -28,19 +30,34 @@ const discardBuffer = 16
 
 func NewMessageReader(rd io.Reader) *MessageReader {
 	return &MessageReader{
-		r: bufio.NewReaderSize(rd, discardBuffer),
+		r: rd,
 	}
 }
 
-// Read the next NDEF message, or [io.EOF] if no more messages
-// are available.
+// Read the contents of all available NDEF messages.
 func (r *MessageReader) Read(buf []byte) (int, error) {
 	for {
+		if r.length > 0 {
+			l := min(len(buf), r.length)
+			n, err := r.r.Read(buf[:l])
+			r.length -= n
+			if err != nil {
+				return n, fmt.Errorf("ndef: tlv: %w", err)
+			}
+			if r.skip {
+				continue
+			}
+			return n, nil
+		}
 		// Read type.
-		typ, err := r.r.ReadByte()
-		if err != nil {
+		buf := r.scratch[:1]
+		if _, err := io.ReadFull(r.r, buf); err != nil {
+			if err == io.EOF {
+				return 0, io.EOF
+			}
 			return 0, fmt.Errorf("ndef: tlv: %w", err)
 		}
+		typ := buf[0]
 		// The null and terminator blocks have no length.
 		switch typ {
 		case nullType:
@@ -49,35 +66,23 @@ func (r *MessageReader) Read(buf []byte) (int, error) {
 			return 0, io.EOF
 		}
 		// Read length.
-		length8, err := r.r.ReadByte()
-		if err != nil {
+		buf = r.scratch[:1]
+		if _, err := io.ReadFull(r.r, buf); err != nil {
 			return 0, fmt.Errorf("ndef: tlv: %w", err)
 		}
+		length8 := buf[0]
 		length := int(length8)
 		if length8 == 0xff {
 			// 2-byte length.
-			l16 := r.scratch[:2]
-			if _, err := io.ReadFull(r.r, l16); err != nil {
+			buf = r.scratch[:2]
+			if _, err := io.ReadFull(r.r, buf); err != nil {
 				return 0, fmt.Errorf("ndef: tlv: %w", err)
 			}
-			length = int(binary.BigEndian.Uint16(l16))
+			length = int(binary.BigEndian.Uint16(buf))
 		}
+		r.length = length
 		// Skip non-NDEF containers.
-		if typ != ndefType {
-			if _, err := r.r.Discard(length); err != nil {
-				return 0, fmt.Errorf("ndef: tlv: %w", err)
-			}
-			continue
-		}
-		n := min(length, len(buf))
-		n, err = io.ReadFull(r.r, buf[:n])
-		if err != nil {
-			return n, fmt.Errorf("ndef: tlv: %w", err)
-		}
-		if n < length {
-			return n, io.ErrShortBuffer
-		}
-		return n, nil
+		r.skip = typ != ndefType
 	}
 }
 
