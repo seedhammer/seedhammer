@@ -1,7 +1,6 @@
 package ndef
 
 import (
-	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -20,13 +19,12 @@ type MessageReader struct {
 // RecordReader is an [io.Reader] for parsing NDEF
 // records from NDEF messages.
 type RecordReader struct {
-	afterBegin bool
-	r          *bufio.Reader
-	scratch    [4]byte
+	notBegin bool
+	r        io.Reader
+	scratch  [4]byte
+	length   int
+	skip     bool
 }
-
-// A buffer size reasonable for skipping unknown records.
-const discardBuffer = 16
 
 func NewMessageReader(rd io.Reader) *MessageReader {
 	return &MessageReader{
@@ -88,38 +86,47 @@ func (r *MessageReader) Read(buf []byte) (int, error) {
 
 func NewRecordReader(rd io.Reader) *RecordReader {
 	return &RecordReader{
-		r: bufio.NewReaderSize(rd, discardBuffer),
+		r: rd,
 	}
 }
 
 // Read the next NDEF record, or [io.EOF] if no more records
 // are available.
 func (r *RecordReader) Read(buf []byte) (int, error) {
-	var discard int
-	eof := false
 	for {
-		if discard > 0 {
-			if _, err := r.r.Discard(discard); err != nil {
-				return 0, fmt.Errorf("ndef: message: %w", err)
+		if r.length > 0 {
+			l := min(len(buf), r.length)
+			n, err := r.r.Read(buf[:l])
+			r.length -= n
+			if err != nil {
+				if err != io.EOF || r.length > 0 {
+					return n, fmt.Errorf("ndef: message: %w", err)
+				}
 			}
-			discard = 0
+			if r.skip {
+				continue
+			}
+			if r.length == 0 {
+				return n, io.EOF
+			}
+			return n, nil
 		}
-		if eof {
-			return 0, io.EOF
-		}
+		r.skip = false
 		// Read the header and type length.
 		h := r.scratch[:2]
 		if _, err := io.ReadFull(r.r, h); err != nil {
+			if err == io.EOF {
+				return 0, io.EOF
+			}
 			return 0, fmt.Errorf("ndef: message: %w", err)
 		}
 		flags, tlen := h[0], h[1]
-		eof = flags&flagME != 0
-		afterBegin := flags&flagMB == 0
-		if afterBegin != r.afterBegin {
+		begin := flags&flagMB != 0
+		end := flags&flagME != 0
+		if begin == r.notBegin {
 			return 0, errors.New("ndef: message: expected start record")
 		}
-		r.afterBegin = true
-		var plen int
+		r.notBegin = !end
 		// Read payload length.
 		if flags&flagSR == 0 {
 			// 32-bit length.
@@ -127,77 +134,77 @@ func (r *RecordReader) Read(buf []byte) (int, error) {
 			if _, err := io.ReadFull(r.r, b); err != nil {
 				return 0, fmt.Errorf("ndef: message: %w", err)
 			}
-			plen = int(binary.BigEndian.Uint32(b))
+			r.length = int(binary.BigEndian.Uint32(b))
 		} else {
 			// Short record.
-			l, err := r.r.ReadByte()
+			b, err := r.readByte()
 			if err != nil {
 				return 0, fmt.Errorf("ndef: message: %w", err)
 			}
-			plen = int(l)
+			r.length = int(b)
 		}
 		// Read ID length.
 		var idLen uint8
 		if flags&flagIR != 0 {
-			l, err := r.r.ReadByte()
+			b, err := r.readByte()
 			if err != nil {
 				return 0, fmt.Errorf("ndef: message: %w", err)
 			}
-			idLen = l
+			idLen = b
 		}
 		// Read the well-known type byte, if any.
 		var wellKnown byte
 		if tlen == 1 {
-			t, err := r.r.ReadByte()
-			if err != nil {
+			b := r.scratch[:1]
+			if _, err := io.ReadFull(r.r, b); err != nil {
 				return 0, fmt.Errorf("ndef: message: %w", err)
 			}
 			tlen--
-			wellKnown = t
+			wellKnown = b[0]
 		}
 		// Skip the (remaining) type and id.
-		if _, err := r.r.Discard(int(tlen) + int(idLen)); err != nil {
+		if err := r.discard(buf, int(tlen)+int(idLen)); err != nil {
 			return 0, fmt.Errorf("ndef: message: %w", err)
 		}
 		// Reject chunked records.
 		if flags&flagCF != 0 {
-			discard = plen
+			r.skip = true
 			continue
 		}
 		// Skip unknown formats.
 		switch tnf := flags & 0b111; tnf {
 		case tnfWellKnown:
 		default:
-			discard = plen
+			r.skip = true
 			continue
 		}
 		n := 0
 		switch wellKnown {
 		case 'T': // Text
-			header, err := r.r.ReadByte()
+			header, err := r.readByte()
 			if err != nil {
 				return 0, fmt.Errorf("ndef: message: %w", err)
 			}
-			plen--
+			r.length--
 			if header&(0b1<<7) != 0 { // Don't bother with UTF-16.
-				discard = plen
+				r.skip = true
 				continue
 			}
 			// Skip language.
 			langLen := int(header & 0b111111)
-			if langLen > plen {
+			if langLen > r.length {
 				return 0, errors.New("ndef: message: text language too long")
 			}
-			if _, err := r.r.Discard(int(langLen)); err != nil {
+			if err := r.discard(buf, int(langLen)); err != nil {
 				return 0, fmt.Errorf("ndef: message: %w", err)
 			}
-			plen -= langLen
+			r.length -= langLen
 		case 'U': // URI
-			header, err := r.r.ReadByte()
+			header, err := r.readByte()
 			if err != nil {
 				return 0, fmt.Errorf("ndef: message: %w", err)
 			}
-			plen--
+			r.length--
 			prefix := ""
 			switch p := header; p {
 			case uriPrefixNone:
@@ -210,32 +217,34 @@ func (r *RecordReader) Read(buf []byte) (int, error) {
 			case uriPrefixHttps:
 				prefix = "https://"
 			default:
-				discard = plen
+				r.skip = true
 				continue
 			}
 			n = copy(buf, prefix)
-			if n < len(prefix) {
-				return n, io.ErrShortBuffer
-			}
+			return n, nil
 		default:
-			discard = plen
+			r.skip = true
 			continue
 		}
-		buf = buf[n:]
-		rem := min(int(plen), len(buf))
-		pn, err := io.ReadFull(r.r, buf[:rem])
-		n += pn
-		if err != nil {
-			return n, fmt.Errorf("ndef: message: %w", err)
-		}
-		if pn < int(plen) {
-			return n, io.ErrShortBuffer
-		}
-		if eof {
-			return n, io.EOF
-		}
-		return n, nil
 	}
+}
+
+func (r *RecordReader) readByte() (byte, error) {
+	b := r.scratch[:1]
+	_, err := io.ReadFull(r.r, b)
+	return b[0], err
+}
+
+func (r *RecordReader) discard(buf []byte, n int) error {
+	for n > 0 {
+		l := min(len(buf), n)
+		rn, err := r.r.Read(buf[:l])
+		n -= rn
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const (

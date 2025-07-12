@@ -44,10 +44,10 @@ func run() error {
 	}
 	trans := type5.NewTransceiver(nfc, st25r3916.FIFOSize)
 	t4temu := type4.NewTag(nfc)
-	bufr := bufio.NewReaderSize(nil, 4096)
-	bufr2 := bufio.NewReaderSize(nil, 4096)
+	bufr := bufio.NewReaderSize(nil, 256)
 	contents := make([]byte, 4096)
 	defer nfc.RadioOff()
+outer:
 	for {
 		active, err := nfc.Detect()
 		if err != nil {
@@ -75,15 +75,22 @@ func run() error {
 			bufr.Reset(t4temu)
 			r = bufr
 		}
-		bufr2.Reset(r)
-		r = ndef.NewRecordReader(bufr2)
+		r = ndef.NewRecordReader(r)
 		tot := 0
 		for {
 			n, err := r.Read(contents)
-			contents := contents[:n]
-			log.Printf("%s (size=%d) (err=%v)\n", contents, len(contents), err)
-			tot += len(contents)
+			tot += n
+			if n > 0 {
+				contents := contents[:n]
+				log.Printf("%s (size=%d) (err=%v)\n", contents, len(contents), err)
+			}
 			if err != nil {
+				if err != io.EOF {
+					log.Printf("read: %v", err)
+					continue outer
+				}
+			}
+			if n == 0 {
 				break
 			}
 		}

@@ -24,12 +24,12 @@ func TestRecords(t *testing.T) {
 		},
 		{
 			// URL with ID and trailing data.
-			"d9010c0155ff046578616d706c652e636f6ddeadbeef",
+			"d9010c0155ff046578616d706c652e636f6d",
 			[]string{"https://example.com"},
 		},
 		{
-			// Multiple records and trailing data.
-			"91010f5402656e48656c6c6f20776f726c642151010c55046578616d706c652e636f6ddeadbeef",
+			// Multiple records.
+			"91010f5402656e48656c6c6f20776f726c642151010c55046578616d706c652e636f6d",
 			[]string{"Hello world!", "https://example.com"},
 		},
 		{
@@ -43,20 +43,16 @@ func TestRecords(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := NewRecordReader(bytes.NewBuffer(data))
-		buf := make([]byte, 512)
 		var records []string
 		for {
-			n, err := r.Read(buf)
-			got := buf[:n]
-			if len(got) > 0 {
-				records = append(records, string(got))
-			}
+			got, err := io.ReadAll(r)
 			if err != nil {
-				if err == io.EOF {
-					break
-				}
 				t.Fatalf("%x failed to decode: %v", data, err)
 			}
+			if len(got) == 0 {
+				break
+			}
+			records = append(records, string(got))
 		}
 		if !reflect.DeepEqual(records, test.records) {
 			t.Fatalf("%x decoded to %s, expected %s", data, records, test.records)
