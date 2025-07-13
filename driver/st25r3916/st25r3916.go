@@ -154,7 +154,10 @@ func (d *Device) reset() error {
 		modeFIFO | loadPTMemory,
 		0x08, uid[0], uid[1], uid[2], // UID.
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Unused UID storage.
-		0x04, 0x03, // Same as NTAG 424
+		// SENS_RES byte 1.
+		0b00<<6 | // 4-byte UID.
+			0b1<<0, // Bit frame SDD at position 0.
+		0x00, // SENS_RES byte 2.
 		// SAK1, SAK2, SAK3.
 		sakT4A, sakT4A, sakT4A,
 	}
