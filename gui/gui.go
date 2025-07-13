@@ -44,11 +44,11 @@ type Context struct {
 	Frame    func()
 
 	// Global UI state.
-	Version        string
-	Calibrated     bool
-	EmptySDSlot    bool
-	RotateCamera   bool
-	LastDescriptor *bip380.Descriptor
+	Version           string
+	Calibrated        bool
+	SuppressSDWarning bool
+	RotateCamera      bool
+	LastDescriptor    *bip380.Descriptor
 
 	// scan is the last scanned object (seed, descriptor
 	// etc.).
@@ -1857,13 +1857,13 @@ func mainSelectedFlow(ctx *Context, ops op.Ctx, page program) {
 	}
 	th := mainScreenTheme(page)
 loop:
-	for ctx.Platform.Features().Has(FeatureSDCard) && !ctx.EmptySDSlot {
+	for ctx.Platform.SDCardInserted() && !ctx.SuppressSDWarning {
 		dims := ctx.Platform.DisplaySize()
 		res := ws.Layout(ctx, ops.Begin(), th, dims)
 		dialog := ops.End()
 		switch res {
 		case ConfirmYes:
-			ctx.EmptySDSlot = true
+			ctx.SuppressSDWarning = true
 			break loop
 		case ConfirmNo:
 			return
@@ -2802,6 +2802,7 @@ type Platform interface {
 	NFCDevice() (poller.Device, func())
 	EngraverParams() engrave.Params
 	CameraFrame(size image.Point)
+	SDCardInserted() bool
 	Now() time.Time
 	DisplaySize() image.Point
 	// Dirty begins a refresh of the content
@@ -2818,7 +2819,6 @@ type Features int
 
 const (
 	FeatureExternalEngraver Features = 1 << iota
-	FeatureSDCard
 	FeatureCamera
 )
 
@@ -2850,8 +2850,8 @@ func Run(pl Platform, version string) func(yield func() bool) {
 			ctx: ctx,
 		}
 		scans := make(chan any, 1)
-		if nfcdev, close := pl.NFCDevice(); nfcdev != nil {
-			defer close()
+		if nfcdev, interrupt := pl.NFCDevice(); nfcdev != nil {
+			defer interrupt()
 			wakeup := pl.Wakeup
 			go func() {
 				for scan := range Scan(nfcdev) {
@@ -2913,15 +2913,6 @@ func Run(pl Platform, version string) func(yield func() bool) {
 				}
 				a.ctx.Reset()
 				a.ctx.Events(&a.root, evts...)
-				for {
-					e, ok := ctx.Next(SDCardFilter())
-					if !ok {
-						break
-					}
-					if se, ok := e.AsSDCard(); ok {
-						a.ctx.EmptySDSlot = !se.Inserted
-					}
-				}
 				select {
 				case scan := <-scans:
 					a.ctx.scan = scan

@@ -63,12 +63,6 @@ func ButtonFilter(b Button) Filter {
 	}
 }
 
-func SDCardFilter() Filter {
-	return Filter{
-		typ: sdcardEvent,
-	}
-}
-
 func PointerFilter(t op.Tag) Filter {
 	return Filter{
 		typ: pointerEvent,
@@ -109,7 +103,6 @@ type eventKind int
 
 const (
 	buttonEvent eventKind = 1 + iota
-	sdcardEvent
 	frameEvent
 	runeEvent
 	pointerEvent
@@ -122,10 +115,6 @@ type ButtonEvent struct {
 
 type RuneEvent struct {
 	Rune rune
-}
-
-type SDCardEvent struct {
-	Inserted bool
 }
 
 type BoundedTag struct {
@@ -181,14 +170,6 @@ func (b ButtonEvent) Event() Event {
 	return e
 }
 
-func (s SDCardEvent) Event() Event {
-	e := Event{typ: sdcardEvent}
-	if s.Inserted {
-		e.data[0] = 1
-	}
-	return e
-}
-
 const (
 	pressedBit = 0b1 << iota
 	enteredBit
@@ -239,15 +220,6 @@ func (e Event) AsPointer() (PointerEvent, bool) {
 		Pressed: e.data[0]&(pressedBit) != 0,
 		Entered: e.data[0]&(enteredBit) != 0,
 		Pos:     image.Point{X: int(int32(e.data[1])), Y: int(int32(e.data[2]))},
-	}, true
-}
-
-func (e Event) AsSDCard() (SDCardEvent, bool) {
-	if e.typ != sdcardEvent {
-		return SDCardEvent{}, false
-	}
-	return SDCardEvent{
-		Inserted: e.data[0] != 0,
 	}, true
 }
 

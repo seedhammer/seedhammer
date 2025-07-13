@@ -493,6 +493,10 @@ func (p *Platform) Features() gui.Features {
 	return 0
 }
 
+func (p *Platform) SDCardInserted() bool {
+	return false
+}
+
 func (p *Platform) NFCDevice() (poller.Device, func()) {
 	return p.nfc, p.nfc.Device.Interrupt
 }
