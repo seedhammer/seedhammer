@@ -15,8 +15,8 @@ import (
 )
 
 type Device struct {
-	Bus    Bus
-	Int    machine.Pin
+	bus    Bus
+	intPin machine.Pin
 	cancel chan struct{}
 
 	prot       Protocol
@@ -79,18 +79,19 @@ const (
 	fieldActive
 )
 
+func New(b Bus, intPin machine.Pin) *Device {
+	return &Device{
+		bus:        b,
+		intPin:     intPin,
+		timer:      time.NewTimer(0),
+		interrupts: make(chan struct{}, 1),
+		cancel:     make(chan struct{}, 1),
+	}
+}
+
 func (d *Device) reset() error {
-	if d.timer == nil {
-		d.timer = time.NewTimer(0)
-	}
-	if d.interrupts == nil {
-		d.interrupts = make(chan struct{}, 1)
-	}
-	if d.cancel == nil {
-		d.cancel = make(chan struct{})
-	}
-	d.Int.Configure(machine.PinConfig{Mode: machine.PinInput})
-	d.Int.SetInterrupt(machine.PinRising, d.handleInterrupt)
+	d.intPin.Configure(machine.PinConfig{Mode: machine.PinInput})
+	d.intPin.SetInterrupt(machine.PinRising, d.handleInterrupt)
 	// Reset.
 	if err := d.command(cmdSetDefault); err != nil {
 		return err
@@ -100,7 +101,7 @@ func (d *Device) reset() error {
 	datasheetSetup[0] = cmdTestAccess
 	datasheetSetup[1] = 0x04
 	datasheetSetup[2] = 0x10
-	if err := d.Bus.Tx(i2cAddr, datasheetSetup, nil); err != nil {
+	if err := d.bus.Tx(i2cAddr, datasheetSetup, nil); err != nil {
 		return err
 	}
 	if err := d.writeRegs(
@@ -114,7 +115,7 @@ func (d *Device) reset() error {
 		regEMDSupConf, 0b1<<rx_start_emv, // Enable start on first 4 bits.
 		regStreamModeDef, modeISO15693, // Setup streaming mode for iso15693.
 		regTimerEMVCtrl, 0b001<<gptc, // Start timer at end of rx.
-		regWakeupCtrl, 0b010<<wut|0b1<<wur|0b1<<wam|0b1<<wph, // Enable all card detection methods, set measure period.
+		regWakeupCtrl, 0b010<<wut|0b1<<wur|0b1<<wam|0b1<<wph, // Enable card detection methods, set measure period.
 		regAmplitudeMeasCtrl, ampSens<<am_d|0b1<<am_ae|0b1<<am_aam|0b10<<am_aew, // Set amplitude measurement ∆am, auto-averaging reference.
 		regPhaseMeasCtrl, phaseSens<<pm_d|0b1<<pm_ae|0b1<<pm_aam|0b10<<pm_aew, // Set phase measurement ∆pm, auto-averaging reference.
 	); err != nil {
@@ -161,10 +162,10 @@ func (d *Device) reset() error {
 		// SAK1, SAK2, SAK3.
 		sakT4A, sakT4A, sakT4A,
 	}
-	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
+	if err := d.bus.Tx(i2cAddr, req, nil); err != nil {
 		return err
 	}
-	return d.RadioOff()
+	return d.Close()
 }
 
 func (d *Device) enablePassiveNFCA(en bool) error {
@@ -256,6 +257,9 @@ func (d *Device) Detect() (bool, error) {
 		return false, fmt.Errorf("st25r3916: detect: %w", err)
 	}
 	if _, err := d.waitForInterrupt(0); err != nil {
+		if err == io.EOF {
+			return false, err
+		}
 		return false, fmt.Errorf("st25r3916: detect: %w", err)
 	}
 	if err := d.radioOn(); err != nil {
@@ -264,15 +268,18 @@ func (d *Device) Detect() (bool, error) {
 	return d.extField == fieldOff, nil
 }
 
-func (d *Device) RadioOff() error {
+func (d *Device) Close() error {
 	if err := d.writeReg(regOpCtrl, 0); err != nil {
 		return fmt.Errorf("st25r3916: %w", err)
 	}
 	return nil
 }
 
-func (d *Device) Close() {
-	close(d.cancel)
+func (d *Device) Interrupt() {
+	select {
+	case d.cancel <- struct{}{}:
+	default:
+	}
 }
 
 func (d *Device) radioOn() error {
@@ -424,7 +431,7 @@ func (d *Device) waitForInterrupt(timeout time.Duration) (interrupts, error) {
 		select {
 		case <-d.interrupts:
 		case <-d.cancel:
-			return interrupts{}, errors.New("cancelled")
+			return interrupts{}, io.EOF
 		case <-tim:
 			return interrupts{}, errors.New("timeout")
 		}
@@ -465,7 +472,7 @@ func (d *Device) resetInterruptMask(mask interrupts) error {
 	req[regMaskTimerNFCIntr-regMaskMainIntr+1] = ^mask.Timer
 	req[regMaskErrorWakeupIntr-regMaskMainIntr+1] = ^mask.Error
 	req[regMaskPassiveTargIntr-regMaskMainIntr+1] = ^mask.Passive
-	if err := d.Bus.Tx(i2cAddr, req, nil); err != nil {
+	if err := d.bus.Tx(i2cAddr, req, nil); err != nil {
 		return err
 	}
 	// Clear interrupt status.
@@ -480,7 +487,7 @@ func (d *Device) resetInterruptMask(mask interrupts) error {
 func (d *Device) interruptStatus() (intrs interrupts, mask interrupts, err error) {
 	req, resp := d.scratch[:1], d.scratch[1:4]
 	req[0] = modeReadReg | regTimerNFCIntr
-	if err := d.Bus.Tx(i2cAddr, req, resp); err != nil {
+	if err := d.bus.Tx(i2cAddr, req, resp); err != nil {
 		return interrupts{}, interrupts{}, err
 	}
 	intrs = interrupts{
@@ -492,7 +499,7 @@ func (d *Device) interruptStatus() (intrs interrupts, mask interrupts, err error
 	// reading it also clears the error interrupt register.
 	req, resp = d.scratch[:1], d.scratch[1:6]
 	req[0] = modeReadReg | regMaskMainIntr
-	if err := d.Bus.Tx(i2cAddr, req, resp); err != nil {
+	if err := d.bus.Tx(i2cAddr, req, resp); err != nil {
 		return interrupts{}, interrupts{}, err
 	}
 	intrs.Main = resp[4]
@@ -580,6 +587,9 @@ func (d *Device) Read(buf []byte) (int, error) {
 			// In case of timeout, retry field collision
 			// detection.
 			d.extField = fieldOff
+			if err == io.EOF {
+				return 0, err
+			}
 			return 0, fmt.Errorf("st25r3916: read: %w", err)
 		}
 		wasAct := d.extField == fieldActive
@@ -608,7 +618,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 func (d *Device) read(buf []byte) (int, error) {
 	req, fifoStatus := d.scratch[:1], d.scratch[1:3]
 	req[0] = modeReadReg | regFIFOStatus1
-	if err := d.Bus.Tx(i2cAddr, req, fifoStatus); err != nil {
+	if err := d.bus.Tx(i2cAddr, req, fifoStatus); err != nil {
 		return 0, err
 	}
 	fifoLen := int(fifoStatus[1]&0b1100_0000)<<2 | int(fifoStatus[0])
@@ -620,7 +630,7 @@ func (d *Device) read(buf []byte) (int, error) {
 	n := min(fifoLen, len(buf))
 	req = d.scratch[:1]
 	req[0] = modeFIFO | readFIFO
-	if err := d.Bus.Tx(i2cAddr, req, buf[:n]); err != nil {
+	if err := d.bus.Tx(i2cAddr, req, buf[:n]); err != nil {
 		return 0, err
 	}
 	var err error
@@ -656,7 +666,7 @@ func (d *Device) writeTXLen(bytes int, bits byte) error {
 	req[1] = byte(bytes >> 5)
 	// Least significant bits and the partial bits.
 	req[2] = byte((bytes&0b11111)<<3) | bits
-	return d.Bus.Tx(i2cAddr, req, nil)
+	return d.bus.Tx(i2cAddr, req, nil)
 }
 
 func (d *Device) writeFIFO(tx []byte, txBits byte) error {
@@ -668,7 +678,7 @@ func (d *Device) writeFIFO(tx []byte, txBits byte) error {
 	for len(tx) > 0 {
 		n := copy(req[1:], tx)
 		tx = tx[n:]
-		if err := d.Bus.Tx(i2cAddr, req[:n+1], nil); err != nil {
+		if err := d.bus.Tx(i2cAddr, req[:n+1], nil); err != nil {
 			return fmt.Errorf("load FIFO: %w", err)
 		}
 	}
@@ -684,7 +694,7 @@ func (d *Device) readReg(reg byte) (byte, error) {
 	if !isSpaceB {
 		req = req[1:]
 	}
-	err := d.Bus.Tx(i2cAddr, req, res)
+	err := d.bus.Tx(i2cAddr, req, res)
 	return res[0], err
 }
 
@@ -710,7 +720,7 @@ func (d *Device) writeReg(reg, val byte) error {
 	if !isSpaceB {
 		req = req[1:]
 	}
-	return d.Bus.Tx(i2cAddr, req, nil)
+	return d.bus.Tx(i2cAddr, req, nil)
 }
 
 func (d *Device) commandAndWait(cmd byte, mask interrupts, timeout time.Duration) (interrupts, error) {
@@ -726,7 +736,7 @@ func (d *Device) commandAndWait(cmd byte, mask interrupts, timeout time.Duration
 func (d *Device) command(cmd byte) error {
 	req := d.scratch[:1]
 	req[0] = modeCommand | cmd
-	return d.Bus.Tx(i2cAddr, req, nil)
+	return d.bus.Tx(i2cAddr, req, nil)
 }
 
 const (
@@ -852,7 +862,7 @@ const (
 	scp          = 3
 	scf          = 5
 	modeISO15693 = 0b01<<scf | // fc/32
-		0b000<<stx | // fc/120
+		0b000<<stx | // fc/128
 		0b11<<scp // 8 pulses
 
 	// Operation control bits.

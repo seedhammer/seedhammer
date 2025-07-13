@@ -13,6 +13,7 @@ import (
 )
 
 type Device interface {
+	Close() error
 	Detect() (bool, error)
 	SetProtocol(prot Protocol) error
 	Sleep() error

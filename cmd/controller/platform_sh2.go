@@ -196,7 +196,7 @@ func Init() (*Platform, error) {
 	p.touch.ints = make(chan struct{}, 1)
 	p.touch.dev = touch
 
-	nfc := &st25r3916.Device{Bus: mi2c, Int: NFC_INT}
+	nfc := st25r3916.New(mi2c, NFC_INT)
 	p.nfc = newNFCDevice(nfc)
 	return p, nil
 }
@@ -494,7 +494,7 @@ func (p *Platform) Features() gui.Features {
 }
 
 func (p *Platform) NFCDevice() (poller.Device, func()) {
-	return p.nfc, p.nfc.Device.Close
+	return p.nfc, p.nfc.Device.Interrupt
 }
 
 func (p *Platform) Engraver() (gui.Engraver, error) {
