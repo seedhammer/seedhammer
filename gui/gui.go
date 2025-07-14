@@ -52,7 +52,7 @@ type Context struct {
 
 	// scan is the last scanned object (seed, descriptor
 	// etc.).
-	scan any
+	scan scanResult
 
 	events  []Event
 	pointer struct {
@@ -70,13 +70,10 @@ func NewContext(pl Platform) *Context {
 	return c
 }
 
-func (c *Context) Scan() (any, bool) {
+func (c *Context) Scan() (scanResult, bool) {
 	s := c.scan
-	if s == nil {
-		return nil, false
-	}
-	c.scan = nil
-	return s, true
+	c.scan = scanResult{}
+	return s, s.Content != nil || s.Status > scanIdle
 }
 
 func (c *Context) WakeupAt(t time.Time) {
@@ -86,6 +83,7 @@ func (c *Context) WakeupAt(t time.Time) {
 }
 
 func (c *Context) Reset() {
+	c.scan = scanResult{}
 	c.events = c.events[:0]
 	c.Wakeup = time.Time{}
 	c.pointer.hits = c.pointer.hits[:0]
@@ -1617,36 +1615,53 @@ func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 	op.Position(ops, ops.End(), content.Center(image.Pt(maxW, h)))
 }
 
-func mainFlow(ctx *Context, ops op.Ctx) {
-	var page program
+type MainScreen struct {
+	page        program
+	scanTimeout time.Time
+	scanStatus  scanStatus
+}
+
+func (m *MainScreen) showError(ctx *Context, ops op.Ctx, title, content string) {
+	ws := &ErrorScreen{
+		Title: title,
+		Body:  content,
+	}
+	th := m.theme()
+	for {
+		dims := ctx.Platform.DisplaySize()
+		res := ws.Layout(ctx, ops.Begin(), th, dims)
+		if res {
+			break
+		}
+		dialog := ops.End()
+		m.draw(ctx, ops, dims)
+		dialog.Add(ops)
+		ctx.Frame()
+	}
+}
+
+const scanStatusTimeout = 1 * time.Second
+
+func (m *MainScreen) Flow(ctx *Context, ops op.Ctx) {
 	inp := new(InputTracker)
 	selectBtn := &Clickable{Button: Button3, AltButton: Center}
 	for {
 		for selectBtn.Clicked(ctx) {
-			mainSelectedFlow(ctx, ops, page)
+			m.selectedFlow(ctx, ops)
 			continue
 		}
 		if scan, ok := ctx.Scan(); ok {
-			switch scan := scan.(type) {
+			if time.Now().Before(m.scanTimeout) {
+				m.scanStatus = max(m.scanStatus, scan.Status)
+			} else {
+				m.scanStatus = scan.Status
+			}
+			m.scanTimeout = time.Now().Add(scanStatusTimeout)
+			switch scan := scan.Content.(type) {
 			case debugPlan:
 				if err := debugEngrave(ctx.Platform, nil); err != nil {
 					log.Printf("debug engrave: %v", err)
-					errStr := err.Error()
-					for {
-						ws := &ErrorScreen{
-							Title: strings.ToTitle("Engraver error"),
-							Body:  errStr,
-						}
-						dims := ctx.Platform.DisplaySize()
-						res := ws.Layout(ctx, ops.Begin(), mainScreenTheme(page), dims)
-						if res {
-							break
-						}
-						dialog := ops.End()
-						drawMainScreen(ctx, ops, dims, page)
-						dialog.Add(ops)
-						ctx.Frame()
-					}
+					m.showError(ctx, ops, "Engraver Error", err.Error())
 				}
 				continue
 			case bip39.Mnemonic:
@@ -1668,32 +1683,32 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 					if !e.Pressed {
 						break
 					}
-					page--
-					if page < 0 {
-						page = backupWallet
+					m.page--
+					if m.page < 0 {
+						m.page = backupWallet
 					}
 				case Right:
 					if !e.Pressed {
 						break
 					}
-					page++
-					if page > backupWallet {
-						page = 0
+					m.page++
+					if m.page > backupWallet {
+						m.page = 0
 					}
 				}
 			}
 		}
 		dims := ctx.Platform.DisplaySize()
-		drawMainScreen(ctx, ops, dims, page)
-		layoutNavigation(ops, mainScreenTheme(page), dims,
+		m.draw(ctx, ops, dims)
+		layoutNavigation(ops, m.theme(), dims,
 			NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		)
 		ctx.Frame()
 	}
 }
 
-func mainScreenTheme(page program) *Colors {
-	switch page {
+func (m *MainScreen) theme() *Colors {
+	switch m.page {
 	case backupWallet:
 		return &descriptorTheme
 	default:
@@ -1701,10 +1716,10 @@ func mainScreenTheme(page program) *Colors {
 	}
 }
 
-func drawMainScreen(ctx *Context, ops op.Ctx, dims image.Point, page program) {
+func (m *MainScreen) draw(ctx *Context, ops op.Ctx, dims image.Point) {
 	var title string
-	th := mainScreenTheme(page)
-	switch page {
+	th := m.theme()
+	switch m.page {
 	case backupWallet:
 		title = "Backup Wallet"
 	}
@@ -1713,12 +1728,28 @@ func drawMainScreen(ctx *Context, ops op.Ctx, dims image.Point, page program) {
 	layoutTitle(ctx, ops, dims.X, th.Text, title)
 
 	r := layout.Rectangle{Max: dims}
-	sz := layoutMainPage(ops.Begin(), th, dims.X, page)
+	sz := m.layout(ops.Begin(), dims.X)
 	op.Position(ops, ops.End(), r.Center(sz))
 
-	sz = layoutMainPager(ops.Begin(), th, page)
-	_, footer := r.CutBottom(leadingSize)
-	op.Position(ops, ops.End(), footer.Center(sz))
+	sz = layoutMainPager(ops.Begin(), th, m.page)
+	_, middle := r.CutBottom(leadingSize)
+	op.Position(ops, ops.End(), middle.Center(sz))
+	sttxt := ""
+	if time.Now().Before(m.scanTimeout) {
+		ctx.WakeupAt(m.scanTimeout)
+		switch m.scanStatus {
+		case scanFailed:
+			sttxt = "Scan error"
+		case scanOverflow:
+			sttxt = "Content too large"
+		case scanStarted:
+			sttxt = "Scanning..."
+		case scanUnknownFormat:
+			sttxt = "Unknown format"
+		}
+	}
+	stsz := widget.Labelwf(ops.Begin(), ctx.Styles.subtitle, 300, th.Text, sttxt)
+	op.Position(ops, ops.End(), r.S(stsz).Sub(image.Pt(0, 16)))
 
 	versz := widget.Labelwf(ops.Begin(), ctx.Styles.debug, 100, th.Text, ctx.Version)
 	op.Position(ops, ops.End(), r.SE(versz.Add(image.Pt(4, 0))))
@@ -1812,12 +1843,12 @@ func layoutNavigation(ops op.Ctx, th *Colors, dims image.Point, btns ...NavButto
 	return r
 }
 
-func layoutMainPage(ops op.Ctx, th *Colors, width int, page program) image.Point {
-	var h layout.Align
-
+func (m *MainScreen) layout(ops op.Ctx, width int) image.Point {
+	th := m.theme()
 	op.ImageOp(ops.Begin(), assets.ArrowLeft, true)
 	op.ColorOp(ops, th.Text)
 	left := ops.End()
+	var h layout.Align
 	leftsz := h.Add(assets.ArrowLeft.Bounds().Size())
 
 	op.ImageOp(ops.Begin(), assets.ArrowRight, true)
@@ -1825,7 +1856,7 @@ func layoutMainPage(ops op.Ctx, th *Colors, width int, page program) image.Point
 	right := ops.End()
 	rightsz := h.Add(assets.ArrowRight.Bounds().Size())
 
-	contentsz := h.Add(layoutMainPlates(ops.Begin(), page))
+	contentsz := h.Add(layoutMainPlates(ops.Begin(), m.page))
 	content := ops.End()
 
 	const margin = 16
@@ -1869,13 +1900,13 @@ func layoutMainPager(ops op.Ctx, th *Colors, page program) image.Point {
 	return image.Pt((sz.X+space)*npages-space, sz.Y)
 }
 
-func mainSelectedFlow(ctx *Context, ops op.Ctx, page program) {
+func (m *MainScreen) selectedFlow(ctx *Context, ops op.Ctx) {
 	ws := &ConfirmWarningScreen{
 		Title: strings.ToTitle("Remove SD card"),
 		Body:  "Remove SD card to continue.\n\nHold button to ignore this warning.",
 		Icon:  assets.IconRight,
 	}
-	th := mainScreenTheme(page)
+	th := m.theme()
 loop:
 	for ctx.Platform.SDCardInserted() && !ctx.SuppressSDWarning {
 		dims := ctx.Platform.DisplaySize()
@@ -1888,11 +1919,11 @@ loop:
 		case ConfirmNo:
 			return
 		}
-		drawMainScreen(ctx, ops, dims, page)
+		m.draw(ctx, ops, dims)
 		dialog.Add(ops)
 		ctx.Frame()
 	}
-	switch page {
+	switch m.page {
 	case backupWallet:
 		mnemonic, ok := newMnemonicFlow(ctx, ops, th)
 		if !ok {
@@ -2869,12 +2900,21 @@ func Run(pl Platform, version string) func(yield func() bool) {
 		}{
 			ctx: ctx,
 		}
-		scans := make(chan any, 1)
+		scans := make(chan scanResult, 1)
 		if nfcdev, interrupt := pl.NFCDevice(); nfcdev != nil {
 			defer interrupt()
 			wakeup := pl.Wakeup
 			go func() {
 				for scan := range Scan(nfcdev) {
+					select {
+					case old := <-scans:
+						// Merge the previous result.
+						if scan.Content == nil {
+							scan.Content = old.Content
+						}
+						scan.Status = max(scan.Status, old.Status)
+					default:
+					}
 					scans <- scan
 					wakeup()
 				}
@@ -2894,7 +2934,8 @@ func Run(pl Platform, version string) func(yield func() bool) {
 					panic(err)
 				}
 			}()
-			mainFlow(ctx, a.root.Context())
+			m := new(MainScreen)
+			m.Flow(ctx, a.root.Context())
 		}
 		startTime := time.Now()
 		var evts []Event
@@ -2938,7 +2979,6 @@ func Run(pl Platform, version string) func(yield func() bool) {
 					a.ctx.scan = scan
 					a.idle.start = a.ctx.Platform.Now()
 				default:
-					a.ctx.scan = nil
 				}
 				idleWakeup := a.idle.start.Add(idleTimeout)
 				now := a.ctx.Platform.Now()
