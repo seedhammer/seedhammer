@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"bytes"
 	"io"
 	"iter"
 	"log"
@@ -32,16 +33,22 @@ func Scan(d poller.Device) iter.Seq[any] {
 				time.Sleep(1 * time.Second)
 				continue
 			}
-			var content any
+			y := true
 			if buf := buf[:n]; len(buf) > 0 {
-				m, err := bip39.Parse(buf)
-				if err == nil {
-					content = m
+				if m, err := bip39.Parse(buf); err == nil {
+					y = yield(m)
+					continue
+				}
+				if bytes.Equal(buf, []byte("FOREVERLAURA!")) {
+					y = yield(debugPlan{})
+					continue
 				}
 			}
-			if !yield(content) {
+			if !y {
 				break
 			}
 		}
 	}
 }
+
+type debugPlan struct{}

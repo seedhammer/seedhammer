@@ -1628,6 +1628,27 @@ func mainFlow(ctx *Context, ops op.Ctx) {
 		}
 		if scan, ok := ctx.Scan(); ok {
 			switch scan := scan.(type) {
+			case debugPlan:
+				if err := debugEngrave(ctx.Platform, nil); err != nil {
+					log.Printf("debug engrave: %v", err)
+					errStr := err.Error()
+					for {
+						ws := &ErrorScreen{
+							Title: strings.ToTitle("Engraver error"),
+							Body:  errStr,
+						}
+						dims := ctx.Platform.DisplaySize()
+						res := ws.Layout(ctx, ops.Begin(), mainScreenTheme(page), dims)
+						if res {
+							break
+						}
+						dialog := ops.End()
+						drawMainScreen(ctx, ops, dims, page)
+						dialog.Add(ops)
+						ctx.Frame()
+					}
+				}
+				continue
 			case bip39.Mnemonic:
 				backupWalletFlow(ctx, ops, &descriptorTheme, scan)
 				continue
@@ -1681,9 +1702,8 @@ func mainScreenTheme(page program) *Colors {
 }
 
 func drawMainScreen(ctx *Context, ops op.Ctx, dims image.Point, page program) {
-	var th *Colors
 	var title string
-	th = mainScreenTheme(page)
+	th := mainScreenTheme(page)
 	switch page {
 	case backupWallet:
 		title = "Backup Wallet"
@@ -2981,4 +3001,49 @@ func rgb(c uint32) color.NRGBA {
 
 func argb(c uint32) color.NRGBA {
 	return color.NRGBA{A: uint8(c >> 24), R: uint8(c >> 16), G: uint8(c >> 8), B: uint8(c)}
+}
+
+func debugEngrave(p Platform, quit <-chan struct{}) error {
+	const sz = backup.SquarePlate
+	e, err := p.Engraver()
+	if err != nil {
+		return err
+	}
+	defer e.Close()
+	plan := func(yield func(engrave.Command) bool) {
+		mm := p.EngraverParams().Millimeter
+		margin := 1 * mm
+		mp := image.Pt(margin, margin)
+		dims := sz.Dims().Mul(mm)
+		yield(engrave.Move(mp))
+		const (
+			repeats  = 10
+			segments = 16
+		)
+		center := dims.Div(2)
+		radius := dims.X/2 - margin
+		for {
+			for range repeats {
+				yield(engrave.Move(mp))
+				yield(engrave.Move(image.Pt(dims.X-margin, margin)))
+				yield(engrave.Move(dims.Sub(mp)))
+				yield(engrave.Move(image.Pt(margin, dims.Y-margin)))
+			}
+			for range repeats {
+				for i := range segments {
+					angle := 2 * math.Pi * float64(i) / segments
+					p := image.Point{
+						X: center.X + int(float64(radius)*math.Cos(angle)),
+						Y: center.Y + int(float64(radius)*math.Sin(angle)),
+					}
+					yield(engrave.Move(p))
+				}
+			}
+		}
+	}
+	err = e.Engrave(sz, plan, quit)
+	if err != nil {
+		return err
+	}
+	return nil
 }

@@ -135,7 +135,7 @@ const (
 	mm = fullStepsPerRevolution / mmPerRevolution * tmc2209.Microsteps
 	// The coordinates of the top-left plate corner relative to the
 	// homing zero.
-	originX, originY = 2.1 * mm, 2.1 * mm
+	originX, originY = 5.0 * mm, 3.2 * mm
 	// Maximum distance to travel before giving up homing.
 	homingDist = 100 * mm
 	// strokeWidth of engraving lines.
