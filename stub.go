@@ -7,7 +7,6 @@ import (
 	"log"
 	"machine"
 	"os"
-	"time"
 
 	"seedhammer.com/driver/st25r3916"
 	"seedhammer.com/nfc/poller"
@@ -37,12 +36,12 @@ func run() error {
 
 	nfc := st25r3916.New(dataI2C, DATA_INT)
 	dev := newNFCDevice(nfc)
-	go func() {
-		for {
-			time.Sleep(5 * time.Second)
-			dev.Interrupt()
-		}
-	}()
+	// go func() {
+	// 	for {
+	// 		time.Sleep(5 * time.Second)
+	// 		dev.Interrupt()
+	// 	}
+	// }()
 	defer dev.Close()
 	p := poller.New(dev)
 	for {

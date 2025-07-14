@@ -11,9 +11,9 @@ import (
 func TestWriteFiles(t *testing.T) {
 	r := &Reader{t: t}
 	r.MsgSleep()
-	r.MsgRATS()
+	r.MsgSENS_REQ()
 	r.MsgDeselect()
-	r.MsgRATS()
+	r.MsgSENS_REQ()
 	r.MsgNAK()
 	r.MsgSelectNDEF()
 	r.MsgSelectCCFile()
@@ -55,6 +55,16 @@ func TestWriteFiles(t *testing.T) {
 	}
 }
 
+func TestDoubleSENSREQ(t *testing.T) {
+	r := &Reader{t: t}
+	r.MsgSENS_REQ()
+	r.MsgSENS_REQ()
+	tag := NewTag(r)
+	if _, err := tag.Read(make([]byte, 100)); err != io.EOF {
+		t.Fatalf("expected EOF, got %v", err)
+	}
+}
+
 // Reader implements a NFC forum type 4 reader.
 type Reader struct {
 	t       *testing.T
@@ -93,9 +103,9 @@ func (m message) String() string {
 	return r.String()
 }
 
-func (r *Reader) MsgRATS() {
+func (r *Reader) MsgSENS_REQ() {
 	r.msgs = append(r.msgs, message{
-		msg:  []byte{cmdRATS, 0x80},
+		msg:  []byte{cmdSENS_REQ, 0x80},
 		resp: ats,
 	})
 }

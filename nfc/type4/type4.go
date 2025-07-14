@@ -71,7 +71,7 @@ const (
 	blockSize    = 4
 	readSize     = 16
 
-	cmdRATS = 0xe0
+	cmdSENS_REQ = 0xe0
 
 	isodepDESELECT        = 0xc2
 	isodepI_BLOCK         = 0x02
@@ -152,77 +152,71 @@ func (t *Tag) Read(b []byte) (int, error) {
 		// Re-use the receive buffer for the response. This is
 		// ok because the request is read before being overwritten.
 		resp := t.buf[:0]
-		switch t.state {
-		case initState:
-			switch {
-			case len(buf) == 2 && buf[0] == cmdRATS:
-				// Initialize I-block number to 1 (13.2.4.2).
-				t.blockNo = 0b1
-				t.state = activeState
-				resp = append(resp, ats...)
-			case bytes.Equal(buf, cmdSLP_REQ):
-				// Go to sleep, waiting for WUPA.
-				if err := t.d.Sleep(); err != nil {
-					return 0, fmt.Errorf("type4: %w", err)
-				}
-				t.Reset()
-				readErr = io.EOF
+		switch {
+		case t.state <= activeState && len(buf) == 2 && buf[0] == cmdSENS_REQ:
+			// Initialize I-block number to 1 (13.2.4.2).
+			t.blockNo = 0b1
+			t.state = activeState
+			resp = append(resp, ats...)
+		case t.state <= activeState && bytes.Equal(buf, cmdSLP_REQ):
+			// Go to sleep, waiting for WUPA.
+			if err := t.d.Sleep(); err != nil {
+				return 0, fmt.Errorf("type4: %w", err)
 			}
-		case activeState, ndefState, ccFileState, fileState:
+			t.Reset()
+			readErr = io.EOF
+		case t.state >= activeState && len(buf) == 1 && buf[0] == isodepDESELECT:
+			// Go to sleep, waiting for WUPA.
+			if err := t.d.Sleep(); err != nil {
+				return 0, fmt.Errorf("type4: %w", err)
+			}
+			t.Reset()
+			readErr = io.EOF
+			resp = append(resp, isodepDESELECT)
+		case t.state >= activeState && len(buf) == 1 && (buf[0]&^0b1) == isodepR_NAK:
+			rbno := buf[0] & 0b1
+			if rbno != t.blockNo {
+				// Respond with R(ACK) (13.2.5.10).
+				resp = append(resp, isodepR_ACK|t.blockNo)
+			}
+		case t.state >= activeState && (buf[0]&^0b1) == isodepI_BLOCK:
+			buf = buf[1:]
+			t.blockNo = 1 - t.blockNo
+			resp = append(resp, isodepI_BLOCK|t.blockNo)
+			if len(buf) < 4 || buf[0] != isodepCLA {
+				break
+			}
+			buf = buf[1:]
 			switch {
-			case len(buf) == 1 && buf[0] == isodepDESELECT:
-				// Go to sleep, waiting for WUPA.
-				if err := t.d.Sleep(); err != nil {
-					return 0, fmt.Errorf("type4: %w", err)
-				}
-				t.Reset()
-				readErr = io.EOF
-				resp = append(resp, isodepDESELECT)
-			case len(buf) == 1 && (buf[0]&^0b1) == isodepR_NAK:
-				rbno := buf[0] & 0b1
-				if rbno != t.blockNo {
-					// Send R(ACK) back (13.2.5.10).
-					resp = append(resp, isodepR_ACK|t.blockNo)
-				}
-			case (buf[0] &^ 0b1) == isodepI_BLOCK:
+			case bytes.Equal(buf, isodepTAG_SELECT):
+				t.state = ndefState
+				resp = append(resp, isodepACK...)
+			case t.state >= ndefState && bytes.Equal(buf, isodepCC_SELECT):
+				t.state = ccFileState
+				resp = append(resp, isodepACK...)
+			case t.state >= ndefState && bytes.Equal(buf, isodepFILE_SELECT):
+				t.state = fileState
+				t.nextWriteOff = 0
+				resp = append(resp, isodepACK...)
+			case t.state >= ccFileState && len(buf) == 4 && buf[0] == isodepREAD:
 				buf = buf[1:]
-				t.blockNo = 1 - t.blockNo
-				resp = append(resp, isodepI_BLOCK|t.blockNo)
-				if len(buf) < 4 || buf[0] != isodepCLA {
+				var ok bool
+				resp, ok = t.read(resp, buf)
+				if !ok {
 					break
 				}
+				resp = append(resp, isodepACK...)
+			case t.state >= ccFileState && buf[0] == isodepWRITE:
 				buf = buf[1:]
-				switch {
-				case bytes.Equal(buf, isodepTAG_SELECT):
-					t.state = ndefState
-					resp = append(resp, isodepACK...)
-				case t.state >= ndefState && bytes.Equal(buf, isodepCC_SELECT):
-					t.state = ccFileState
-					resp = append(resp, isodepACK...)
-				case t.state >= ndefState && bytes.Equal(buf, isodepFILE_SELECT):
-					t.state = fileState
-					t.nextWriteOff = 0
-					resp = append(resp, isodepACK...)
-				case t.state >= ccFileState && len(buf) == 4 && buf[0] == isodepREAD:
-					buf = buf[1:]
-					var ok bool
-					resp, ok = t.read(resp, buf)
-					if !ok {
-						break
-					}
-					resp = append(resp, isodepACK...)
-				case t.state >= ccFileState && buf[0] == isodepWRITE:
-					buf = buf[1:]
-					readData, readErr = t.write(buf)
-					if readErr != nil && readErr != io.EOF {
-						break
-					}
-					t.readBytes = len(readData)
-					resp = append(resp, isodepACK...)
+				readData, readErr = t.write(buf)
+				if readErr != nil && readErr != io.EOF {
+					break
 				}
-				if len(resp) == 1 {
-					resp = append(resp, isodepNAK...)
-				}
+				t.readBytes = len(readData)
+				resp = append(resp, isodepACK...)
+			}
+			if len(resp) == 1 {
+				resp = append(resp, isodepNAK...)
 			}
 		}
 		if len(resp) > 0 {
