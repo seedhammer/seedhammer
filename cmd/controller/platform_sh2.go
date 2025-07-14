@@ -141,7 +141,7 @@ const (
 	// strokeWidth of engraving lines.
 	strokeWidth = 0.3 * mm
 	// Speeds in steps/second.
-	topSpeed       = 40 * mm
+	topSpeed       = 30 * mm
 	engravingSpeed = 8 * mm
 	homingSpeed    = 15 * mm
 	// acceleration in steps/s².
