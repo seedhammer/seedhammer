@@ -189,12 +189,14 @@ func (d *Device) StallResult() (int, error) {
 }
 
 // SetStallMinimumVelocity sets the minimum velocity in
-// full-steps/second for detecting stalls.
+// steps/second for detecting stalls.
 func (d *Device) SetMinimumStallVelocity(stepsPerSecond int) error {
 	// tcoolThrs is the TCOOLTHRS value for the stall guard velocity.
 	// It is represented in time in clock cycles between each microstep
 	// at maximum resolution (256).
-	tcoolThrs := fclk / (stepsPerSecond * 256)
+	const scale = 256 / Microsteps
+	tcoolThrs := fclk / (stepsPerSecond * scale)
+	tcoolThrs = min(tcoolThrs, 0xfffff)
 	if err := d.write(TCOOLTHRS, uint32(tcoolThrs)); err != nil {
 		return fmt.Errorf("tmc2209: set TCOOLHRS: %w", err)
 	}

@@ -129,9 +129,9 @@ const (
 	// stallThreshold is the TMC2209 SGTHRS for triggering a
 	// stall.
 	stallThreshold = 110
-	// minimumStallVelocity is the speed in full-steps/second for
+	// minimumStallVelocity is the speed in steps/second for
 	// StallGuard to be enabled.
-	minimumStallVelocity = 250
+	minimumStallVelocity = 10 * mm
 	// fullStepsPerRevolution is the number of full-steps for a full
 	// motor revolution.
 	fullStepsPerRevolution = 200
@@ -160,10 +160,7 @@ func Init() (*Platform, error) {
 	if err := dataI2C.Configure(machine.I2CConfig{Frequency: 400_000, SDA: DATA_SDA, SCL: DATA_SCL}); err != nil {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
-	mi2c := &multiplexI2C{
-		Bus: make(chan *machine.I2C, 1),
-	}
-	mi2c.Bus <- dataI2C
+	mi2c := newMultiplexI2C(dataI2C)
 	e, err := configEngraver(mi2c)
 	if err != nil {
 		return nil, err
@@ -577,12 +574,20 @@ func (p *Platform) NextChunk() (draw.RGBA64Image, bool) {
 }
 
 type multiplexI2C struct {
-	Bus chan *machine.I2C
+	bus chan *machine.I2C
+}
+
+func newMultiplexI2C(bus *machine.I2C) *multiplexI2C {
+	busCh := make(chan *machine.I2C, 1)
+	busCh <- bus
+	return &multiplexI2C{
+		bus: busCh,
+	}
 }
 
 func (m *multiplexI2C) Tx(addr uint16, tx, rx []byte) error {
-	bus := <-m.Bus
+	bus := <-m.bus
 	err := bus.Tx(addr, tx, rx)
-	m.Bus <- bus
+	m.bus <- bus
 	return err
 }
