@@ -12,10 +12,6 @@ import (
 
 // Motor configuration.
 const (
-	// currentRMS is the motor current in amperes (A).
-	currentRMS = 0.9
-	// rsense is the sense resistor in ohms (Ω).
-	rsense = 0.150
 	// vfs is the sense voltage, in volts (V).
 	vfs = 0.325
 )
@@ -40,16 +36,6 @@ const (
 	// after enabling the motor.
 	StandstillTuningPeriod = 130 * time.Millisecond
 
-	// Compute IRUN from motor current and sense resistor.
-	// The formula from the reference manual is
-	//
-	//  Irms = ((CS+1)/32) * (Vfs/(Rsense+20mΩ)) * (1/√2).
-	//
-	// Solving for CS,
-	//
-	//  CS = 32*Irms*√2*(Rsense+20mΩ)/Vfs - 1
-	IRUN = 32*currentRMS*math.Sqrt2*(rsense+.02)/vfs - 1
-
 	// IHOLDDELAY is the number of clock cycles to delay
 	// current switch from IRUN to IHOLD on standstill.
 	iholdDelay = 0
@@ -62,6 +48,8 @@ type Device struct {
 	Bus    io.ReadWriter
 	Addr   uint8
 	Invert bool
+	// Sense is the sense resistance in milliohm (mΩ).
+	Sense int
 }
 
 const (
@@ -114,6 +102,10 @@ func (d *Device) SetupSharedUART() error {
 }
 
 func (d *Device) Configure() error {
+	if d.Sense == 0 {
+		return errors.New("invalid configuration")
+	}
+
 	// This is redundant with [SetupSharedUART], but do it anyway in case the setting
 	// didn't stick.
 	if err := d.write(SLAVECONF, min_SENDDELAY<<8); err != nil {
@@ -135,18 +127,7 @@ func (d *Device) Configure() error {
 	if err := d.write(GCONF, gconf); err != nil {
 		return fmt.Errorf("tmc2209: set GCONF: %w", err)
 	}
-	irun := IRUN
-	if irun > 31 {
-		irun = 31
-	}
-	// IHOLD is the standstill current, equal to IRUN.
-	ihold := irun
-	ihold_irun := iholdDelay<<16 | uint32(irun)<<8 | uint32(ihold)
-	if err := d.write(IHOLD_IRUN, ihold_irun); err != nil {
-		return fmt.Errorf("tmc2209: set IHOLD/IRUN: %w", err)
-	}
-
-	if err := d.Enable(false); err != nil {
+	if err := d.Enable(0); err != nil {
 		return err
 	}
 
@@ -158,7 +139,17 @@ func (d *Device) Configure() error {
 	return nil
 }
 
-func (d *Device) Enable(en bool) error {
+// Enable the driver and set the driving current in mA.
+// Setting the current to 0 disables it.
+func (d *Device) Enable(current int) error {
+	irun := computeIRUN(current, d.Sense)
+	// IHOLD is the standstill current, equal to IRUN.
+	ihold := irun
+	ihold_irun := iholdDelay<<16 | uint32(irun)<<8 | uint32(ihold)
+	if err := d.write(IHOLD_IRUN, ihold_irun); err != nil {
+		return fmt.Errorf("tmc2209: set IHOLD/IRUN: %w", err)
+	}
+
 	chopconf, err := d.read(CHOPCONF)
 	if err != nil {
 		return fmt.Errorf("tmc2209: enable: %w", err)
@@ -171,7 +162,7 @@ func (d *Device) Enable(en bool) error {
 	// Stash TOFF, and set it to zero to disable the driver.
 	const toffMask = 0b1111
 	const toff = 3
-	if en {
+	if current > 0 {
 		chopconf |= toff
 	} else {
 		chopconf &^= toffMask
@@ -305,4 +296,18 @@ func writeDatagram(node, addr uint8, val uint32) [6]byte {
 		addr | WRITE,
 		byte(val >> 24), byte(val >> 16), byte(val >> 8), byte(val),
 	}
+}
+
+// computeIRUN from motor current (in mA) and sense resistance (in mΩ).
+func computeIRUN(current, sense int) byte {
+	// The formula from the reference manual is
+	//
+	//  Irms = ((CS+1)/32) * (Vfs/(Rsense+20mΩ)) * (1/√2).
+	//
+	// Solving for CS,
+	//
+	//  CS = 32*Irms*√2*(Rsense+20mΩ)/Vfs - 1
+	irun := 32*float64(current)/1000*math.Sqrt2*(float64(sense)/1000+.02)/vfs - 1
+	irun = min(31, irun)
+	return byte(max(0, irun))
 }

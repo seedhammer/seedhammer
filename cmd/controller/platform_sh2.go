@@ -120,6 +120,12 @@ const (
 	minVoltage = 20_000
 	maxVoltage = 28_000
 
+	// senseResistance is the value of the stepper driver
+	// sense resistors (in mΩ).
+	senseResistance = 150
+	// stepperPower is the driving power of the stepper drivers,
+	// in mW.
+	stepperPower = 18_000
 	// stallThreshold is the TMC2209 SGTHRS for triggering a
 	// stall.
 	stallThreshold = 110
@@ -266,11 +272,13 @@ func configEngraver(bus *multiplexI2C) (*engraver, error) {
 		Bus:    uart,
 		Addr:   X_ADDR,
 		Invert: invertX,
+		Sense:  senseResistance,
 	}
 	Y := &tmc2209.Device{
 		Bus:    uart,
 		Addr:   Y_ADDR,
 		Invert: invertY,
+		Sense:  senseResistance,
 	}
 	for i, axis := range []*tmc2209.Device{X, Y} {
 		axis.SetupSharedUART()
@@ -448,17 +456,18 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 		time.Sleep(500 * time.Millisecond)
 	}()
 
+	current := stepperPower * 1000 / voltage
 	// Wait a bit before enabling each stepper,
 	time.Sleep(200 * time.Millisecond)
-	if err := e.XAxis.Enable(true); err != nil {
+	if err := e.XAxis.Enable(current); err != nil {
 		return err
 	}
-	defer e.XAxis.Enable(false)
+	defer e.XAxis.Enable(0)
 	time.Sleep(200 * time.Millisecond)
-	if err := e.YAxis.Enable(true); err != nil {
+	if err := e.YAxis.Enable(current); err != nil {
 		return err
 	}
-	defer e.YAxis.Enable(false)
+	defer e.YAxis.Enable(0)
 	// Wait for standstill tuning of the drivers.
 	time.Sleep(tmc2209.StandstillTuningPeriod)
 
