@@ -2717,6 +2717,8 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 					}
 					confirm := new(ConfirmDelay)
 					confirm.Start(ctx, confirmDelay)
+					inp.Pressed[selectBtn.Button] = false
+					selectBtn.Pressed = false
 					for {
 						p := confirm.Progress(ctx)
 						if p == 1. {
