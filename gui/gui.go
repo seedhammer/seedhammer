@@ -104,7 +104,6 @@ func (c *Context) Events(o *op.Ops, evts ...Event) {
 		var pt BoundedTag
 		e, ok := e.AsPointer()
 		if !ok {
-			c.pointer.hits = append(c.pointer.hits, pt)
 			continue
 		}
 		if pctx.pressed {
