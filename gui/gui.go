@@ -2972,7 +2972,9 @@ func Run(pl Platform, version string) func(yield func() bool) {
 					a.idle.start = a.ctx.Platform.Now()
 				}
 				a.ctx.Reset()
-				a.ctx.Events(&a.root, evts...)
+				if !a.idle.active {
+					a.ctx.Events(&a.root, evts...)
+				}
 				select {
 				case scan := <-scans:
 					a.ctx.scan = scan
