@@ -66,6 +66,10 @@ const (
 	// no tag has been seen.
 	fieldOffTimeout = 1 * time.Second
 
+	// fieldDetectionTimeout is the time spent waiting for
+	// an external field.
+	fieldDetectionTimeout = 700 * time.Millisecond
+
 	// Card detection thresholds.
 	ampSens   = 2
 	phaseSens = 2
@@ -78,6 +82,8 @@ const (
 	fieldOn
 	fieldActive
 )
+
+var errTimeout = errors.New("timeout")
 
 func New(b Bus, intPin machine.Pin) *Device {
 	return &Device{
@@ -108,7 +114,10 @@ func (d *Device) reset() error {
 		regIOConf1, 0b11<<out_cl|0b1<<lf_clk_off|0b01<<i2c_thd, // Disable the MCU_CLK pin, 400 kHz i2c.
 		regIOConf2, 0b1<<io_drv_lvl, // Increase IO drive strength, as recommended in table 20.
 		regResAMMod, 0b1<<fa3_f|0<<md_res, // Minimum non-overlap.
-		regFieldOnGuardTime, 0xff, // ~39ms guard time.
+		// Adjust fdel to 5 like the ST example code. Datasheet table 32 says minimum 2.
+		regNFCIP1PassiveTarg, 5<<fdel|
+			// Disable unused passive detection modes.
+			0b1<<d_212_424_1r|0b1<<d_ac_ap2p,
 		regExtFieldAct, 0b001<<trg_l|0b0001<<rfe_t, // Lower activation threshold.
 		regExtFieldDeact, 0b000<<trg_ld|0b000<<rfe_td, // Lower deactivation threshold.
 		regPassiveTargetMod, 0x5f, // Reduce RFO resistance in modulated state.
@@ -121,10 +130,10 @@ func (d *Device) reset() error {
 	); err != nil {
 		return err
 	}
-	if err := d.enablePassiveNFCA(false); err != nil {
+	if err := d.enable(); err != nil {
 		return err
 	}
-	if err := d.enable(); err != nil {
+	if err := d.command(cmdGotoSense); err != nil {
 		return err
 	}
 	// Adjust regulators.
@@ -168,17 +177,6 @@ func (d *Device) reset() error {
 	return d.Close()
 }
 
-func (d *Device) enablePassiveNFCA(en bool) error {
-	// Adjust fdel to 5 like the ST example code. Datasheet table 32 says minimum 2.
-	const frameDelay = 5
-	v := byte(frameDelay<<fdel |
-		0b1<<d_212_424_1r | 0b1<<d_ac_ap2p) // Disable unused passive detection modes.
-	if !en {
-		v |= d_106_ac_a
-	}
-	return d.writeReg(regNFCIP1PassiveTarg, v)
-}
-
 func (d *Device) enable() error {
 	aux, err := d.readReg(regAuxDisp)
 	if err != nil {
@@ -208,36 +206,15 @@ func (d *Device) handleInterrupt(machine.Pin) {
 	}
 }
 
-func (d *Device) updateExtField(intrs interrupts) error {
-	if intrs.Timer&(0b1<<i_eon|0b1<<i_cac) != 0 {
-		d.extField = max(fieldOn, d.extField)
-	}
-	if intrs.Timer&(0b1<<i_cat|0b1<<i_eof) != 0 {
-		d.extField = fieldOff
-		d.excludeCRC = true
-		if err := d.enablePassiveNFCA(true); err != nil {
-			return err
-		}
-		if err := d.command(cmdGotoSense); err != nil {
-			return err
-		}
-	}
-	if intrs.Passive&(0b1<<i_wu_a_x|0b1<<i_wu_a) != 0 {
-		d.extField = fieldActive
-		if err := d.enablePassiveNFCA(false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // Wait for detection of a tag or external field, and
 // attempt to turn on the field. Return false if an external
 // field is on.
 func (d *Device) Detect() (bool, error) {
 	if d.extField > fieldOff {
+		// External field still on.
 		return false, nil
 	}
+
 	// According to AN5320, "Wake-up mode for ST25R3916", the
 	// only way to reset the sensor calibration is to reset
 	// the device.
@@ -247,6 +224,8 @@ func (d *Device) Detect() (bool, error) {
 	if err := d.configureProtocol(ISO14443a); err != nil {
 		return false, fmt.Errorf("st25r3916: detect: %w", err)
 	}
+
+	// Wait for field or tag detection.
 	mask := interrupts{
 		Error: 0b1<<i_wt | 0b1<<i_wam | 0b1<<i_wph,
 	}
@@ -262,7 +241,54 @@ func (d *Device) Detect() (bool, error) {
 		}
 		return false, fmt.Errorf("st25r3916: detect: %w", err)
 	}
-	if err := d.radioOn(); err != nil {
+
+	// Setup up listening (target) mode.
+	if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
+		return false, fmt.Errorf("st25r3916: detect: %w", err)
+	}
+
+	// Listen for external fields.
+	mask = interrupts{
+		Main:    0b1 << i_rxe,
+		Timer:   0b1<<i_nre | 0b1<<i_eof | 0b1<<i_eon | 0b1<<i_cac | 0b1<<i_cat,
+		Error:   0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
+		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
+	}
+	if err := d.resetInterruptMask(mask); err != nil {
+		return false, fmt.Errorf("st25r3916: detect: %w", err)
+	}
+	if err := d.writeReg(regOpCtrl, 0b11<<en_fd_c); err != nil {
+		return false, fmt.Errorf("st25r3916: detect: %w", err)
+	}
+	if _, err := d.waitForInterrupt(fieldDetectionTimeout); err != nil && err != errTimeout {
+		return false, fmt.Errorf("st25r3916: detect: %w", err)
+	}
+
+	flags := byte(0b1<<en | 0b1<<rx_en)
+	if d.extField == fieldOff {
+		// No external field detected. Attempt to turn on our field to
+		// prepare for communication with a tag.
+		if err := d.enable(); err != nil {
+			return false, fmt.Errorf("st25r3916: detect: %w", err)
+		}
+		_, err := d.commandAndWait(
+			cmdInitialFieldOn,
+			mask,
+			defTimeout,
+		)
+		if err != nil {
+			return false, fmt.Errorf("st25r3916: detect: %w", err)
+		}
+	}
+	if d.extField == fieldOff {
+		// There was no collision with external fields and the field is on (tx_en).
+		flags |= 0b1 << tx_en
+	} else {
+		// External field detected. Acknowledge the wakeup by setting en and rx_en.
+		// See "Low power field detection" in the datasheet.
+		flags |= 0b11 << en_fd_c
+	}
+	if err := d.writeReg(regOpCtrl, flags); err != nil {
 		return false, fmt.Errorf("st25r3916: detect: %w", err)
 	}
 	return d.extField == fieldOff, nil
@@ -282,54 +308,6 @@ func (d *Device) Interrupt() {
 	}
 }
 
-func (d *Device) radioOn() error {
-	if err := d.enable(); err != nil {
-		return err
-	}
-	if err := d.command(cmdStopAll); err != nil {
-		return err
-	}
-	if err := d.command(cmdResetRXGain); err != nil {
-		return err
-	}
-	flags := byte(0b1<<en | 0b01<<en_fd_c)
-	if err := d.writeReg(regOpCtrl, flags); err != nil {
-		return err
-	}
-	mask := interrupts{
-		Main:    0b1 << i_rxe,
-		Timer:   0b1<<i_nre | 0b1<<i_eof | 0b1<<i_eon | 0b1<<i_cac | 0b1<<i_cat,
-		Error:   0b1<<i_crc | 0b1<<i_par | 0b1<<i_err1 | 0b1<<i_err2,
-		Passive: 0b1<<i_wu_a_x | 0b1<<i_wu_a,
-	}
-	intrs, err := d.commandAndWait(
-		cmdInitialFieldOn,
-		mask,
-		defTimeout,
-	)
-	if err != nil {
-		return err
-	}
-	if err := d.updateExtField(intrs); err != nil {
-		return err
-	}
-	// Enable receiver.
-	flags |= 0b1 << rx_en
-	if d.extField == fieldOff {
-		// Enable field.
-		flags |= 0b1 << tx_en
-	} else {
-		// Set target, iso-14443a mode.
-		if err := d.writeReg(regModeDef, 0b1<<targ|omISO14443A); err != nil {
-			return err
-		}
-	}
-	if err := d.writeReg(regOpCtrl, flags); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (d *Device) SetProtocol(prot Protocol) error {
 	if err := d.configureProtocol(prot); err != nil {
 		return fmt.Errorf("st25r3916: protocol: %w", err)
@@ -338,9 +316,6 @@ func (d *Device) SetProtocol(prot Protocol) error {
 }
 
 func (d *Device) Sleep() error {
-	if err := d.enablePassiveNFCA(true); err != nil {
-		return fmt.Errorf("st25r3916: sleep: %w", err)
-	}
 	if err := d.command(cmdGotoSleep); err != nil {
 		return fmt.Errorf("st25r3916: sleep: %w", err)
 	}
@@ -372,17 +347,19 @@ func (d *Device) write(tx []byte) (int, error) {
 	if err := d.command(cmdResetRXGain); err != nil {
 		return 0, err
 	}
-	var transmitCmd byte
-	var bits byte
+	var (
+		transmitCmd byte
+		bits        byte
+	)
 	switch d.prot {
 	case ISO14443a:
-		const REQA = 0x26
+		const SENS_REQ = 0x26
 		var conf byte
 		transmitCmd = byte(cmdTransmitWithCRC)
 		// Simple detection of anti-collision frame.
 		anticol := len(tx) == 2 && tx[1] == 0x20 &&
 			(tx[0] == casLevel1 || tx[0] == casLevel2 || tx[0] == casLevel3)
-		reqa := len(tx) == 1 && tx[0] == REQA
+		reqa := len(tx) == 1 && tx[0] == SENS_REQ
 		switch {
 		case anticol, reqa:
 			d.excludeCRC = false
@@ -433,7 +410,7 @@ func (d *Device) waitForInterrupt(timeout time.Duration) (interrupts, error) {
 		case <-d.cancel:
 			return interrupts{}, io.EOF
 		case <-tim:
-			return interrupts{}, errors.New("timeout")
+			return interrupts{}, errTimeout
 		}
 		intrs, mask, err := d.interruptStatus()
 		if err != nil {
@@ -509,6 +486,15 @@ func (d *Device) interruptStatus() (intrs interrupts, mask interrupts, err error
 		Error:   ^resp[2],
 		Passive: ^resp[3],
 	}
+	if intrs.Timer&(0b1<<i_eon|0b1<<i_cac) != 0 {
+		d.extField = max(fieldOn, d.extField)
+	}
+	if intrs.Passive&(0b1<<i_wu_a_x|0b1<<i_wu_a) != 0 {
+		d.extField = fieldActive
+	}
+	if intrs.Timer&(0b1<<i_cat|0b1<<i_eof) != 0 {
+		d.extField = fieldOff
+	}
 	return intrs, mask, nil
 }
 
@@ -582,6 +568,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 				timeout = fieldOnTimeout
 			}
 		}
+		wasAct := d.extField == fieldActive
 		intrs, err := d.waitForInterrupt(timeout)
 		if err != nil {
 			// In case of timeout, retry field collision
@@ -590,10 +577,6 @@ func (d *Device) Read(buf []byte) (int, error) {
 			if err == io.EOF {
 				return 0, err
 			}
-			return 0, fmt.Errorf("st25r3916: read: %w", err)
-		}
-		wasAct := d.extField == fieldActive
-		if err := d.updateExtField(intrs); err != nil {
 			return 0, fmt.Errorf("st25r3916: read: %w", err)
 		}
 		var n int
@@ -623,7 +606,8 @@ func (d *Device) read(buf []byte) (int, error) {
 	}
 	fifoLen := int(fifoStatus[1]&0b1100_0000)<<2 | int(fifoStatus[0])
 	// Exclude the CRC bytes left in the FIFO.
-	if d.excludeCRC {
+	// Messages without CRC are not supported in listen mode.
+	if d.excludeCRC || d.extField >= fieldOn {
 		fifoLen = max(fifoLen-2, 0)
 	}
 	overflow := fifoStatus[1]&(0b1<<fifo_ovr) != 0
