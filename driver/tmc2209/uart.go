@@ -14,10 +14,11 @@ import (
 // UART implements a driver for the 1-pin UART interface
 // of the tmc2209.
 type UART struct {
-	pio    *rp.PIO0_Type
-	pin    machine.Pin
-	rxConf pio.ConfigRegs
-	txConf pio.ConfigRegs
+	pio     *rp.PIO0_Type
+	pin     machine.Pin
+	rxConf  pio.ConfigRegs
+	txConf  pio.ConfigRegs
+	scratch [8]byte
 }
 
 const syncNibble = 0b0101
@@ -65,7 +66,7 @@ func NewUART(p *rp.PIO0_Type, pin machine.Pin) (*UART, error) {
 
 func (d *UART) Write(tx []byte) (int, error) {
 	// Add sync nibble and checksum.
-	buf := make([]byte, 8)
+	buf := d.scratch[:8]
 	buf = buf[:len(tx)+2]
 	buf[0] = syncNibble
 	copy(buf[1:], tx)
@@ -95,7 +96,7 @@ func (d *UART) Read(rx []byte) (int, error) {
 	pio.Configure(d.pio, pioSM, d.rxConf)
 	pio.Enable(d.pio, 0b1<<pioSM)
 	defer pio.Disable(d.pio, 0b1<<pioSM)
-	buf := make([]byte, 8)
+	buf := d.scratch[:8]
 	buf = buf[:len(rx)+3]
 	rem := buf
 	rxReg := pio.Rx(d.pio, pioSM)

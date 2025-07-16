@@ -3,6 +3,7 @@
 package tmc2209
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -49,7 +50,8 @@ type Device struct {
 	Addr   uint8
 	Invert bool
 	// Sense is the sense resistance in milliohm (mΩ).
-	Sense int
+	Sense   int
+	scratch [7]byte
 }
 
 const (
@@ -94,9 +96,10 @@ func (d *Device) SetupSharedUART() error {
 	// Reading from a slave may confuse another until
 	// SENDDELAY is raised. Don't read anything until
 	// then.
-	dg := writeDatagram(d.Addr, SLAVECONF, min_SENDDELAY<<8)
-	for i := 0; i < attempts; i++ {
-		d.Bus.Write(dg[:])
+	wr := d.scratch[:6]
+	writeDatagram(wr, d.Addr, SLAVECONF, min_SENDDELAY<<8)
+	for range attempts {
+		d.Bus.Write(wr)
 	}
 	return nil
 }
@@ -239,26 +242,24 @@ func crc8(data []byte) byte {
 }
 
 func (d *Device) read(addr byte) (uint32, error) {
-	dg := []byte{
-		d.Addr,
-		addr,
-	}
-	rx := make([]byte, 5)
+	wr, rx := d.scratch[:2], d.scratch[2:7]
+	wr[0] = d.Addr
+	wr[1] = addr
 	var lerr error
-	for i := 0; i < attempts; i++ {
-		if _, err := d.Bus.Write(dg); err != nil {
-			lerr = err
+	for range attempts {
+		if _, err := d.Bus.Write(wr); err != nil {
+			lerr = fmt.Errorf("write: %v", err)
 			continue
 		}
 		if _, err := d.Bus.Read(rx); err != nil {
-			lerr = err
+			lerr = fmt.Errorf("read: %v", err)
 			continue
 		}
 		if rx[0] != addr {
 			lerr = errors.New("read: unexpected receive address")
 			continue
 		}
-		return uint32(rx[1])<<24 | uint32(rx[2])<<16 | uint32(rx[3])<<8 | uint32(rx[4]), nil
+		return binary.BigEndian.Uint32(rx[1:]), nil
 	}
 	return 0, lerr
 }
@@ -268,10 +269,11 @@ func (d *Device) write(addr uint8, val uint32) error {
 	if err != nil {
 		return err
 	}
-	dg := writeDatagram(d.Addr, addr, val)
+	wr := d.scratch[:6]
+	writeDatagram(wr, d.Addr, addr, val)
 	var lerr error
-	for i := 0; i < attempts; i++ {
-		if _, err := d.Bus.Write(dg[:]); err != nil {
+	for range attempts {
+		if _, err := d.Bus.Write(wr); err != nil {
 			lerr = err
 			continue
 		}
@@ -291,13 +293,11 @@ func (d *Device) write(addr uint8, val uint32) error {
 	return lerr
 }
 
-func writeDatagram(node, addr uint8, val uint32) [6]byte {
+func writeDatagram(b []byte, node, addr uint8, val uint32) {
 	const WRITE = 0x80
-	return [...]byte{
-		node,
-		addr | WRITE,
-		byte(val >> 24), byte(val >> 16), byte(val >> 8), byte(val),
-	}
+	b[0] = node
+	b[1] = addr | WRITE
+	binary.BigEndian.PutUint32(b[2:], val)
 }
 
 // computeIRUN from motor current (in mA) and sense resistance (in mΩ).
