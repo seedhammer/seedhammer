@@ -226,6 +226,11 @@ func Disable(p *rp.PIO0_Type, machines uint8) {
 	p.CTRL.ClearBits(uint32(machines) << rp.PIO0_CTRL_SM_ENABLE_Pos)
 }
 
+func Addr(p *rp.PIO0_Type, sm uint8) int {
+	conf := confFor(p, sm)
+	return int(conf.ADDR.Get())
+}
+
 func PullThreshold(p *rp.PIO0_Type, sm uint8, thresh int) {
 	conf := confFor(p, sm)
 	conf.SHIFTCTRL.Set(conf.SHIFTCTRL.Get()&^rp.PIO0_SM0_SHIFTCTRL_PULL_THRESH_Msk | validatePushPullThreshold(thresh)<<rp.PIO0_SM0_SHIFTCTRL_PULL_THRESH_Pos)

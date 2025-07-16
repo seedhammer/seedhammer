@@ -7,54 +7,63 @@ import "seedhammer.com/driver/pio"
 // The number of PIO cycles per bit.
 const cyclesPerBit = 8
 
-// uart_rx
+var setYInst = uint32(uart_utilInstructions[0])
 
-const uart_rxWrapTarget = 0
-const uart_rxWrap = 8
+// uart
 
-const uart_rxErrIRQ = 0
+const uartWrapTarget = 8
+const uartWrap = 14
 
-var uart_rxInstructions = []uint16{
-	//     .wrap_target
-	0x2020, //  0: wait   0 pin, 0
-	0xea27, //  1: set    x, 7                   [10]
-	0x4001, //  2: in     pins, 1
-	0x0642, //  3: jmp    x--, 2                 [6]
-	0x00c8, //  4: jmp    pin, 8
-	0xc010, //  5: irq    nowait 0 rel
-	0x20a0, //  6: wait   1 pin, 0
-	0x0000, //  7: jmp    0
-	0x8020, //  8: push   block
-	//     .wrap
-}
+const uartErrIRQ = 0
+const uartRxIRQ = 1
 
-const uart_rxOrigin = -1
+const uartoffset_transmit = 4
 
-func uart_rxProgramDefaultConfig(offset uint8) pio.StateMachineConfig {
-	cfg := pio.DefaultStateMachineConfig()
-	cfg.SetWrap(offset+uart_rxWrapTarget, offset+uart_rxWrap)
-	return cfg
-}
-
-// uart_tx
-
-const uart_txWrapTarget = 0
-const uart_txWrap = 3
-
-var uart_txInstructions = []uint16{
-	//     .wrap_target
-	0x9fa0, //  0: pull   block           side 1 [7]
+var uartInstructions = []uint16{
+	0x86a0, //  0: pull   block                  [6]
 	0xf727, //  1: set    x, 7            side 0 [7]
 	0x6001, //  2: out    pins, 1
 	0x0642, //  3: jmp    x--, 2                 [6]
+	0x1880, //  4: jmp    y--, 0          side 1
+	0xa642, //  5: nop                           [6]
+	0xe080, //  6: set    pindirs, 0
+	0xc001, //  7: irq    nowait 1
+	//     .wrap_target
+	0x2320, //  8: wait   0 pin, 0               [3]
+	0xe727, //  9: set    x, 7                   [7]
+	0x4001, // 10: in     pins, 1
+	0x064a, // 11: jmp    x--, 10                [6]
+	0x00c8, // 12: jmp    pin, 8
+	0xc000, // 13: irq    nowait 0
+	0x20a0, // 14: wait   1 pin, 0
 	//     .wrap
 }
 
-const uart_txOrigin = -1
+const uartOrigin = -1
 
-func uart_txProgramDefaultConfig(offset uint8) pio.StateMachineConfig {
+func uartProgramDefaultConfig(offset uint8) pio.StateMachineConfig {
 	cfg := pio.DefaultStateMachineConfig()
-	cfg.SetWrap(offset+uart_txWrapTarget, offset+uart_txWrap)
+	cfg.SetWrap(offset+uartWrapTarget, offset+uartWrap)
+	cfg.SetSidesetParams(2, true, false)
+	return cfg
+}
+
+// uart_util
+
+const uart_utilWrapTarget = 0
+const uart_utilWrap = 0
+
+var uart_utilInstructions = []uint16{
+	//     .wrap_target
+	0xe040, //  0: set    y, 0
+	//     .wrap
+}
+
+const uart_utilOrigin = -1
+
+func uart_utilProgramDefaultConfig(offset uint8) pio.StateMachineConfig {
+	cfg := pio.DefaultStateMachineConfig()
+	cfg.SetWrap(offset+uart_utilWrapTarget, offset+uart_utilWrap)
 	cfg.SetSidesetParams(2, true, false)
 	return cfg
 }

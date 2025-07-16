@@ -277,16 +277,21 @@ func configEngraver(bus *multiplexI2C) (*engraver, error) {
 		Invert: invertY,
 		Sense:  senseResistance,
 	}
-	for i, axis := range []*tmc2209.Device{X, Y} {
-		axis.SetupSharedUART()
+	axes := []*tmc2209.Device{X, Y}
+	for i, axis := range axes {
+		if err := axis.SetupSharedUART(); err != nil {
+			return nil, fmt.Errorf("stepper %d: configuring UART: %w", i, err)
+		}
+	}
+	for i, axis := range axes {
 		if err := axis.Configure(); err != nil {
-			return nil, fmt.Errorf("configuring stepper %d: %w", i, err)
+			return nil, fmt.Errorf("stepper %d: configure: %w", i, err)
 		}
 		if err := axis.SetStallThreshold(stallThreshold); err != nil {
-			return nil, fmt.Errorf("configuring stepper stall threshold %d: %w", i, err)
+			return nil, fmt.Errorf("stepper %d: stall threshold: %w", i, err)
 		}
 		if err := axis.SetMinimumStallVelocity(minimumStallVelocity); err != nil {
-			return nil, fmt.Errorf("configuring stepper stall velocity %d: %w", i, err)
+			return nil, fmt.Errorf("stepper %d: stepper stall velocity: %w", i, err)
 		}
 	}
 	home := image.Point{

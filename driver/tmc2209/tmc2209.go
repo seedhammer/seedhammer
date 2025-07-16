@@ -19,15 +19,6 @@ const (
 
 // Settings.
 const (
-	// The number of cycles to wait for the reply of
-	// a read request.
-	timeoutCycles = 50
-	// txWaitCycles is the number of cycles to wait
-	// before transmitting to the driver. The manual
-	// specifies 4 cycles for the switch from input to
-	// output and 63 cycles for resetting the automatic
-	// baud detection.
-	txWaitCycles = max(4, 63) + 1
 	// 2^stepExp is the number of microsteps to a full step.
 	stepExp = 8
 	// Microsteps to a full step.
@@ -98,10 +89,13 @@ func (d *Device) SetupSharedUART() error {
 	// then.
 	wr := d.scratch[:6]
 	writeDatagram(wr, d.Addr, SLAVECONF, min_SENDDELAY<<8)
+	var lerr error
 	for range attempts {
-		d.Bus.Write(wr)
+		if _, err := d.Bus.Write(wr); err != nil {
+			lerr = err
+		}
 	}
-	return nil
+	return lerr
 }
 
 func (d *Device) Configure() error {
