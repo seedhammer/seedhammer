@@ -180,9 +180,15 @@ func (d *Device) TStep() (int, error) {
 	return int(res), err
 }
 
-func (d *Device) StallResult() (int, error) {
+func (d *Device) Load() (int, error) {
 	res, err := d.read(SG_RESULT)
-	return int(res) / 2, err
+	return 255 - int(res)/2, err
+}
+
+func (d *Device) StepTime() (time.Duration, error) {
+	res, err := d.read(TSTEP)
+	dt := time.Duration(res) * 256 * time.Second / (Microsteps * fclk)
+	return dt, err
 }
 
 // SetStallMinimumVelocity sets the minimum velocity in

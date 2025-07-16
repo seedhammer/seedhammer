@@ -65,7 +65,7 @@ func Scan(d poller.Device) iter.Seq[scanResult] {
 				if m, err := bip39.Parse(buf); err == nil {
 					res.Content = m
 				} else if bytes.Equal(buf, []byte("FOREVERLAURA!")) {
-					res.Content = debugPlan{}
+					res.Content = debugMode{}
 				} else {
 					res.Status = scanUnknownFormat
 				}
@@ -77,4 +77,4 @@ func Scan(d poller.Device) iter.Seq[scanResult] {
 	}
 }
 
-type debugPlan struct{}
+type debugMode struct{}

@@ -316,11 +316,12 @@ func configEngraver(bus *multiplexI2C) (*engraver, error) {
 	ready := make(chan struct{}, 1)
 	ready <- struct{}{}
 	return &engraver{
-		Dev:   d,
-		PD:    usbpd,
-		XAxis: X,
-		YAxis: Y,
-		ready: ready,
+		Dev:    d,
+		PD:     usbpd,
+		XAxis:  X,
+		YAxis:  Y,
+		ready:  ready,
+		status: make(chan gui.EngraverStatus),
 	}, nil
 }
 
@@ -403,12 +404,17 @@ type engraver struct {
 	PD           *ap33772s.Device
 	Dev          *mjolnir2.Device
 	ready        chan struct{}
+	status       chan gui.EngraverStatus
 }
 
 func (e *engraver) Close() {}
 
 func (e *engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan struct{}) error {
 	return e.engrave(plan, quit)
+}
+
+func (e *engraver) Status() <-chan gui.EngraverStatus {
+	return e.status
 }
 
 func (e *engraver) adjustVoltage(minmV, maxmV int) (int, error) {
@@ -479,6 +485,41 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 		// activation durations.
 		act := (needleActivationMinVoltage*time.Duration(maxVoltage-voltage) +
 			needleActivationMaxVoltage*time.Duration(voltage-minVoltage)) / (maxVoltage - minVoltage)
+		done := make(chan struct{})
+		quitStatus := make(chan struct{})
+		defer func() {
+			close(quitStatus)
+			<-done
+		}()
+		go func() {
+			defer close(done)
+			for {
+				xload, _ := e.XAxis.Load()
+				yload, _ := e.YAxis.Load()
+				xstep, _ := e.XAxis.StepTime()
+				ystep, _ := e.YAxis.StepTime()
+				xspeed, yspeed := 0, 0
+				if xstep > 0 {
+					xspeed = int(time.Second / (mm * xstep))
+				}
+				if ystep > 0 {
+					yspeed = int(time.Second / (mm * ystep))
+				}
+				st := gui.EngraverStatus{
+					XSpeed: xspeed,
+					YSpeed: yspeed,
+					XLoad:  xload,
+					YLoad:  yload,
+				}
+				select {
+				case e.status <- st:
+				case <-quit:
+					return
+				case <-quitStatus:
+					return
+				}
+			}
+		}()
 		if err := e.execute(act, plan, quit); err != nil {
 			return err
 		}
