@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"machine"
+	"runtime"
 	"time"
 	"unsafe"
 
@@ -151,6 +152,7 @@ func (d *Device) sendCommand(cmd byte, data ...byte) {
 
 func (d *Device) sendByte(data byte) {
 	for d.pio.GetFSTAT_TXFULL()&(0b1<<pioStateMachine) != 0 {
+		runtime.Gosched()
 	}
 	pio.Tx(d.pio, pioStateMachine).Set(uint32(data))
 }
@@ -225,6 +227,7 @@ func (d *Device) waitDMA() {
 	// Wait for DMA completion.
 	ch := dma.ChannelAt(d.channel)
 	for ch.CTRL_TRIG.Get()&rp.DMA_CH0_CTRL_TRIG_BUSY_Msk != 0 {
+		runtime.Gosched()
 	}
 }
 

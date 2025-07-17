@@ -7,6 +7,7 @@ package pio
 import (
 	"device/rp"
 	"machine"
+	"runtime"
 	"runtime/volatile"
 	"unsafe"
 )
@@ -269,16 +270,19 @@ func WaitTxStall(p *rp.PIO0_Type, machinesMask int) {
 	p.SetFDEBUG_TXSTALL(m)
 	// Wait.
 	for p.GetFDEBUG_TXSTALL()&m != m {
+		runtime.Gosched()
 	}
 }
 
 func WaitTxNotFull(p *rp.PIO0_Type, machinesMask int) {
 	for p.GetFSTAT_TXFULL()&uint32(machinesMask) != 0 {
+		runtime.Gosched()
 	}
 }
 
 func WaitTxEmpty(p *rp.PIO0_Type, machinesMask int) {
 	for p.GetFSTAT_TXEMPTY()&uint32(machinesMask) == 0 {
+		runtime.Gosched()
 	}
 }
 
