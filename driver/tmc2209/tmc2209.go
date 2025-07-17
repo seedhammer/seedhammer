@@ -78,7 +78,7 @@ const (
 
 	// attempts is the number of attempts for a read or a write
 	// before giving up.
-	attempts = 5
+	attempts = 1
 )
 
 // SetupSharedUART a stepper driver by increasing its SENDDELAY, to
