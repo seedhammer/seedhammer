@@ -11,6 +11,7 @@ import (
 	"machine"
 	"runtime"
 	"slices"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -165,8 +166,8 @@ func Init() (*Platform, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Home and move needle to eject position.
-	go e.engrave(nil, nil)
+	// Home and move needle to origin.
+	go e.engrave(true, nil, nil)
 
 	p := &Platform{
 		wakeups:  make(chan struct{}, 1),
@@ -294,16 +295,12 @@ func configEngraver(bus *multiplexI2C) (*engraver, error) {
 			return nil, fmt.Errorf("stepper %d: stepper stall velocity: %w", i, err)
 		}
 	}
-	home := image.Point{
-		X: -homingDist,
-		Y: -homingDist,
-	}
+
+	X_DIAG.Configure(machine.PinConfig{Mode: machine.PinInput})
+	Y_DIAG.Configure(machine.PinConfig{Mode: machine.PinInput})
 	d := &mjolnir2.Device{
 		Pio:            engraverPIO,
 		BasePin:        engraverBasePin,
-		XDiag:          X_DIAG,
-		YDiag:          Y_DIAG,
-		Home:           home,
 		TopSpeed:       topSpeed,
 		EngravingSpeed: engravingSpeed,
 		HomingSpeed:    homingSpeed,
@@ -400,17 +397,19 @@ func (p *Platform) EngraverParams() engrave.Params {
 }
 
 type engraver struct {
-	XAxis, YAxis *tmc2209.Device
-	PD           *ap33772s.Device
-	Dev          *mjolnir2.Device
-	ready        chan struct{}
-	status       chan gui.EngraverStatus
+	XAxis, YAxis     *tmc2209.Device
+	PD               *ap33772s.Device
+	Dev              *mjolnir2.Device
+	stall            bool
+	xstalls, ystalls atomic.Uint32
+	ready            chan struct{}
+	status           chan gui.EngraverStatus
 }
 
 func (e *engraver) Close() {}
 
-func (e *engraver) Engrave(_ backup.PlateSize, plan engrave.Plan, quit <-chan struct{}) error {
-	return e.engrave(plan, quit)
+func (e *engraver) Engrave(_ backup.PlateSize, stall bool, plan engrave.Plan, quit <-chan struct{}) error {
+	return e.engrave(stall, plan, quit)
 }
 
 func (e *engraver) Status() <-chan gui.EngraverStatus {
@@ -440,7 +439,22 @@ func (e *engraver) adjustVoltage(minmV, maxmV int) (int, error) {
 	return 0, errors.New("power negotiation timed out")
 }
 
-func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
+func (e *engraver) handleDiag(pin machine.Pin) {
+	var mpin mjolnir2.DiagPin
+	switch pin {
+	case X_DIAG:
+		e.xstalls.Add(1)
+		mpin = mjolnir2.XDiag
+	case Y_DIAG:
+		e.ystalls.Add(1)
+		mpin = mjolnir2.YDiag
+	}
+	if e.stall {
+		e.Dev.DiagInterrupt(mpin)
+	}
+}
+
+func (e *engraver) engrave(stall bool, plan engrave.Plan, quit <-chan struct{}) error {
 	<-e.ready
 	defer func() {
 		e.ready <- struct{}{}
@@ -464,6 +478,12 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 		time.Sleep(500 * time.Millisecond)
 	}()
 
+	for _, pin := range []machine.Pin{X_DIAG, Y_DIAG} {
+		if err := pin.SetInterrupt(machine.PinRising, e.handleDiag); err != nil {
+			return fmt.Errorf("mjolnir2: engrave: %w", err)
+		}
+		defer pin.SetInterrupt(0, nil)
+	}
 	current := stepperPower * 1000 / voltage
 	// Wait a bit before enabling each stepper,
 	time.Sleep(200 * time.Millisecond)
@@ -479,63 +499,91 @@ func (e *engraver) engrave(plan engrave.Plan, quit <-chan struct{}) error {
 	// Wait for standstill tuning of the drivers.
 	time.Sleep(tmc2209.StandstillTuningPeriod)
 
-	if plan != nil {
-		plan = engrave.Offset(originX, originY, plan)
-		// Perform a linear interpolation of the voltage into the range of needle
-		// activation durations.
-		act := (needleActivationMinVoltage*time.Duration(maxVoltage-voltage) +
-			needleActivationMaxVoltage*time.Duration(voltage-minVoltage)) / (maxVoltage - minVoltage)
-		done := make(chan struct{})
-		quitStatus := make(chan struct{})
-		defer func() {
-			close(quitStatus)
-			<-done
-		}()
-		go func() {
-			defer close(done)
-			for {
-				xload, _ := e.XAxis.Load()
-				yload, _ := e.YAxis.Load()
-				xstep, _ := e.XAxis.StepTime()
-				ystep, _ := e.YAxis.StepTime()
-				xspeed, yspeed := 0, 0
-				if xstep > 0 {
-					xspeed = int(time.Second / (mm * xstep))
-				}
-				if ystep > 0 {
-					yspeed = int(time.Second / (mm * ystep))
-				}
-				st := gui.EngraverStatus{
-					XSpeed: xspeed,
-					YSpeed: yspeed,
-					XLoad:  xload,
-					YLoad:  yload,
-				}
-				select {
-				case e.status <- st:
-				case <-quit:
-					return
-				case <-quitStatus:
-					return
-				}
-			}
-		}()
-		if err := e.execute(act, plan, quit); err != nil {
-			return err
-		}
+	// Perform a linear interpolation of the voltage into the range of needle
+	// activation durations.
+	act := (needleActivationMinVoltage*time.Duration(maxVoltage-voltage) +
+		needleActivationMaxVoltage*time.Duration(voltage-minVoltage)) / (maxVoltage - minVoltage)
+	if err := e.home(act); err != nil {
+		return err
 	}
-	moveToOrigin := engrave.Plan(slices.Values([]engrave.Command{engrave.Move(image.Pt(originX, originY))}))
-	return e.execute(0, moveToOrigin, nil)
-}
-
-func (e *engraver) execute(needleActivation time.Duration, plan engrave.Plan, quit <-chan struct{}) error {
-	if err := e.Dev.Engrave(needleActivation, plan, quit); err != nil {
+	if plan == nil {
+		return nil
+	}
+	defer e.home(act)
+	if err := e.execute(act, stall, plan, quit); err != nil {
 		if err := e.XAxis.Error(); err != nil {
 			return fmt.Errorf("X axis: %w", err)
 		}
 		if err := e.YAxis.Error(); err != nil {
 			return fmt.Errorf("Y axis: %w", err)
 		}
+		return err
+	}
+	return nil
+}
+
+func (e *engraver) home(needleActivation time.Duration) error {
+	e.stall = true
+	home := func(yield func(engrave.Command) bool) {
+		home := image.Point{
+			X: -homingDist,
+			Y: -homingDist,
+		}
+		yield(engrave.Move(home))
+	}
+	if err := e.Dev.Engrave(needleActivation, true, home, nil); err != nil {
+		return err
+	}
+	moveToOrigin := engrave.Plan(slices.Values([]engrave.Command{
+		engrave.Move(image.Pt(originX, originY)),
+	}))
+	return e.Dev.Engrave(needleActivation, false, moveToOrigin, nil)
+}
+
+func (e *engraver) execute(needleActivation time.Duration, stall bool, plan engrave.Plan, quit <-chan struct{}) error {
+	e.xstalls.Store(0)
+	e.ystalls.Store(0)
+	e.stall = stall
+
+	done := make(chan struct{})
+	quitStatus := make(chan struct{})
+	defer func() {
+		close(quitStatus)
+		<-done
+	}()
+	go func() {
+		defer close(done)
+		for {
+			xload, _ := e.XAxis.Load()
+			yload, _ := e.YAxis.Load()
+			xstep, _ := e.XAxis.StepTime()
+			ystep, _ := e.YAxis.StepTime()
+			xspeed, yspeed := 0, 0
+			if xstep > 0 {
+				xspeed = int(time.Second / (mm * xstep))
+			}
+			if ystep > 0 {
+				yspeed = int(time.Second / (mm * ystep))
+			}
+			st := gui.EngraverStatus{
+				StallSpeed: minimumStallVelocity / mm,
+				XSpeed:     xspeed,
+				YSpeed:     yspeed,
+				XLoad:      xload,
+				YLoad:      yload,
+				XStalls:    int(e.xstalls.Load()),
+				YStalls:    int(e.ystalls.Load()),
+			}
+			select {
+			case e.status <- st:
+			case <-quit:
+				return
+			case <-quitStatus:
+				return
+			}
+		}
+	}()
+	if err := e.Dev.Engrave(needleActivation, false, plan, quit); err != nil {
 		return err
 	}
 	return nil

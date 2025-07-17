@@ -7,7 +7,6 @@ package mjolnir2
 import (
 	"device/rp"
 	"fmt"
-	"image"
 	"machine"
 	"time"
 	"unsafe"
@@ -20,13 +19,6 @@ import (
 type Device struct {
 	Pio     *rp.PIO0_Type
 	BasePin machine.Pin
-	XDiag   machine.Pin
-	YDiag   machine.Pin
-	// Home is the homing vector, whose direction
-	// specifies the direction of the origin,
-	// and length specifies the distance before
-	// giving up.
-	Home image.Point
 	// TopSpeed in steps/s.
 	TopSpeed int
 	// EngravingSpeed in steps/s.
@@ -42,6 +34,13 @@ type Device struct {
 	diag    chan axis
 	driver  engravingDriver
 }
+
+type DiagPin int
+
+const (
+	XDiag DiagPin = iota
+	YDiag
+)
 
 const (
 	pioSM      = 0
@@ -90,21 +89,20 @@ func (d *Device) Configure() error {
 	pio.Program(d.Pio, progOffset, mjolnir2Instructions)
 	// Register x must be cleared for stall to disable all pins.
 	pio.Instr(d.Pio, pioSM).Set(clearXInst)
-
-	d.XDiag.Configure(machine.PinConfig{Mode: machine.PinInput})
-	d.YDiag.Configure(machine.PinConfig{Mode: machine.PinInput})
 	return nil
 }
 
-func (d *Device) handleDiag(pin machine.Pin) {
+// DiagInterrupt should be called when a stepper diagnostics pin is
+// raised. It can be called from an interrupt.
+func (d *Device) DiagInterrupt(pin DiagPin) {
 	var stepPin, otherPin machine.Pin
 	var a axis
 	switch pin {
-	case d.XDiag:
+	case XDiag:
 		stepPin = pinStepX + d.BasePin
 		otherPin = pinStepY + d.BasePin
 		a = xaxis
-	case d.YDiag:
+	case YDiag:
 		stepPin = pinStepY + d.BasePin
 		otherPin = pinStepX + d.BasePin
 		a = yaxis
@@ -125,17 +123,11 @@ func (d *Device) handleDiag(pin machine.Pin) {
 	}
 }
 
-func (d *Device) Engrave(needleActivation time.Duration, plan engrave.Plan, quit <-chan struct{}) error {
-	if err := d.engrave(d.HomingSpeed, needleActivation, quit, true, func(yield func(engrave.Command) bool) {
-		yield(engrave.Move(d.Home))
-	}); err != nil {
-		return err
+func (d *Device) Engrave(needleActivation time.Duration, homing bool, plan engrave.Plan, quit <-chan struct{}) error {
+	moveSpeed := d.TopSpeed
+	if homing {
+		moveSpeed = d.HomingSpeed
 	}
-
-	return d.engrave(d.TopSpeed, needleActivation, quit, false, plan)
-}
-
-func (d *Device) engrave(moveSpeed int, needleActivation time.Duration, quit <-chan struct{}, homing bool, plan engrave.Plan) error {
 	pio.ConfigurePins(d.Pio, pioSM, d.BasePin, mjolnir2pinBits)
 	pio.Pindirs(d.Pio, pioSM, d.BasePin, mjolnir2pinBits, machine.PinOutput)
 	// Reset and start state machine.
@@ -168,12 +160,6 @@ func (d *Device) engrave(moveSpeed int, needleActivation time.Duration, quit <-c
 	}
 	d.diag = make(chan axis, 1)
 	d.homing = homing
-	for _, pin := range []machine.Pin{d.XDiag, d.YDiag} {
-		if err := pin.SetInterrupt(machine.PinRising, d.handleDiag); err != nil {
-			return fmt.Errorf("mjolnir2: engrave: %w", err)
-		}
-		defer pin.SetInterrupt(0, nil)
-	}
 	dd := &d.driver
 	if err := dma.SetInterrupt(d.channel, dd.handleTransferCompleted); err != nil {
 		return fmt.Errorf("mjolnir2: engrave: %w", err)
