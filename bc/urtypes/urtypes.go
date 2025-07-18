@@ -511,7 +511,7 @@ func parseHDKey(enc []byte) (KeyDescriptor, error) {
 	}, nil
 }
 
-func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (OutputDescriptor, error) {
+func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (*OutputDescriptor, error) {
 	var tags []uint64
 	for {
 		var raw cbor.RawTag
@@ -522,9 +522,9 @@ func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (OutputDescriptor, err
 		enc = raw.Content
 	}
 	if len(tags) == 0 {
-		return OutputDescriptor{}, errors.New("ur: missing descriptor tag")
+		return nil, errors.New("ur: missing descriptor tag")
 	}
-	var desc OutputDescriptor
+	desc := new(OutputDescriptor)
 	first := tags[0]
 	tags = tags[1:]
 	switch first {
@@ -550,22 +550,22 @@ func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (OutputDescriptor, err
 	case tagWPKH:
 		desc.Script = P2WPKH
 	default:
-		return OutputDescriptor{}, fmt.Errorf("ur: unknown script type tag: %d", first)
+		return nil, fmt.Errorf("ur: unknown script type tag: %d", first)
 	}
 	if len(tags) == 0 {
-		return OutputDescriptor{}, errors.New("ur: missing descriptor script tag")
+		return nil, errors.New("ur: missing descriptor script tag")
 	}
 	funcNumber := tags[0]
 	tags = tags[1:]
 	if len(tags) > 0 {
-		return OutputDescriptor{}, errors.New("ur: extra tags")
+		return nil, errors.New("ur: extra tags")
 	}
 	switch funcNumber {
 	case tagHDKey: // singlesig
 		desc.Type = Singlesig
 		k, err := parseHDKey(enc)
 		if err != nil {
-			return OutputDescriptor{}, err
+			return nil, err
 		}
 		desc.Threshold = 1
 		desc.Keys = append(desc.Keys, k)
@@ -573,13 +573,13 @@ func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (OutputDescriptor, err
 		desc.Type = SortedMulti
 		var m multi
 		if err := mode.Unmarshal(enc, &m); err != nil {
-			return OutputDescriptor{}, err
+			return nil, err
 		}
 		desc.Threshold = m.Threshold
 		for _, k := range m.Keys {
 			keyDesc, err := parseHDKey([]byte(k))
 			if err != nil {
-				return OutputDescriptor{}, err
+				return nil, err
 			}
 			desc.Keys = append(desc.Keys, keyDesc)
 		}

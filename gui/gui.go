@@ -196,7 +196,7 @@ func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA,
 	r.Y = offy + m.Descent.Ceil()
 }
 
-func ShowAddressesScreen(ctx *Context, ops op.Ctx, th *Colors, desc urtypes.OutputDescriptor) {
+func ShowAddressesScreen(ctx *Context, ops op.Ctx, th *Colors, desc *urtypes.OutputDescriptor) {
 	var s struct {
 		addresses [2][]string
 		page      int
@@ -316,7 +316,7 @@ func shortenAddress(n int, addr string) string {
 	return addr[:n/2] + "......" + addr[len(addr)-n/2:]
 }
 
-func descriptorKeyIdx(desc urtypes.OutputDescriptor, m bip39.Mnemonic, pass string) (int, bool) {
+func descriptorKeyIdx(desc *urtypes.OutputDescriptor, m bip39.Mnemonic, pass string) (int, bool) {
 	if len(desc.Keys) == 0 {
 		return 0, false
 	}
@@ -765,7 +765,7 @@ func NewErrorScreen(err error) *ErrorScreen {
 	}
 }
 
-func validateDescriptor(params engrave.Params, desc urtypes.OutputDescriptor) error {
+func validateDescriptor(params engrave.Params, desc *urtypes.OutputDescriptor) error {
 	keys := make(map[string]bool)
 	for _, k := range desc.Keys {
 		xpub := k.String()
@@ -843,7 +843,7 @@ func masterFingerprintFor(m bip39.Mnemonic, network *chaincfg.Params) (uint32, e
 	return mfp, nil
 }
 
-func engravePlate(sizes []backup.PlateSize, params engrave.Params, desc urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (Plate, error) {
+func engravePlate(sizes []backup.PlateSize, params engrave.Params, desc *urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (Plate, error) {
 	mfp, err := masterFingerprintFor(m, desc.Keys[keyIdx].Network)
 	if err != nil {
 		return Plate{}, err
@@ -1821,7 +1821,7 @@ func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors) {
 		}
 
 		ds := &DescriptorScreen{
-			Descriptor: *desc,
+			Descriptor: desc,
 			Mnemonic:   mnemonic,
 		}
 		for {
@@ -1829,7 +1829,7 @@ func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors) {
 			if !ok {
 				break
 			}
-			plate, err := engravePlate(ctx.Platform.PlateSizes(), ctx.Platform.EngraverParams(), *desc, keyIdx, mnemonic)
+			plate, err := engravePlate(ctx.Platform.PlateSizes(), ctx.Platform.EngraverParams(), desc, keyIdx, mnemonic)
 			if err != nil {
 				errScr := NewErrorScreen(err)
 				for {
@@ -2108,7 +2108,7 @@ func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mn
 		Choices: []string{"SCAN", "SKIP"},
 	}
 	if ctx.LastDescriptor != nil {
-		if _, match := descriptorKeyIdx(*ctx.LastDescriptor, mnemonic, ""); match {
+		if _, match := descriptorKeyIdx(ctx.LastDescriptor, mnemonic, ""); match {
 			cs.Choices = append(cs.Choices, "RE-USE")
 		}
 	}
@@ -2139,7 +2139,7 @@ func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mn
 			if !ok {
 				continue
 			}
-			desc, ok := res.(urtypes.OutputDescriptor)
+			desc, ok := res.(*urtypes.OutputDescriptor)
 			if !ok {
 				if b, isbytes := res.([]byte); isbytes {
 					d, err := nonstandard.OutputDescriptor(b)
@@ -2165,8 +2165,8 @@ func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mn
 				desc.Keys[0].MasterFingerprint = mfp
 			}
 			desc.Title = backup.TitleString(constant.Font, desc.Title)
-			ctx.LastDescriptor = &desc
-			return &desc, true
+			ctx.LastDescriptor = desc
+			return desc, true
 		case 1: // Skip descriptor.
 			return nil, true
 		case 2: // Re-use.
@@ -2176,7 +2176,7 @@ func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mn
 }
 
 type DescriptorScreen struct {
-	Descriptor urtypes.OutputDescriptor
+	Descriptor *urtypes.OutputDescriptor
 	Mnemonic   bip39.Mnemonic
 }
 

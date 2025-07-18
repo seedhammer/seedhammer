@@ -12,11 +12,11 @@ import (
 func TestOutputDescriptors(t *testing.T) {
 	tests := []struct {
 		encoded string
-		desc    urtypes.OutputDescriptor
+		desc    *urtypes.OutputDescriptor
 	}{
 		{
 			"wsh(sortedmulti(2,[dc567276/48h/0h/0h/2h]xpub6DiYrfRwNnjeX4vHsWMajJVFKrbEEnu8gAW9vDuQzgTWEsEHE16sGWeXXUV1LBWQE1yCTmeprSNcqZ3W74hqVdgDbtYHUv3eM4W2TEUhpan/0/*,[f245ae38/48h/0h/0h/2h]xpub6DnT4E1fT8VxuAZW29avMjr5i99aYTHBp9d7fiLnpL5t4JEprQqPMbTw7k7rh5tZZ2F5g8PJpssqrZoebzBChaiJrmEvWwUTEMAbHsY39Ge/0/*,[c5d87297/48h/0h/0h/2h]xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892RH7MyYUbcy77R7pPu1P71xoj8cDUMNhAMGYzKR4noZ/0/*))#hfwurrvt",
-			urtypes.OutputDescriptor{
+			&urtypes.OutputDescriptor{
 				Script:    urtypes.P2WSH,
 				Threshold: 2,
 				Type:      urtypes.SortedMulti,
@@ -58,7 +58,7 @@ func TestOutputDescriptors(t *testing.T) {
 				"descriptor": "wsh(sortedmulti(2,[dc567276/48h/0h/0h/2h]xpub6DiYrfRwNnjeX4vHsWMajJVFKrbEEnu8gAW9vDuQzgTWEsEHE16sGWeXXUV1LBWQE1yCTmeprSNcqZ3W74hqVdgDbtYHUv3eM4W2TEUhpan/0/*,[f245ae38/48h/0h/0h/2h]xpub6DnT4E1fT8VxuAZW29avMjr5i99aYTHBp9d7fiLnpL5t4JEprQqPMbTw7k7rh5tZZ2F5g8PJpssqrZoebzBChaiJrmEvWwUTEMAbHsY39Ge/0/*,[c5d87297/48h/0h/0h/2h]xpub6DjrnfAyuonMaboEb3ZQZzhQ2ZEgaKV2r64BFmqymZqJqviLTe1JzMr2X2RfQF892RH7MyYUbcy77R7pPu1P71xoj8cDUMNhAMGYzKR4noZ/0/*))#hfwurrvt",
 				"devices": [{"type": "other", "label": "Test Multisig 2-of-3 Cosigner 1"}, {"type": "other", "label": "Test Multisig 2-of-3 Cosigner 2"}, {"type": "other", "label": "Test Multisig 2-of-3 Cosigner 3"}]
 			}`,
-			urtypes.OutputDescriptor{
+			&urtypes.OutputDescriptor{
 				Title:     "Test Multisig 2-of-3",
 				Script:    urtypes.P2WSH,
 				Threshold: 2,
@@ -96,7 +96,7 @@ func TestOutputDescriptors(t *testing.T) {
 		},
 		{
 			"sh(wpkh(xpub6DiYrfRwNnjeX4vHsWMajJVFKrbEEnu8gAW9vDuQzgTWEsEHE16sGWeXXUV1LBWQE1yCTmeprSNcqZ3W74hqVdgDbtYHUv3eM4W2TEUhpan))",
-			urtypes.OutputDescriptor{
+			&urtypes.OutputDescriptor{
 				Script:    urtypes.P2SH_P2WPKH,
 				Type:      urtypes.Singlesig,
 				Threshold: 1,
@@ -113,7 +113,7 @@ func TestOutputDescriptors(t *testing.T) {
 		},
 		{
 			"wpkh(tpubDE77mtPH9LnL5r2mFHjEXM2KZ6P2YyHcyCtjAXroj9jnQDbwtsRim3CoXTv2pQUaJinqoBFAhXguGhZcL4JDVD7JShCnV9MfAfSpke4Ja58)",
-			urtypes.OutputDescriptor{
+			&urtypes.OutputDescriptor{
 				Script:    urtypes.P2WPKH,
 				Type:      urtypes.Singlesig,
 				Threshold: 1,

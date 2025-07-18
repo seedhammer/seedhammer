@@ -34,7 +34,7 @@ func ElectrumSeed(phrase string) bool {
 	return false
 }
 
-func OutputDescriptor(enc []byte) (urtypes.OutputDescriptor, error) {
+func OutputDescriptor(enc []byte) (*urtypes.OutputDescriptor, error) {
 	if bw, err := parseBlueWalletDescriptor(string(enc)); err == nil && bw.Title != "" {
 		return bw, nil
 	}
@@ -62,7 +62,7 @@ func OutputDescriptor(enc []byte) (urtypes.OutputDescriptor, error) {
 			if !reflect.DeepEqual(path, k.DerivationPath) {
 				continue
 			}
-			return urtypes.OutputDescriptor{
+			return &urtypes.OutputDescriptor{
 				Type:      urtypes.Singlesig,
 				Threshold: 1,
 				Script:    s,
@@ -72,12 +72,12 @@ func OutputDescriptor(enc []byte) (urtypes.OutputDescriptor, error) {
 			}, nil
 		}
 	}
-	return urtypes.OutputDescriptor{}, errors.New("nonstandard: unrecognized output descriptor format")
+	return nil, errors.New("nonstandard: unrecognized output descriptor format")
 }
 
-func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
+func parseBlueWalletDescriptor(txt string) (*urtypes.OutputDescriptor, error) {
 	lines := strings.Split(txt, "\n")
-	desc := urtypes.OutputDescriptor{
+	desc := &urtypes.OutputDescriptor{
 		Type: urtypes.SortedMulti,
 	}
 	var nkeys int
@@ -91,12 +91,12 @@ func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 		}
 		header := strings.SplitN(l, ": ", 2)
 		if len(header) != 2 {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid header: %q", l)
+			return nil, fmt.Errorf("bluewallet: invalid header: %q", l)
 		}
 		key, val := header[0], header[1]
 		if old, seen := seenKeys[key]; seen {
 			if old != val {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: inconsistent header value %q", key)
+				return nil, fmt.Errorf("bluewallet: inconsistent header value %q", key)
 			}
 			continue
 		}
@@ -106,15 +106,15 @@ func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 			desc.Title = val
 		case "Policy":
 			if _, err := fmt.Sscanf(val, "%d of %d", &desc.Threshold, &nkeys); err != nil {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid Policy header: %q", val)
+				return nil, fmt.Errorf("bluewallet: invalid Policy header: %q", val)
 			}
 		case "Derivation":
 			if !strings.HasPrefix(val, "m/") {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid derivation: %q", val)
+				return nil, fmt.Errorf("bluewallet: invalid derivation: %q", val)
 			}
 			p, err := parseDerivationPath(val[2:])
 			if err != nil {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid derivation: %q", val)
+				return nil, fmt.Errorf("bluewallet: invalid derivation: %q", val)
 			}
 			path = p
 		case "Format":
@@ -126,27 +126,27 @@ func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 			case "P2WSH-P2SH":
 				desc.Script = urtypes.P2SH_P2WSH
 			default:
-				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: unknown format %q", val)
+				return nil, fmt.Errorf("bluewallet: unknown format %q", val)
 			}
 		default:
 			_, xpub, err := parseHDKey(val)
 			if err != nil {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid xpub: %q", val)
+				return nil, fmt.Errorf("bluewallet: invalid xpub: %q", val)
 			}
 			pub, err := xpub.ECPubKey()
 			if err != nil {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid xpub: %q: %v", xpub, err)
+				return nil, fmt.Errorf("bluewallet: invalid xpub: %q: %v", xpub, err)
 			}
 			fp, err := hex.DecodeString(key)
 			if err != nil {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid fingerprint: %q", key)
+				return nil, fmt.Errorf("bluewallet: invalid fingerprint: %q", key)
 			}
 			if len(fp) > 4 {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: invalid fingerprint: %q", key)
+				return nil, fmt.Errorf("bluewallet: invalid fingerprint: %q", key)
 			}
 			network, err := networkFor(xpub)
 			if err != nil {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: unknown network: %q", key)
+				return nil, fmt.Errorf("bluewallet: unknown network: %q", key)
 			}
 			desc.Keys = append(desc.Keys, urtypes.KeyDescriptor{
 				Network:           network,
@@ -159,7 +159,7 @@ func parseBlueWalletDescriptor(txt string) (urtypes.OutputDescriptor, error) {
 		}
 	}
 	if nkeys != len(desc.Keys) {
-		return urtypes.OutputDescriptor{}, fmt.Errorf("bluewallet: expected %d keys, but got %d", nkeys, len(desc.Keys))
+		return nil, fmt.Errorf("bluewallet: expected %d keys, but got %d", nkeys, len(desc.Keys))
 	}
 	return desc, nil
 }
@@ -260,7 +260,7 @@ func parsePath(path string) ([]urtypes.Derivation, error) {
 
 // parseTextOutputDescriptor parses descriptors in textual form, as described in
 // https://github.com/bitcoin/bitcoin/blob/master/doc/descriptors.md.
-func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
+func parseTextOutputDescriptor(desc string) (*urtypes.OutputDescriptor, error) {
 	// Chop off checksum, if any.
 	if start := len(desc) - 9; start >= 0 && desc[start] == '#' {
 		desc = desc[:start]
@@ -280,9 +280,9 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 	}
 	script, err := parseFunc()
 	if err != nil {
-		return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: script: %w", err)
+		return nil, fmt.Errorf("descriptor: script: %w", err)
 	}
-	r := urtypes.OutputDescriptor{
+	r := &urtypes.OutputDescriptor{
 		Threshold: 1,
 	}
 	switch script {
@@ -297,16 +297,16 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 	case "tr":
 		r.Script = urtypes.P2TR
 	default:
-		return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: unknown script type: %q", script)
+		return nil, fmt.Errorf("descriptor: unknown script type: %q", script)
 	}
 	if script2, err := parseFunc(); err == nil {
 		switch script2 {
 		case "wpkh", "wsh":
 			if r.Script != urtypes.P2SH {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: invalid wrapped script type: %q", script2)
+				return nil, fmt.Errorf("descriptor: invalid wrapped script type: %q", script2)
 			}
 			if r.Script != urtypes.P2SH {
-				return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: invalid wrapped script type: %q", script2)
+				return nil, fmt.Errorf("descriptor: invalid wrapped script type: %q", script2)
 			}
 			switch script2 {
 			case "wpkh":
@@ -314,7 +314,7 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 			case "wsh":
 				r.Script = urtypes.P2SH_P2WSH
 			default:
-				return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: unknown script type: %q", script2)
+				return nil, fmt.Errorf("descriptor: unknown script type: %q", script2)
 			}
 			script2, err = parseFunc()
 		}
@@ -323,7 +323,7 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 			case "sortedmulti":
 				r.Type = urtypes.SortedMulti
 			default:
-				return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: unknown script type: %q", script2)
+				return nil, fmt.Errorf("descriptor: unknown script type: %q", script2)
 			}
 		}
 	}
@@ -335,7 +335,7 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 		args := strings.Split(desc, ",")
 		threshold, err := strconv.Atoi(args[0])
 		if err != nil {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("descriptor: invalid multikey threshold: %q", desc)
+			return nil, fmt.Errorf("descriptor: invalid multikey threshold: %q", desc)
 		}
 		r.Threshold = threshold
 		keys = args[1:]
@@ -343,7 +343,7 @@ func parseTextOutputDescriptor(desc string) (urtypes.OutputDescriptor, error) {
 	for _, k := range keys {
 		key, err := parseHDKeyExpr(r.Script.DerivationPath(), []byte(k))
 		if err != nil {
-			return urtypes.OutputDescriptor{}, fmt.Errorf("hdkey: %w", err)
+			return nil, fmt.Errorf("hdkey: %w", err)
 		}
 		r.Keys = append(r.Keys, key)
 	}

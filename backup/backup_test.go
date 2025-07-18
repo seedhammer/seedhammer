@@ -42,7 +42,7 @@ func TestEngraveErrors(t *testing.T) {
 	}
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("error-%d", i), func(t *testing.T) {
-			desc := urtypes.OutputDescriptor{
+			desc := &urtypes.OutputDescriptor{
 				Title:     "Satoshi Stash",
 				Script:    urtypes.P2WSH,
 				Threshold: test.threshold,
@@ -69,7 +69,7 @@ func BenchmarkEngraving(b *testing.B) {
 		hdkeychain.HardenedKeyStart + 0,
 		hdkeychain.HardenedKeyStart + 2,
 	}
-	outDesc := urtypes.OutputDescriptor{
+	outDesc := &urtypes.OutputDescriptor{
 		Title:     "Satoshi Stash",
 		Script:    urtypes.P2WSH,
 		Threshold: 1,
@@ -129,7 +129,7 @@ func TestEngrave(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			desc := urtypes.OutputDescriptor{
+			desc := &urtypes.OutputDescriptor{
 				Title:     "Satoshi Stash",
 				Script:    test.script,
 				Threshold: test.threshold,
@@ -228,7 +228,7 @@ func TestSplitUR(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			for m := 1; m <= n; m++ {
-				desc := urtypes.OutputDescriptor{
+				desc := &urtypes.OutputDescriptor{
 					Title:     "Some title",
 					Script:    urtypes.P2WSH,
 					Threshold: m,
@@ -266,7 +266,7 @@ func TestTitleString(t *testing.T) {
 	}
 }
 
-func genTestPlate(t testing.TB, desc urtypes.OutputDescriptor, path []uint32, seedlen int, keyIdx int, plateSize PlateSize) (Seed, Descriptor) {
+func genTestPlate(t testing.TB, desc *urtypes.OutputDescriptor, path []uint32, seedlen int, keyIdx int, plateSize PlateSize) (Seed, Descriptor) {
 	var mnemonic bip39.Mnemonic
 	for i := range desc.Keys {
 		m := make(bip39.Mnemonic, seedlen)

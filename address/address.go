@@ -17,22 +17,22 @@ import (
 	"seedhammer.com/bc/urtypes"
 )
 
-func Change(desc urtypes.OutputDescriptor, index uint32) (string, error) {
+func Change(desc *urtypes.OutputDescriptor, index uint32) (string, error) {
 	return address(desc, index, true)
 }
 
-func Receive(desc urtypes.OutputDescriptor, index uint32) (string, error) {
+func Receive(desc *urtypes.OutputDescriptor, index uint32) (string, error) {
 	return address(desc, index, false)
 }
 
-func Supported(desc urtypes.OutputDescriptor) bool {
+func Supported(desc *urtypes.OutputDescriptor) bool {
 	_, err := Receive(desc, 0)
 	return !errors.Is(err, errUnsupported)
 }
 
 var errUnsupported = errors.New("unsupported descriptor")
 
-func address(desc urtypes.OutputDescriptor, index uint32, change bool) (string, error) {
+func address(desc *urtypes.OutputDescriptor, index uint32, change bool) (string, error) {
 	var addr btcutil.Address
 	var network *chaincfg.Params
 	switch desc.Type {

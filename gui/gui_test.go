@@ -32,7 +32,7 @@ import (
 )
 
 func TestDescriptorScreenError(t *testing.T) {
-	dupDesc := urtypes.OutputDescriptor{
+	dupDesc := &urtypes.OutputDescriptor{
 		Script:    urtypes.P2WSH,
 		Type:      urtypes.SortedMulti,
 		Threshold: 2,
@@ -40,14 +40,14 @@ func TestDescriptorScreenError(t *testing.T) {
 	}
 	dupMnemonic := fillDescriptor(t, dupDesc, dupDesc.Script.DerivationPath(), 12, 0)
 	dupDesc.Keys[1] = dupDesc.Keys[0]
-	smallDesc := urtypes.OutputDescriptor{
+	smallDesc := &urtypes.OutputDescriptor{
 		Script:    urtypes.P2WSH,
 		Type:      urtypes.SortedMulti,
 		Threshold: 2,
 		Keys:      make([]urtypes.KeyDescriptor, 5),
 	}
 	smallMnemonic := fillDescriptor(t, smallDesc, smallDesc.Script.DerivationPath(), 12, 0)
-	okDesc := urtypes.OutputDescriptor{
+	okDesc := &urtypes.OutputDescriptor{
 		Script:    urtypes.P2WSH,
 		Type:      urtypes.SortedMulti,
 		Threshold: 3,
@@ -56,7 +56,7 @@ func TestDescriptorScreenError(t *testing.T) {
 	okMnemonic := fillDescriptor(t, okDesc, okDesc.Script.DerivationPath(), 12, 0)
 	tests := []struct {
 		name     string
-		desc     urtypes.OutputDescriptor
+		desc     *urtypes.OutputDescriptor
 		mnemonic bip39.Mnemonic
 		ok       bool
 	}{
@@ -85,7 +85,7 @@ func TestDescriptorScreenError(t *testing.T) {
 
 func TestValidateDescriptor(t *testing.T) {
 	// Duplicate key.
-	dup := urtypes.OutputDescriptor{
+	dup := &urtypes.OutputDescriptor{
 		Script:    urtypes.P2WSH,
 		Threshold: 1,
 		Type:      urtypes.SortedMulti,
@@ -95,7 +95,7 @@ func TestValidateDescriptor(t *testing.T) {
 	dup.Keys[1] = dup.Keys[0]
 
 	// Threshold too small.
-	smallDesc := urtypes.OutputDescriptor{
+	smallDesc := &urtypes.OutputDescriptor{
 		Script:    urtypes.P2WSH,
 		Threshold: 2,
 		Type:      urtypes.SortedMulti,
@@ -105,7 +105,7 @@ func TestValidateDescriptor(t *testing.T) {
 
 	tests := []struct {
 		name string
-		desc urtypes.OutputDescriptor
+		desc *urtypes.OutputDescriptor
 		err  error
 	}{
 		{"duplicate key", dup, new(errDuplicateKey)},
@@ -167,7 +167,7 @@ func opsContains(ops *op.Ops, str string) bool {
 
 func TestAllocs(t *testing.T) {
 	res := testing.Benchmark(func(b *testing.B) {
-		desc := urtypes.OutputDescriptor{
+		desc := &urtypes.OutputDescriptor{
 			Script:    urtypes.P2WSH,
 			Type:      urtypes.SortedMulti,
 			Threshold: 2,
@@ -339,7 +339,7 @@ func TestEngraveError(t *testing.T) {
 	for i, test := range tests {
 		name := fmt.Sprintf("%d-%d-of-%d", i, test.threshold, test.keys)
 		t.Run(name, func(t *testing.T) {
-			desc := urtypes.OutputDescriptor{
+			desc := &urtypes.OutputDescriptor{
 				Script:    urtypes.P2WSH,
 				Threshold: test.threshold,
 				Type:      urtypes.SortedMulti,
@@ -585,7 +585,7 @@ func TestXpubMasterFingerprintSinglesig(t *testing.T) {
 		t.Fatal(err)
 	}
 	want.Keys[0].MasterFingerprint = mfp
-	if !reflect.DeepEqual(want, *got) {
+	if !reflect.DeepEqual(want, got) {
 		t.Error("descriptors don't match")
 	}
 }
@@ -703,7 +703,7 @@ func TestMulti(t *testing.T) {
 	}
 }
 
-func fillDescriptor(t *testing.T, desc urtypes.OutputDescriptor, path urtypes.Path, seedlen int, keyIdx int) bip39.Mnemonic {
+func fillDescriptor(t *testing.T, desc *urtypes.OutputDescriptor, path urtypes.Path, seedlen int, keyIdx int) bip39.Mnemonic {
 	var mnemonic bip39.Mnemonic
 	for i := range desc.Keys {
 		m := make(bip39.Mnemonic, seedlen)
@@ -982,11 +982,11 @@ func mnemonicFor(phrase string) bip39.Mnemonic {
 }
 
 var twoOfThree = struct {
-	Descriptor urtypes.OutputDescriptor
+	Descriptor *urtypes.OutputDescriptor
 	Mnemonic   bip39.Mnemonic
 }{
 	Mnemonic: mnemonicFor("flip begin artist fringe online release swift genre wool general transfer arm"),
-	Descriptor: urtypes.OutputDescriptor{
+	Descriptor: &urtypes.OutputDescriptor{
 		Script:    urtypes.P2WSH,
 		Threshold: 2,
 		Type:      urtypes.SortedMulti,

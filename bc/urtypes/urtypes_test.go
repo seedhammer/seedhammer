@@ -37,7 +37,7 @@ func TestDecode(t *testing.T) {
 }
 
 func TestOutputDescriptor(t *testing.T) {
-	twoOfThree := OutputDescriptor{
+	twoOfThree := &OutputDescriptor{
 		Script:    P2WSH,
 		Threshold: 2,
 		Type:      SortedMulti,
@@ -69,11 +69,11 @@ func TestOutputDescriptor(t *testing.T) {
 		},
 	}
 	tests := []struct {
-		desc OutputDescriptor
+		desc *OutputDescriptor
 		want string
 	}{
 		{
-			OutputDescriptor{
+			&OutputDescriptor{
 				Script:    P2WSH,
 				Threshold: 1,
 				Type:      SortedMulti,
@@ -111,7 +111,7 @@ func TestOutputDescriptor(t *testing.T) {
 			"d90191d90197a201020283d9012fa4035821022196adc25fde169fe92e70769059102275d2b40cc98776eaab92b82a86135e92045820438eff7b3b36b6d11a60a22ccb9306eea305b0439f1ea09d5928015de373811606d90130a201881830f500f500f502f5021add4fadee081a22969377d9012fa403582102fb72507fc20ddba92991b17c4bb466130ad93a886e73175033bb43e3bc785a6d04582095b34913937fa5f1c6205b525bb57de1517625e04586b595be68e71362d3edc506d90130a201881830f500f500f502f5021a9bacd5c0081a97ec38f9d9012fa403582103a9394a2f1a4f99613a716956c8540f6dba6f18931c2639107221b267d740af23045820dbe80cbb4e0e418b06f470d2afe7a8c17be701ab206c59a65e65a824016a6c7006d90130a201881830f500f500f502f5021a5a0804e3081ac7bce7a8",
 		},
 		{
-			OutputDescriptor{
+			&OutputDescriptor{
 				Script: P2WPKH, Threshold: 1, Keys: []KeyDescriptor{
 					{
 						Network:           &chaincfg.MainNetParams,
@@ -126,7 +126,7 @@ func TestOutputDescriptor(t *testing.T) {
 			"d90194d9012fa4035821033ed51bcff930c614e861bfedff57699b67085a9f197775bcc541a9ebe8268de9045820212399a8db125c85f941ea12231d8b5c7a76b83e01d03d16c53958c518284f4506d90130a201861854f500f500f5021a9c43e6c2081ad1e5a62d",
 		},
 		{
-			OutputDescriptor{
+			&OutputDescriptor{
 				Script: P2SH_P2WPKH, Threshold: 1, Keys: []KeyDescriptor{
 					{
 						Network:           &chaincfg.MainNetParams,
@@ -141,7 +141,7 @@ func TestOutputDescriptor(t *testing.T) {
 			"d90190d90194d9012fa403582102b11d60e02309c480bba137771ad614626beaf2ef74344ed10fd83bb63febcfa7045820658ca14704cc49cb06649d1bdd746b119f185bf77c1c483073bb81e3355abc5106d90130a201861831f500f500f5021a9866232b081ae986734b",
 		},
 		{
-			OutputDescriptor{
+			&OutputDescriptor{
 				Script: P2PKH, Threshold: 1, Keys: []KeyDescriptor{
 					{
 						Network:           &chaincfg.MainNetParams,
@@ -156,7 +156,7 @@ func TestOutputDescriptor(t *testing.T) {
 			"d90193d9012fa40358210272624642950d1475f16e46cc8d2b75cc2de12df29f29cf369775b95f66d28e28045820ab20958c7e9ed99c915d2c980737f31238d3b5ab32b88bdaaa61915bb5b3b4a406d90130a20186182cf500f500f5021a9866232b081ab62041ef",
 		},
 		{
-			OutputDescriptor{
+			&OutputDescriptor{
 				Script: P2TR, Threshold: 1, Keys: []KeyDescriptor{
 					{
 						Network:           &chaincfg.MainNetParams,
@@ -171,7 +171,7 @@ func TestOutputDescriptor(t *testing.T) {
 			"d90199d9012fa4035821030d9f3547534dd332855611af48ae346225b0d4e1e5f81057aa9e4c20589487c5045820c1aa32a13d12cf59528b581e9b5d070468572e200f260476a2eeb23adc484a4306d90130a201861856f500f500f5021a9866232b081a7fef547a",
 		},
 		{
-			OutputDescriptor{
+			&OutputDescriptor{
 				Script: P2TR, Threshold: 1, Keys: []KeyDescriptor{
 					{
 						Network:           &chaincfg.TestNet3Params,
@@ -277,11 +277,11 @@ func TestHDKey(t *testing.T) {
 
 func TestCryptoAccount(t *testing.T) {
 	tests := []struct {
-		d   OutputDescriptor
+		d   *OutputDescriptor
 		enc string
 	}{
 		{
-			OutputDescriptor{
+			&OutputDescriptor{
 				Script: P2WPKH, Threshold: 1, Keys: []KeyDescriptor{
 					{
 						Network:           &chaincfg.MainNetParams,
