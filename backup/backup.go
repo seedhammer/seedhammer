@@ -6,15 +6,10 @@ import (
 	"fmt"
 	"image"
 	"math"
-	"math/bits"
-	"reflect"
 	"strings"
 
 	"github.com/seedhammer/kortschak-qr"
-	"seedhammer.com/bc/fountain"
 	"seedhammer.com/bc/ur"
-	"seedhammer.com/bc/urtypes"
-	"seedhammer.com/bip380"
 	"seedhammer.com/bip39"
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/vector"
@@ -49,10 +44,10 @@ type Seed struct {
 }
 
 type Descriptor struct {
-	Descriptor *bip380.Descriptor
-	KeyIdx     int
-	Font       *vector.Face
-	Size       PlateSize
+	Data   ur.Data
+	KeyIdx int
+	Font   *vector.Face
+	Size   PlateSize
 }
 
 var ErrDescriptorTooLarge = errors.New("output descriptor is too large to backup")
@@ -104,7 +99,7 @@ func EngraveSeed(params engrave.Params, plate Seed) (engrave.Plan, error) {
 
 func EngraveDescriptor(params engrave.Params, plate Descriptor) (engrave.Plan, error) {
 	sz := plate.Size.Dims().Mul(params.Millimeter)
-	urs := splitUR(plate.Descriptor, plate.KeyIdx)
+	urs := ur.Split(plate.Data, plate.KeyIdx)
 	urQRs := make([]*qr.Code, 0, len(urs))
 	for _, ur := range urs {
 		qrcode, err := qr.Encode(ur, qr.M)
@@ -118,143 +113,6 @@ func EngraveDescriptor(params engrave.Params, plate Descriptor) (engrave.Plan, e
 		return nil, err
 	}
 	return side, nil
-}
-
-// splitUR searches for the appropriate seqNum in the [UR] encoding
-// that makes m-of-n backups recoverable regardless of
-// which m-sized subset is used. To achieve that, we're exploiting the
-// fact that the UR encoding of a fragment can contain multiple fragments,
-// xor'ed together.
-//
-// Schemes are implemented for backups where m == n - 1 and for 3-of-5.
-//
-// For m == n - 1, the data is split into m parts (seqLen in UR parlor), and m shares have parts
-// assigned as follows:
-//
-//	1, 2, ..., m
-//
-// The final share contains the xor of all m parts.
-//
-// The scheme can trivially recover the data when selecting the m shares each with 1
-// part. For all other selections, one share will be missing, say k, but we'll have the
-// final plate with every part xor'ed together. So, k is derived by xor'ing (canceling) every
-// part other than k into the combined part.
-//
-// Example: a 2-of-3 setup will have data split into 2 parts, with the 3 shares assigned parts
-// like so: 1, 2, 1 ⊕ 2. Selecting the first two plates, the data is trivially recovered;
-// otherwise we have one part, say 1, and the combined part. The other part, 2, is then recovered
-// by xor'ing the one part with the combination: 1 ⊕ 1 ⊕ 2 = 2.
-//
-// For 3-of-5, the data is split into 6 parts, and each share will have two parts assigned.
-//
-// The assignment is as follows, where p1 and p2 denotes the two parts assigned to each share.
-//
-//	share    |    p1     |        p2
-//	 1            1         6 ⊕ 5 ⊕ 2
-//	 2            2         6 ⊕ 1 ⊕ 3
-//	 3            3         6 ⊕ 2 ⊕ 4
-//	 4            4         6 ⊕ 3 ⊕ 5
-//	 5            5         6 ⊕ 4 ⊕ 1
-//
-// That is, every share is assigned a part and the combination of the 6 part with the neighbour
-// parts.
-//
-// [UR]: https://github.com/BlockchainCommons/Research/blob/master/papers/bcr-2020-005-ur.md
-func splitUR(desc *bip380.Descriptor, keyIdx int) (urs []string) {
-	var shares [][]int
-	var seqLen int
-	m, n := desc.Threshold, len(desc.Keys)
-	switch {
-	case n-m <= 1:
-		// Optimal: 1 part per share, seqLen m.
-		seqLen = m
-		if keyIdx < m {
-			shares = [][]int{{keyIdx}}
-		} else {
-			all := make([]int, 0, m)
-			for i := 0; i < m; i++ {
-				all = append(all, i)
-			}
-			shares = [][]int{all}
-		}
-	case n == 4 && m == 2:
-		// Optimal, but 2 parts per share.
-		seqLen = m * 2
-		switch keyIdx {
-		case 0:
-			shares = [][]int{{0}, {1}}
-		case 1:
-			shares = [][]int{{2}, {3}}
-		case 2:
-			shares = [][]int{{0, 2}, {1, 3}}
-		case 3:
-			shares = [][]int{{0, 2, 1}, {1, 3, 2}}
-		}
-	case n == 5 && m == 3:
-		// Optimal, but 2 parts per share. There doesn't seem to exist an
-		// optimal scheme with 1 part per share.
-		seqLen = m * 2
-		second := []int{
-			n,
-			(keyIdx + n - 1) % n,
-			(keyIdx + 1) % n,
-		}
-		shares = [][]int{{keyIdx}, second}
-	default:
-		// Fallback: every share contains the complete data. It's only optimal
-		// for 1-of-n backups.
-		seqLen = 1
-		shares = [][]int{{0}}
-	}
-	data := urtypes.EncodeDescriptor(desc)
-	check := fountain.Checksum(data)
-	for _, frag := range shares {
-		seqNum := fountain.SeqNumFor(seqLen, check, frag)
-		qr := strings.ToUpper(ur.Encode("crypto-output", data, seqNum, seqLen))
-		urs = append(urs, qr)
-	}
-	return
-}
-
-func Recoverable(desc *bip380.Descriptor) bool {
-	var shares [][]string
-	for k := range desc.Keys {
-		shares = append(shares, splitUR(desc, k))
-	}
-	// Count to all bit patterns of n length, choose the ones with
-	// m bits.
-	allPerm := uint64(1)<<len(desc.Keys) - 1
-	for c := uint64(1); c <= allPerm; c++ {
-		if bits.OnesCount64(c) != desc.Threshold {
-			continue
-		}
-		c := c
-		d := new(ur.Decoder)
-		for c != 0 {
-			share := bits.TrailingZeros64(c)
-			c &^= 1 << share
-			for _, ur := range shares[share] {
-				d.Add(ur)
-			}
-		}
-		typ, enc, err := d.Result()
-		if err != nil {
-			return false
-		}
-		if enc == nil {
-			return false
-		}
-		got, err := urtypes.Parse(typ, enc)
-		if err != nil {
-			return false
-		}
-		gotDesc := got.(*bip380.Descriptor)
-		gotDesc.Title = desc.Title
-		if !reflect.DeepEqual(gotDesc, desc) {
-			return false
-		}
-	}
-	return true
 }
 
 const plateFontSize = 4.1

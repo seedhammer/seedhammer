@@ -13,6 +13,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
+	"seedhammer.com/bc/ur"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip380"
 	"seedhammer.com/bip39"
@@ -215,38 +216,6 @@ func TestEngrave(t *testing.T) {
 	}
 }
 
-func TestSplitUR(t *testing.T) {
-	t.Parallel()
-
-	maxShares := 15
-	if testing.Short() {
-		maxShares = 10
-	}
-	for n := 1; n <= maxShares; n++ {
-		n := n
-		name := fmt.Sprintf("%d-shares", n)
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			for m := 1; m <= n; m++ {
-				desc := &bip380.Descriptor{
-					Title:     "Some title",
-					Script:    bip380.P2WSH,
-					Threshold: m,
-					Type:      bip380.Singlesig,
-					Keys:      make([]bip380.Key, n),
-				}
-				if len(desc.Keys) > 1 {
-					desc.Type = bip380.SortedMulti
-				}
-				genTestPlate(t, desc, desc.Script.DerivationPath(), 12, 0, LargePlate)
-				if !Recoverable(desc) {
-					t.Errorf("%d-of-%d: failed to recover", m, n)
-				}
-			}
-		})
-	}
-}
-
 func TestTitleString(t *testing.T) {
 	tests := []struct {
 		test  string
@@ -313,9 +282,13 @@ func genTestPlate(t testing.TB, desc *bip380.Descriptor, path []uint32, seedlen 
 			Font:              constant.Font,
 			Size:              plateSize,
 		}, Descriptor{
-			Descriptor: desc,
-			KeyIdx:     keyIdx,
-			Font:       constant.Font,
-			Size:       plateSize,
+			Data: ur.Data{
+				Data:      desc.Encode(),
+				Threshold: desc.Threshold,
+				Shards:    len(desc.Keys),
+			},
+			KeyIdx: keyIdx,
+			Font:   constant.Font,
+			Size:   plateSize,
 		}
 }

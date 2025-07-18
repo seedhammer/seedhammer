@@ -2,9 +2,12 @@ package ur
 
 import (
 	"encoding/hex"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+
+	"seedhammer.com/bc/urtypes"
 )
 
 func TestDecode(t *testing.T) {
@@ -115,5 +118,41 @@ func TestDecode(t *testing.T) {
 				t.Errorf("seqNum %d of %s is %s expected %s", seqNum, test.want, got, want)
 			}
 		}
+	}
+}
+
+func TestSplit(t *testing.T) {
+	t.Parallel()
+
+	maxShares := 15
+	if testing.Short() {
+		maxShares = 10
+	}
+	for n := 1; n <= maxShares; n++ {
+		n := n
+		name := fmt.Sprintf("%d-shares", n)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for m := 1; m <= n; m++ {
+				desc := &urtypes.OutputDescriptor{
+					Title:     "Some title",
+					Script:    urtypes.P2WSH,
+					Threshold: m,
+					Type:      urtypes.Singlesig,
+					Keys:      make([]urtypes.KeyDescriptor, n),
+				}
+				if len(desc.Keys) > 1 {
+					desc.Type = urtypes.SortedMulti
+				}
+				data := Data{
+					Data:      desc.Encode(),
+					Threshold: desc.Threshold,
+					Shards:    len(desc.Keys),
+				}
+				if !Recoverable(data) {
+					t.Errorf("%d-of-%d: failed to recover", m, n)
+				}
+			}
+		})
 	}
 }
