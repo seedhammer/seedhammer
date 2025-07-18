@@ -151,7 +151,7 @@ func (d *Device) reset() error {
 	// SAK for NFC Type 4A (4.8.2, table 17).
 	const sakT4A = 0b0_01_00_0_00
 	// Load PT memory with NFC-A card emulation responses.
-	req := []byte{
+	req := append(d.scratch[:0], []byte{
 		modeFIFO | loadPTMemory,
 		0x08, uid[0], uid[1], uid[2], // UID.
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Unused UID storage.
@@ -161,7 +161,7 @@ func (d *Device) reset() error {
 		0x00, // SENS_RES byte 2.
 		// SAK1, SAK2, SAK3.
 		sakT4A, sakT4A, sakT4A,
-	}
+	}...)
 	if err := d.bus.Tx(i2cAddr, req, nil); err != nil {
 		return err
 	}
