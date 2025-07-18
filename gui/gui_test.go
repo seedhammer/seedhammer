@@ -111,7 +111,7 @@ func TestValidateDescriptor(t *testing.T) {
 		err  error
 	}{
 		{"duplicate key", dup, new(errDuplicateKey)},
-		{"threshold too small", smallDesc, backup.ErrDescriptorTooLarge},
+		{"threshold too small", smallDesc, backup.ErrTooLarge},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -366,7 +366,7 @@ func TestEngraveError(t *testing.T) {
 		path      []uint32
 		err       error
 	}{
-		{"threshold too small", 1, 5, nonstdPath, backup.ErrDescriptorTooLarge},
+		{"threshold too small", 1, 5, nonstdPath, backup.ErrTooLarge},
 	}
 	for i, test := range tests {
 		name := fmt.Sprintf("%d-%d-of-%d", i, test.threshold, test.keys)
@@ -652,7 +652,7 @@ func TestSeed(t *testing.T) {
 		t.Fatal(err)
 	}
 	plate := Plate{
-		Sides:             []engrave.Plan{side},
+		Plan:              []engrave.Plan{side},
 		Size:              backup.SquarePlate,
 		MasterFingerprint: mfp,
 	}
@@ -692,13 +692,13 @@ func TestMulti(t *testing.T) {
 			t.Fatal(err)
 		}
 		const size = backup.LargePlate
-		descPlate := backup.Descriptor{
+		descPlate := backup.Data{
 			Descriptor: oneOfTwo,
 			KeyIdx:     i,
 			Font:       constant.Font,
 			Size:       size,
 		}
-		descSide, err := backup.EngraveDescriptor(p.EngraverParams(), descPlate)
+		descSide, err := backup.EngraveText(p.EngraverParams(), descPlate)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -716,8 +716,8 @@ func TestMulti(t *testing.T) {
 			t.Fatal(err)
 		}
 		plate := Plate{
-			Size:  size,
-			Sides: []engrave.Plan{descSide, seedSide},
+			Size: size,
+			Plan: []engrave.Plan{descSide, seedSide},
 		}
 		var completed bool
 		scr := NewEngraveScreen(ctx, plate)
@@ -725,7 +725,7 @@ func TestMulti(t *testing.T) {
 			completed = scr.Engrave(ctx, op.Ctx{}, &engraveTheme)
 		}))
 		defer quit()
-		for _, side := range plate.Sides {
+		for _, side := range plate.Plan {
 			testEngraving(t, p, ctx, scr, side, frame)
 		}
 		for !completed {

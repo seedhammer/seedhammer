@@ -9,6 +9,7 @@ import (
 
 	"seedhammer.com/bip39"
 	"seedhammer.com/nfc/poller"
+	"seedhammer.com/nonstandard"
 )
 
 type scanResult struct {
@@ -64,6 +65,8 @@ func Scan(d poller.Device) iter.Seq[scanResult] {
 			if buf := buf[:n]; len(buf) > 0 {
 				if m, err := bip39.Parse(buf); err == nil {
 					res.Content = m
+				} else if d, err := nonstandard.OutputDescriptor(buf); err == nil {
+					res.Content = d
 				} else if bytes.Equal(buf, []byte("FOREVERLAURA!")) {
 					res.Content = debugMode{}
 				} else {

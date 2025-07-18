@@ -17,6 +17,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/seedhammer/kortschak-qr"
 	"seedhammer.com/address"
 	"seedhammer.com/backup"
 	"seedhammer.com/bc/ur"
@@ -26,6 +27,7 @@ import (
 	"seedhammer.com/bip39"
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
+	"seedhammer.com/font/sh"
 	"seedhammer.com/gui/assets"
 	"seedhammer.com/gui/layout"
 	"seedhammer.com/gui/op"
@@ -740,28 +742,9 @@ var ProgressImageGen = op.RegisterParameterizedImage(func(args op.ImageArguments
 	return src.RGBA64At(x, y)
 })
 
-type errDuplicateKey struct {
-	Fingerprint uint32
-}
-
-func (e *errDuplicateKey) Error() string {
-	return fmt.Sprintf("descriptor contains a duplicate share: %.8x", e.Fingerprint)
-}
-
-func (e *errDuplicateKey) Is(target error) bool {
-	_, ok := target.(*errDuplicateKey)
-	return ok
-}
-
 func NewErrorScreen(err error) *ErrorScreen {
-	var errDup *errDuplicateKey
 	switch {
-	case errors.As(err, &errDup):
-		return &ErrorScreen{
-			Title: "Duplicated Share",
-			Body:  fmt.Sprintf("The share %.8x is listed more than once in the wallet.", errDup.Fingerprint),
-		}
-	case errors.Is(err, backup.ErrDescriptorTooLarge):
+	case errors.Is(err, backup.ErrTooLarge):
 		return &ErrorScreen{
 			Title: "Too Large",
 			Body:  "The descriptor cannot fit any plate size.",
@@ -774,41 +757,65 @@ func NewErrorScreen(err error) *ErrorScreen {
 	}
 }
 
-func validateDescriptor(params engrave.Params, desc *bip380.Descriptor) error {
-	keys := make(map[string]bool)
-	for _, k := range desc.Keys {
-		xpub := k.String()
-		if keys[xpub] {
-			return &errDuplicateKey{
-				Fingerprint: k.MasterFingerprint,
-			}
-		}
-		keys[xpub] = true
-	}
-	// Do a dummy engrave to see whether the backup fits any plate.
-	descPlate := backup.Descriptor{
-		Descriptor: desc,
-		KeyIdx:     0,
-		Font:       constant.Font,
-		Size:       backup.LargePlate,
-	}
-	_, err := backup.EngraveDescriptor(params, descPlate)
+func validateDescriptor(params engrave.Params, sizes []backup.PlateSize, desc *bip380.Descriptor) ([]string, []Plate, error) {
+	enc := desc.Encode()
+	qrc, err := qr.Encode(desc.EncodeCompact(), qr.L)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	// Verify that every permutation of desc.Threshold shares can recover the
-	// descriptor. Note that this is impossible by construction and by exhaustive
-	// tests, but it's good to be paranoid.
-	if !backup.Recoverable(desc) {
-		return errors.New("Descriptor is not recoverable. This is a bug in the program; please report it.")
+	const qrScale = 3
+	type textEngraving struct {
+		Label     string
+		Paragraph backup.Paragraph
 	}
-	return nil
+
+	engravings := []textEngraving{
+		{
+			"TEXT + QR",
+			backup.Paragraph{Text: enc, QR: qrc, QRScale: qrScale},
+		},
+		{
+			"TEXT ONLY",
+			backup.Paragraph{Text: enc},
+		},
+		{
+			"QR ONLY",
+			backup.Paragraph{QR: qrc, QRScale: qrScale},
+		},
+	}
+	var validLabels []string
+	var validEngravings []Plate
+
+	var lastErr error
+	for _, e := range engravings {
+		for _, sz := range sizes {
+			descPlate := backup.Text{
+				Paragraphs: []backup.Paragraph{e.Paragraph},
+				Font:       sh.Font,
+				Size:       sz,
+			}
+			plan, err := backup.EngraveText(params, descPlate)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			validLabels = append(validLabels, e.Label)
+			validEngravings = append(validEngravings, Plate{
+				Size: sz,
+				Plan: plan,
+			})
+			break
+		}
+	}
+	if len(validEngravings) == 0 {
+		return nil, nil, lastErr
+	}
+	return validLabels, validEngravings, nil
 }
 
 type Plate struct {
-	Size              backup.PlateSize
-	MasterFingerprint uint32
-	Sides             []engrave.Plan
+	Size backup.PlateSize
+	Plan engrave.Plan
 }
 
 func engraveSeed(sizes []backup.PlateSize, params engrave.Params, m bip39.Mnemonic) (Plate, error) {
@@ -819,9 +826,7 @@ func engraveSeed(sizes []backup.PlateSize, params engrave.Params, m bip39.Mnemon
 	var lastErr error
 	for _, sz := range sizes {
 		seedDesc := backup.Seed{
-			KeyIdx:            0,
 			Mnemonic:          m,
-			Keys:              1,
 			MasterFingerprint: mfp,
 			Font:              constant.Font,
 			Size:              sz,
@@ -832,9 +837,8 @@ func engraveSeed(sizes []backup.PlateSize, params engrave.Params, m bip39.Mnemon
 			continue
 		}
 		return Plate{
-			Sides:             []engrave.Plan{seedSide},
-			Size:              sz,
-			MasterFingerprint: mfp,
+			Plan: seedSide,
+			Size: sz,
 		}, nil
 	}
 	return Plate{}, lastErr
@@ -850,47 +854,6 @@ func masterFingerprintFor(m bip39.Mnemonic, network *chaincfg.Params) (uint32, e
 		return 0, err
 	}
 	return mfp, nil
-}
-
-func engravePlate(sizes []backup.PlateSize, params engrave.Params, desc *bip380.Descriptor, keyIdx int, m bip39.Mnemonic) (Plate, error) {
-	mfp, err := masterFingerprintFor(m, desc.Keys[keyIdx].Network)
-	if err != nil {
-		return Plate{}, err
-	}
-	var lastErr error
-	for _, sz := range sizes {
-		descPlate := backup.Descriptor{
-			Descriptor: desc,
-			KeyIdx:     keyIdx,
-			Font:       constant.Font,
-			Size:       sz,
-		}
-		descSide, err := backup.EngraveDescriptor(params, descPlate)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		seedDesc := backup.Seed{
-			Title:             desc.Title,
-			KeyIdx:            keyIdx,
-			Mnemonic:          m,
-			Keys:              len(desc.Keys),
-			MasterFingerprint: mfp,
-			Font:              constant.Font,
-			Size:              sz,
-		}
-		seedSide, err := backup.EngraveSeed(params, seedDesc)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		return Plate{
-			Size:              sz,
-			MasterFingerprint: mfp,
-			Sides:             []engrave.Plan{descSide, seedSide},
-		}, nil
-	}
-	return Plate{}, lastErr
 }
 
 func plateImage(p backup.PlateSize) image.RGBA64Image {
@@ -927,7 +890,6 @@ type Instruction struct {
 	Body  string
 	Lead  string
 	Type  InstructionType
-	Side  int
 	Image image.RGBA64Image
 
 	resolvedBody string
@@ -935,10 +897,6 @@ type Instruction struct {
 
 var (
 	EngraveFirstSideA = []Instruction{
-		{
-			Body: "Make sure the fingerprint above represents the intended share.",
-			Lead: "seedhammer.com/tip#1",
-		},
 		{
 			Body: "Turn off the engraver and disconnect it from this device.",
 			Lead: "seedhammer.com/tip#2",
@@ -976,15 +934,10 @@ var (
 		{
 			Lead: "Engraving plate",
 			Type: EngraveInstruction,
-			Side: 0,
 		},
 	}
 
 	EngraveSideA = []Instruction{
-		{
-			Body: "Make sure the fingerprint above represents the intended share.",
-			Lead: "seedhammer.com/tip#1",
-		},
 		{
 			Body:  "Place a {{.Name}} on the machine.",
 			Image: assets.Sh02,
@@ -1002,50 +955,12 @@ var (
 		{
 			Lead: "Engraving plate",
 			Type: EngraveInstruction,
-			Side: 0,
-		},
-	}
-
-	EngraveSideB = []Instruction{
-		{
-			Body: "Unscrew the 4 nuts and flip the top metal plate horizontally.",
-		},
-		{
-			Body: "Tighten the nuts firmly.",
-		},
-		{
-			Body: "Hold button to start the engraving process. The process is loud, use hearing protection.",
-			Type: ConnectInstruction,
-		},
-		{
-			Lead: "Engraving plate",
-			Type: EngraveInstruction,
-			Side: 1,
 		},
 	}
 
 	EngraveSideASimple = []Instruction{
 		{
-			Body: "Make sure the fingerprint above represents the intended share.",
-		},
-		{
-			Body: "Place a {{.Name}} on the machine.",
-		},
-		{
-			Body: "Hold button to start the engraving process. The process is loud, use hearing protection.",
-			Type: ConnectInstruction,
-			Lead: "seedhammer.com/tip#8",
-		},
-		{
-			Lead: "Engraving plate",
-			Type: EngraveInstruction,
-			Side: 0,
-		},
-	}
-
-	EngraveSideBSimple = []Instruction{
-		{
-			Body: "Flip the top metal plate horizontally.",
+			Body: "Insert a blank plate and close the lock.",
 		},
 		{
 			Body: "Hold button to start the engraving process. The process is loud, use hearing protection.",
@@ -1054,7 +969,6 @@ var (
 		{
 			Lead: "Engraving plate",
 			Type: EngraveInstruction,
-			Side: 1,
 		},
 	}
 
@@ -1655,13 +1569,17 @@ func (m *MainScreen) Flow(ctx *Context, ops op.Ctx) {
 			} else {
 				m.scanStatus = scan.Status
 			}
+			th := &descriptorTheme
 			m.scanTimeout = time.Now().Add(scanStatusTimeout)
 			switch scan := scan.Content.(type) {
 			case debugMode:
 				debugEngraveFlow(ctx, ops)
 				continue
 			case bip39.Mnemonic:
-				backupWalletFlow(ctx, ops, &descriptorTheme, scan)
+				backupWalletFlow(ctx, ops, th, scan)
+				continue
+			case *bip380.Descriptor:
+				descriptorFlow(ctx, ops, th, scan)
 				continue
 			}
 		}
@@ -1935,63 +1853,41 @@ func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic []bip39.Wor
 		if !ss.Confirm(ctx, ops, th, mnemonic) {
 			return
 		}
-		desc, ok := inputDescriptorFlow(ctx, ops, th, mnemonic)
-		if !ok {
-			continue
-		}
-		if desc == nil {
-			plate, err := engraveSeed(ctx.Platform.PlateSizes(), ctx.Platform.EngraverParams(), mnemonic)
-			if err != nil {
-				errScr := NewErrorScreen(err)
-				for {
-					dims := ctx.Platform.DisplaySize()
-					dismissed := errScr.Layout(ctx, ops.Begin(), th, dims)
-					d := ops.End()
-					if dismissed {
-						break
-					}
-					ss.Draw(ctx, ops, th, dims, mnemonic)
-					d.Add(ops)
-					ctx.Frame()
+		plate, err := engraveSeed(ctx.Platform.PlateSizes(), ctx.Platform.EngraverParams(), mnemonic)
+		if err != nil {
+			errScr := NewErrorScreen(err)
+			for {
+				dims := ctx.Platform.DisplaySize()
+				dismissed := errScr.Layout(ctx, ops.Begin(), th, dims)
+				d := ops.End()
+				if dismissed {
+					break
 				}
-				continue
-			}
-			completed := NewEngraveScreen(ctx, plate).Engrave(ctx, ops, &engraveTheme)
-			if completed {
-				return
+				ss.Draw(ctx, ops, th, dims, mnemonic)
+				d.Add(ops)
+				ctx.Frame()
 			}
 			continue
 		}
+		completed := NewEngraveScreen(ctx, plate).Engrave(ctx, ops, &engraveTheme)
+		if completed {
+			return
+		}
+	}
+}
 
-		ds := &DescriptorScreen{
-			Descriptor: desc,
-			Mnemonic:   mnemonic,
+func descriptorFlow(ctx *Context, ops op.Ctx, th *Colors, desc *bip380.Descriptor) {
+	ds := &DescriptorScreen{
+		Descriptor: desc,
+	}
+	for {
+		data, ok := ds.Confirm(ctx, ops, th)
+		if !ok {
+			break
 		}
-		for {
-			keyIdx, ok := ds.Confirm(ctx, ops, th)
-			if !ok {
-				break
-			}
-			plate, err := engravePlate(ctx.Platform.PlateSizes(), ctx.Platform.EngraverParams(), desc, keyIdx, mnemonic)
-			if err != nil {
-				errScr := NewErrorScreen(err)
-				for {
-					dims := ctx.Platform.DisplaySize()
-					dismissed := errScr.Layout(ctx, ops.Begin(), th, dims)
-					d := ops.End()
-					if dismissed {
-						break
-					}
-					ss.Draw(ctx, ops, th, dims, mnemonic)
-					d.Add(ops)
-					ctx.Frame()
-				}
-				continue
-			}
-			completed := NewEngraveScreen(ctx, plate).Engrave(ctx, ops, &engraveTheme)
-			if completed {
-				return
-			}
+		completed := NewEngraveScreen(ctx, data).Engrave(ctx, ops, &engraveTheme)
+		if completed {
+			return
 		}
 	}
 }
@@ -2211,7 +2107,7 @@ func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point
 		s.words = make([]Clickable, len(mnemonic))
 	}
 	op.ColorOp(ops, th.Background)
-	layoutTitle(ctx, ops, dims.X, th.Text, "Confirm Seed")
+	layoutTitle(ctx, ops, dims.X, th.Text, "Engrave Seed")
 
 	style := ctx.Styles.word
 	longestPrefix := style.Measure(math.MaxInt, "24: ")
@@ -2355,10 +2251,9 @@ func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mn
 
 type DescriptorScreen struct {
 	Descriptor *bip380.Descriptor
-	Mnemonic   bip39.Mnemonic
 }
 
-func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (int, bool) {
+func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (Plate, bool) {
 	showErr := func(errScreen *ErrorScreen) {
 		for {
 			dims := ctx.Platform.DisplaySize()
@@ -2373,63 +2268,42 @@ func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (int, b
 		}
 	}
 	backBtn := &Clickable{Button: Button1}
-	infoBtn := &Clickable{Button: Button2}
+	// TODO: re-enable addresses screen.
+	// infoBtn := &Clickable{Button: Button2}
 	confirmBtn := &Clickable{Button: Button3}
 	for {
 		if backBtn.Clicked(ctx) {
-			return 0, false
+			return Plate{}, false
 		}
-		for infoBtn.Clicked(ctx) {
-			ShowAddressesScreen(ctx, ops, th, s.Descriptor)
-		}
-		for confirmBtn.Clicked(ctx) {
-			if err := validateDescriptor(ctx.Platform.EngraverParams(), s.Descriptor); err != nil {
+		// for infoBtn.Clicked(ctx) {
+		// 	ShowAddressesScreen(ctx, ops, th, s.Descriptor)
+		// }
+		if confirmBtn.Clicked(ctx) {
+			labels, engravings, err := validateDescriptor(ctx.Platform.EngraverParams(), ctx.Platform.PlateSizes(), s.Descriptor)
+			if err != nil {
 				showErr(NewErrorScreen(err))
 				continue
 			}
-			keyIdx, ok := descriptorKeyIdx(s.Descriptor, s.Mnemonic, "")
-			if !ok {
-				// Passphrase protected seeds don't match the descriptor, so
-				// allow the user to ignore the mismatch. Don't allow this for
-				// multisig descriptors where we can't know which key the seed
-				// belongs to.
-				if len(s.Descriptor.Keys) == 1 {
-					confirm := &ConfirmWarningScreen{
-						Title: strings.ToTitle("Unknown Wallet"),
-						Body:  "The wallet does not match the seed.\n\nIf it is passphrase protected, long press to confirm.",
-						Icon:  assets.IconCheckmark,
-					}
-				loop:
-					for {
-						dims := ctx.Platform.DisplaySize()
-						res := confirm.Layout(ctx, ops.Begin(), th, dims)
-						d := ops.End()
-						switch res {
-						case ConfirmYes:
-							return 0, true
-						case ConfirmNo:
-							break loop
-						}
-						s.Draw(ctx, ops, th, dims)
-						d.Add(ops)
-						ctx.Frame()
-					}
-				} else {
-					showErr(&ErrorScreen{
-						Title: "Unknown Wallet",
-						Body:  "The wallet does not match the seed or is passphrase protected.",
-					})
-				}
-				continue
+			cs := &ChoiceScreen{
+				Title:   "Engrave",
+				Lead:    "Choose engraving",
+				Choices: labels,
 			}
-			return keyIdx, true
+			choice, ok := cs.Choose(ctx, ops, th)
+			if ok {
+				e := engravings[choice]
+				return Plate{
+					Size: e.Size,
+					Plan: e.Plan,
+				}, true
+			}
 		}
 
 		dims := ctx.Platform.DisplaySize()
 		s.Draw(ctx, ops, th, dims)
 		layoutNavigation(ops, th, dims, []NavButton{
 			{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack},
-			{Clickable: infoBtn, Style: StyleSecondary, Icon: assets.IconInfo},
+			// {Clickable: infoBtn, Style: StyleSecondary, Icon: assets.IconInfo},
 			{Clickable: confirmBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		}...)
 		ctx.Frame()
@@ -2444,7 +2318,7 @@ func (s *DescriptorScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image
 
 	// Title.
 	r := layout.Rectangle{Max: dims}
-	layoutTitle(ctx, ops, dims.X, th.Text, "Confirm Wallet")
+	layoutTitle(ctx, ops, dims.X, th.Text, "Engrave Descriptor")
 
 	btnw := assets.NavBtnPrimary.Bounds().Dx()
 	body := r.Shrink(leadingSize, btnw, 0, btnw)
@@ -2489,13 +2363,6 @@ func NewEngraveScreen(ctx *Context, plate Plate) *EngraveScreen {
 		ins = append(ins, EngraveSideA...)
 	default:
 		ins = append(ins, EngraveSideASimple...)
-	}
-	if len(plate.Sides) > 1 {
-		if ext {
-			ins = append(ins, EngraveSideB...)
-		} else {
-			ins = append(ins, EngraveSideBSimple...)
-		}
 	}
 	ins = append(ins, EngraveSuccess...)
 	s := &EngraveScreen{
@@ -2573,7 +2440,7 @@ func (s *EngraveScreen) moveStep(ctx *Context, ops op.Ctx, th *Colors) bool {
 	}
 	ins = s.instructions[s.step]
 	if ins.Type == EngraveInstruction {
-		plan := s.plate.Sides[ins.Side]
+		plan := s.plate.Plan
 		if s.dryRun.enabled {
 			plan = engrave.DryRun(plan)
 		}
@@ -2676,30 +2543,10 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 				}
 			}
 			for backBtn.Clicked(ctx) {
-				if s.canPrev() {
-					s.step--
-				} else {
-					confirm := &ConfirmWarningScreen{
-						Title: strings.ToTitle("Cancel?"),
-						Body:  "This will cancel the engraving process.\n\nHold button to confirm.",
-						Icon:  assets.IconDiscard,
-					}
-				loop2:
-					for {
-						dims := ctx.Platform.DisplaySize()
-						res := confirm.Layout(ctx, ops.Begin(), th, dims)
-						d := ops.End()
-						switch res {
-						case ConfirmNo:
-							break loop2
-						case ConfirmYes:
-							return false
-						}
-						s.draw(ctx, ops, th, dims)
-						d.Add(ops)
-						ctx.Frame()
-					}
+				if !s.canPrev() {
+					return false
 				}
+				s.step--
 				continue
 			}
 			for {
@@ -2777,15 +2624,11 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 	layoutTitle(ctx, ops, dims.X, th.Text, "Engrave Plate")
 
 	r := layout.Rectangle{Max: dims}
-	_, subt := r.CutTop(leadingSize)
-	subtsz := widget.Labelf(ops.Begin(), ctx.Styles.body, th.Text, "%.8x", s.plate.MasterFingerprint)
-	op.Position(ops, ops.End(), subt.N(subtsz).Sub(image.Pt(0, 4)))
 
 	const margin = 8
 	_, content := r.CutTop(leadingSize)
 	ins := s.instructions[s.step]
 	if ins.Type == EngraveInstruction {
-		_, content = subt.CutTop(subtsz.Y)
 		middle, _ := content.CutBottom(leadingSize)
 		op.Offset(ops, middle.Center(assets.ProgressCircle.Bounds().Size()))
 		(&ProgressImage{
