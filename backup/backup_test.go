@@ -13,8 +13,8 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
-	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bip32"
+	"seedhammer.com/bip380"
 	"seedhammer.com/bip39"
 	"seedhammer.com/driver/mjolnir"
 	"seedhammer.com/engrave"
@@ -42,12 +42,12 @@ func TestEngraveErrors(t *testing.T) {
 	}
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("error-%d", i), func(t *testing.T) {
-			desc := &urtypes.OutputDescriptor{
+			desc := &bip380.Descriptor{
 				Title:     "Satoshi Stash",
-				Script:    urtypes.P2WSH,
+				Script:    bip380.P2WSH,
 				Threshold: test.threshold,
-				Type:      urtypes.SortedMulti,
-				Keys:      make([]urtypes.KeyDescriptor, test.keys),
+				Type:      bip380.SortedMulti,
+				Keys:      make([]bip380.Key, test.keys),
 			}
 			_, descDesc := genTestPlate(t, desc, test.path, test.seedLen, 0, LargePlate)
 			const ppmm = 4
@@ -69,12 +69,12 @@ func BenchmarkEngraving(b *testing.B) {
 		hdkeychain.HardenedKeyStart + 0,
 		hdkeychain.HardenedKeyStart + 2,
 	}
-	outDesc := &urtypes.OutputDescriptor{
+	outDesc := &bip380.Descriptor{
 		Title:     "Satoshi Stash",
-		Script:    urtypes.P2WSH,
+		Script:    bip380.P2WSH,
 		Threshold: 1,
-		Type:      urtypes.Singlesig,
-		Keys:      make([]urtypes.KeyDescriptor, 1),
+		Type:      bip380.Singlesig,
+		Keys:      make([]bip380.Key, 1),
 	}
 	seed, desc := genTestPlate(b, outDesc, p2wsh, 24, 0, SquarePlate)
 	for b.Loop() {
@@ -98,30 +98,30 @@ func TestEngrave(t *testing.T) {
 		threshold int
 		keys      int
 		side      int
-		script    urtypes.Script
+		script    bip380.Script
 		seedLen   int
 		size      PlateSize
 	}{
 		// Seed only variants.
-		{1, 1, 0, urtypes.P2SH, 12, SquarePlate},
-		{1, 1, 0, urtypes.P2TR, 24, SquarePlate},
-		{1, 1, 1, urtypes.P2WPKH, 24, SquarePlate},
+		{1, 1, 0, bip380.P2SH, 12, SquarePlate},
+		{1, 1, 0, bip380.P2TR, 24, SquarePlate},
+		{1, 1, 1, bip380.P2WPKH, 24, SquarePlate},
 
-		{1, 1, 0, urtypes.P2WSH, 12, SquarePlate},
-		{1, 1, 0, urtypes.P2WSH, 24, SquarePlate},
-		{3, 5, 1, urtypes.P2SH_P2WSH, 24, LargePlate},
+		{1, 1, 0, bip380.P2WSH, 12, SquarePlate},
+		{1, 1, 0, bip380.P2WSH, 24, SquarePlate},
+		{3, 5, 1, bip380.P2SH_P2WSH, 24, LargePlate},
 
 		// Descriptor variants, seed side.
-		{1, 1, 1, urtypes.P2SH_P2WSH, 12, SquarePlate},
-		{1, 1, 1, urtypes.P2SH_P2WSH, 24, SquarePlate},
-		{1, 2, 1, urtypes.P2SH_P2WSH, 12, LargePlate},
-		{3, 5, 1, urtypes.P2SH_P2WSH, 24, LargePlate},
+		{1, 1, 1, bip380.P2SH_P2WSH, 12, SquarePlate},
+		{1, 1, 1, bip380.P2SH_P2WSH, 24, SquarePlate},
+		{1, 2, 1, bip380.P2SH_P2WSH, 12, LargePlate},
+		{3, 5, 1, bip380.P2SH_P2WSH, 24, LargePlate},
 		// Descriptor side.
-		{1, 1, 0, urtypes.P2SH_P2WSH, 12, SquarePlate},
-		{1, 2, 0, urtypes.P2SH_P2WSH, 12, LargePlate},
-		{2, 3, 0, urtypes.P2SH_P2WSH, 12, SquarePlate},
-		{3, 5, 0, urtypes.P2SH_P2WSH, 12, LargePlate},
-		{9, 10, 0, urtypes.P2SH_P2WSH, 12, SquarePlate},
+		{1, 1, 0, bip380.P2SH_P2WSH, 12, SquarePlate},
+		{1, 2, 0, bip380.P2SH_P2WSH, 12, LargePlate},
+		{2, 3, 0, bip380.P2SH_P2WSH, 12, SquarePlate},
+		{3, 5, 0, bip380.P2SH_P2WSH, 12, LargePlate},
+		{9, 10, 0, bip380.P2SH_P2WSH, 12, SquarePlate},
 	}
 	for i, test := range tests {
 		i, test := i, test
@@ -129,15 +129,15 @@ func TestEngrave(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			desc := &urtypes.OutputDescriptor{
+			desc := &bip380.Descriptor{
 				Title:     "Satoshi Stash",
 				Script:    test.script,
 				Threshold: test.threshold,
-				Type:      urtypes.Singlesig,
-				Keys:      make([]urtypes.KeyDescriptor, test.keys),
+				Type:      bip380.Singlesig,
+				Keys:      make([]bip380.Key, test.keys),
 			}
 			if len(desc.Keys) > 1 {
-				desc.Type = urtypes.SortedMulti
+				desc.Type = bip380.SortedMulti
 			}
 			path := desc.Script.DerivationPath()
 			seedDesc, descDesc := genTestPlate(t, desc, path, test.seedLen, 0, test.size)
@@ -228,15 +228,15 @@ func TestSplitUR(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			for m := 1; m <= n; m++ {
-				desc := &urtypes.OutputDescriptor{
+				desc := &bip380.Descriptor{
 					Title:     "Some title",
-					Script:    urtypes.P2WSH,
+					Script:    bip380.P2WSH,
 					Threshold: m,
-					Type:      urtypes.Singlesig,
-					Keys:      make([]urtypes.KeyDescriptor, n),
+					Type:      bip380.Singlesig,
+					Keys:      make([]bip380.Key, n),
 				}
 				if len(desc.Keys) > 1 {
-					desc.Type = urtypes.SortedMulti
+					desc.Type = bip380.SortedMulti
 				}
 				genTestPlate(t, desc, desc.Script.DerivationPath(), 12, 0, LargePlate)
 				if !Recoverable(desc) {
@@ -266,7 +266,7 @@ func TestTitleString(t *testing.T) {
 	}
 }
 
-func genTestPlate(t testing.TB, desc *urtypes.OutputDescriptor, path []uint32, seedlen int, keyIdx int, plateSize PlateSize) (Seed, Descriptor) {
+func genTestPlate(t testing.TB, desc *bip380.Descriptor, path []uint32, seedlen int, keyIdx int, plateSize PlateSize) (Seed, Descriptor) {
 	var mnemonic bip39.Mnemonic
 	for i := range desc.Keys {
 		m := make(bip39.Mnemonic, seedlen)
@@ -282,7 +282,7 @@ func genTestPlate(t testing.TB, desc *urtypes.OutputDescriptor, path []uint32, s
 		}
 		if len(path) == 0 {
 			// Ensure the master fingerprint is derived.
-			path = urtypes.Path{0}
+			path = bip32.Path{0}
 		}
 		mfp, xpub, err := bip32.Derive(mk, path)
 		if err != nil {
@@ -292,7 +292,7 @@ func genTestPlate(t testing.TB, desc *urtypes.OutputDescriptor, path []uint32, s
 		if err != nil {
 			t.Fatal(err)
 		}
-		desc.Keys[i] = urtypes.KeyDescriptor{
+		desc.Keys[i] = bip380.Key{
 			Network:           network,
 			MasterFingerprint: mfp,
 			DerivationPath:    path,

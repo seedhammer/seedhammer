@@ -14,6 +14,7 @@ import (
 	"seedhammer.com/bc/fountain"
 	"seedhammer.com/bc/ur"
 	"seedhammer.com/bc/urtypes"
+	"seedhammer.com/bip380"
 	"seedhammer.com/bip39"
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/vector"
@@ -48,7 +49,7 @@ type Seed struct {
 }
 
 type Descriptor struct {
-	Descriptor *urtypes.OutputDescriptor
+	Descriptor *bip380.Descriptor
 	KeyIdx     int
 	Font       *vector.Face
 	Size       PlateSize
@@ -159,7 +160,7 @@ func EngraveDescriptor(params engrave.Params, plate Descriptor) (engrave.Plan, e
 // parts.
 //
 // [UR]: https://github.com/BlockchainCommons/Research/blob/master/papers/bcr-2020-005-ur.md
-func splitUR(desc *urtypes.OutputDescriptor, keyIdx int) (urs []string) {
+func splitUR(desc *bip380.Descriptor, keyIdx int) (urs []string) {
 	var shares [][]int
 	var seqLen int
 	m, n := desc.Threshold, len(desc.Keys)
@@ -205,7 +206,7 @@ func splitUR(desc *urtypes.OutputDescriptor, keyIdx int) (urs []string) {
 		seqLen = 1
 		shares = [][]int{{0}}
 	}
-	data := desc.Encode()
+	data := urtypes.EncodeDescriptor(desc)
 	check := fountain.Checksum(data)
 	for _, frag := range shares {
 		seqNum := fountain.SeqNumFor(seqLen, check, frag)
@@ -215,7 +216,7 @@ func splitUR(desc *urtypes.OutputDescriptor, keyIdx int) (urs []string) {
 	return
 }
 
-func Recoverable(desc *urtypes.OutputDescriptor) bool {
+func Recoverable(desc *bip380.Descriptor) bool {
 	var shares [][]string
 	for k := range desc.Keys {
 		shares = append(shares, splitUR(desc, k))
@@ -247,7 +248,7 @@ func Recoverable(desc *urtypes.OutputDescriptor) bool {
 		if err != nil {
 			return false
 		}
-		gotDesc := got.(*urtypes.OutputDescriptor)
+		gotDesc := got.(*bip380.Descriptor)
 		gotDesc.Title = desc.Title
 		if !reflect.DeepEqual(gotDesc, desc) {
 			return false

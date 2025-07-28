@@ -20,6 +20,7 @@ import (
 	"seedhammer.com/bc/ur"
 	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bip32"
+	"seedhammer.com/bip380"
 	"seedhammer.com/bip39"
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
@@ -46,7 +47,7 @@ type Context struct {
 	Calibrated     bool
 	EmptySDSlot    bool
 	RotateCamera   bool
-	LastDescriptor *urtypes.OutputDescriptor
+	LastDescriptor *bip380.Descriptor
 
 	events []Event
 }
@@ -196,7 +197,7 @@ func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA,
 	r.Y = offy + m.Descent.Ceil()
 }
 
-func ShowAddressesScreen(ctx *Context, ops op.Ctx, th *Colors, desc *urtypes.OutputDescriptor) {
+func ShowAddressesScreen(ctx *Context, ops op.Ctx, th *Colors, desc *bip380.Descriptor) {
 	var s struct {
 		addresses [2][]string
 		page      int
@@ -316,7 +317,7 @@ func shortenAddress(n int, addr string) string {
 	return addr[:n/2] + "......" + addr[len(addr)-n/2:]
 }
 
-func descriptorKeyIdx(desc *urtypes.OutputDescriptor, m bip39.Mnemonic, pass string) (int, bool) {
+func descriptorKeyIdx(desc *bip380.Descriptor, m bip39.Mnemonic, pass string) (int, bool) {
 	if len(desc.Keys) == 0 {
 		return 0, false
 	}
@@ -765,7 +766,7 @@ func NewErrorScreen(err error) *ErrorScreen {
 	}
 }
 
-func validateDescriptor(params engrave.Params, desc *urtypes.OutputDescriptor) error {
+func validateDescriptor(params engrave.Params, desc *bip380.Descriptor) error {
 	keys := make(map[string]bool)
 	for _, k := range desc.Keys {
 		xpub := k.String()
@@ -836,14 +837,14 @@ func masterFingerprintFor(m bip39.Mnemonic, network *chaincfg.Params) (uint32, e
 	if !ok {
 		return 0, errors.New("failed to derive mnemonic master key")
 	}
-	mfp, _, err := bip32.Derive(mk, urtypes.Path{0})
+	mfp, _, err := bip32.Derive(mk, bip32.Path{0})
 	if err != nil {
 		return 0, err
 	}
 	return mfp, nil
 }
 
-func engravePlate(sizes []backup.PlateSize, params engrave.Params, desc *urtypes.OutputDescriptor, keyIdx int, m bip39.Mnemonic) (Plate, error) {
+func engravePlate(sizes []backup.PlateSize, params engrave.Params, desc *bip380.Descriptor, keyIdx int, m bip39.Mnemonic) (Plate, error) {
 	mfp, err := masterFingerprintFor(m, desc.Keys[keyIdx].Network)
 	if err != nil {
 		return Plate{}, err
@@ -2101,7 +2102,7 @@ func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point
 	fadeClip(ops, ops.End(), image.Rectangle(list))
 }
 
-func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) (*urtypes.OutputDescriptor, bool) {
+func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) (*bip380.Descriptor, bool) {
 	cs := &ChoiceScreen{
 		Title:   "Descriptor",
 		Lead:    "Choose input method",
@@ -2139,7 +2140,7 @@ func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mn
 			if !ok {
 				continue
 			}
-			desc, ok := res.(*urtypes.OutputDescriptor)
+			desc, ok := res.(*bip380.Descriptor)
 			if !ok {
 				if b, isbytes := res.([]byte); isbytes {
 					d, err := nonstandard.OutputDescriptor(b)
@@ -2176,7 +2177,7 @@ func inputDescriptorFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mn
 }
 
 type DescriptorScreen struct {
-	Descriptor *urtypes.OutputDescriptor
+	Descriptor *bip380.Descriptor
 	Mnemonic   bip39.Mnemonic
 }
 
@@ -2299,7 +2300,7 @@ func (s *DescriptorScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image
 			testnet = " (testnet)"
 		}
 		switch desc.Type {
-		case urtypes.Singlesig:
+		case bip380.Singlesig:
 			bodytxt.Add(ops, bodyst, body.Dx(), th.Text, "Singlesig%s", testnet)
 		default:
 			bodytxt.Add(ops, bodyst, body.Dx(), th.Text, "%d-of-%d multisig%s", desc.Threshold, len(desc.Keys), testnet)

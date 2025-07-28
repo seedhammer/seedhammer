@@ -20,8 +20,8 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/kortschak/qr"
 	"seedhammer.com/backup"
-	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bip32"
+	"seedhammer.com/bip380"
 	"seedhammer.com/bip39"
 	"seedhammer.com/driver/mjolnir"
 	"seedhammer.com/engrave"
@@ -32,31 +32,31 @@ import (
 )
 
 func TestDescriptorScreenError(t *testing.T) {
-	dupDesc := &urtypes.OutputDescriptor{
-		Script:    urtypes.P2WSH,
-		Type:      urtypes.SortedMulti,
+	dupDesc := &bip380.Descriptor{
+		Script:    bip380.P2WSH,
+		Type:      bip380.SortedMulti,
 		Threshold: 2,
-		Keys:      make([]urtypes.KeyDescriptor, 2),
+		Keys:      make([]bip380.Key, 2),
 	}
 	dupMnemonic := fillDescriptor(t, dupDesc, dupDesc.Script.DerivationPath(), 12, 0)
 	dupDesc.Keys[1] = dupDesc.Keys[0]
-	smallDesc := &urtypes.OutputDescriptor{
-		Script:    urtypes.P2WSH,
-		Type:      urtypes.SortedMulti,
+	smallDesc := &bip380.Descriptor{
+		Script:    bip380.P2WSH,
+		Type:      bip380.SortedMulti,
 		Threshold: 2,
-		Keys:      make([]urtypes.KeyDescriptor, 5),
+		Keys:      make([]bip380.Key, 5),
 	}
 	smallMnemonic := fillDescriptor(t, smallDesc, smallDesc.Script.DerivationPath(), 12, 0)
-	okDesc := &urtypes.OutputDescriptor{
-		Script:    urtypes.P2WSH,
-		Type:      urtypes.SortedMulti,
+	okDesc := &bip380.Descriptor{
+		Script:    bip380.P2WSH,
+		Type:      bip380.SortedMulti,
 		Threshold: 3,
-		Keys:      make([]urtypes.KeyDescriptor, 5),
+		Keys:      make([]bip380.Key, 5),
 	}
 	okMnemonic := fillDescriptor(t, okDesc, okDesc.Script.DerivationPath(), 12, 0)
 	tests := []struct {
 		name     string
-		desc     *urtypes.OutputDescriptor
+		desc     *bip380.Descriptor
 		mnemonic bip39.Mnemonic
 		ok       bool
 	}{
@@ -85,27 +85,27 @@ func TestDescriptorScreenError(t *testing.T) {
 
 func TestValidateDescriptor(t *testing.T) {
 	// Duplicate key.
-	dup := &urtypes.OutputDescriptor{
-		Script:    urtypes.P2WSH,
+	dup := &bip380.Descriptor{
+		Script:    bip380.P2WSH,
 		Threshold: 1,
-		Type:      urtypes.SortedMulti,
-		Keys:      make([]urtypes.KeyDescriptor, 2),
+		Type:      bip380.SortedMulti,
+		Keys:      make([]bip380.Key, 2),
 	}
 	fillDescriptor(t, dup, dup.Script.DerivationPath(), 12, 0)
 	dup.Keys[1] = dup.Keys[0]
 
 	// Threshold too small.
-	smallDesc := &urtypes.OutputDescriptor{
-		Script:    urtypes.P2WSH,
+	smallDesc := &bip380.Descriptor{
+		Script:    bip380.P2WSH,
 		Threshold: 2,
-		Type:      urtypes.SortedMulti,
-		Keys:      make([]urtypes.KeyDescriptor, 5),
+		Type:      bip380.SortedMulti,
+		Keys:      make([]bip380.Key, 5),
 	}
 	fillDescriptor(t, smallDesc, smallDesc.Script.DerivationPath(), 12, 0)
 
 	tests := []struct {
 		name string
-		desc *urtypes.OutputDescriptor
+		desc *bip380.Descriptor
 		err  error
 	}{
 		{"duplicate key", dup, new(errDuplicateKey)},
@@ -167,11 +167,11 @@ func opsContains(ops *op.Ops, str string) bool {
 
 func TestAllocs(t *testing.T) {
 	res := testing.Benchmark(func(b *testing.B) {
-		desc := &urtypes.OutputDescriptor{
-			Script:    urtypes.P2WSH,
-			Type:      urtypes.SortedMulti,
+		desc := &bip380.Descriptor{
+			Script:    bip380.P2WSH,
+			Type:      bip380.SortedMulti,
 			Threshold: 2,
-			Keys:      make([]urtypes.KeyDescriptor, 5),
+			Keys:      make([]bip380.Key, 5),
 		}
 		m := fillDescriptor(t, desc, desc.Script.DerivationPath(), 12, 0)
 		ds := &DescriptorScreen{
@@ -339,11 +339,11 @@ func TestEngraveError(t *testing.T) {
 	for i, test := range tests {
 		name := fmt.Sprintf("%d-%d-of-%d", i, test.threshold, test.keys)
 		t.Run(name, func(t *testing.T) {
-			desc := &urtypes.OutputDescriptor{
-				Script:    urtypes.P2WSH,
+			desc := &bip380.Descriptor{
+				Script:    bip380.P2WSH,
 				Threshold: test.threshold,
-				Type:      urtypes.SortedMulti,
-				Keys:      make([]urtypes.KeyDescriptor, test.keys),
+				Type:      bip380.SortedMulti,
+				Keys:      make([]bip380.Key, test.keys),
 			}
 			mnemonic := fillDescriptor(t, desc, test.path, 12, 0)
 			_, err := engravePlate(plateSizes, mjolnir.Params, desc, 0, mnemonic)
@@ -603,7 +603,7 @@ func TestSeed(t *testing.T) {
 	if !ok {
 		t.Fatal("failed to derive master key")
 	}
-	mfp, _, err := bip32.Derive(mk, urtypes.Path{0})
+	mfp, _, err := bip32.Derive(mk, bip32.Path{0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -703,7 +703,7 @@ func TestMulti(t *testing.T) {
 	}
 }
 
-func fillDescriptor(t *testing.T, desc *urtypes.OutputDescriptor, path urtypes.Path, seedlen int, keyIdx int) bip39.Mnemonic {
+func fillDescriptor(t *testing.T, desc *bip380.Descriptor, path bip32.Path, seedlen int, keyIdx int) bip39.Mnemonic {
 	var mnemonic bip39.Mnemonic
 	for i := range desc.Keys {
 		m := make(bip39.Mnemonic, seedlen)
@@ -725,7 +725,7 @@ func fillDescriptor(t *testing.T, desc *urtypes.OutputDescriptor, path urtypes.P
 		if err != nil {
 			t.Fatal(err)
 		}
-		desc.Keys[i] = urtypes.KeyDescriptor{
+		desc.Keys[i] = bip380.Key{
 			Network:           network,
 			MasterFingerprint: mfp,
 			DerivationPath:    path,
@@ -982,19 +982,19 @@ func mnemonicFor(phrase string) bip39.Mnemonic {
 }
 
 var twoOfThree = struct {
-	Descriptor *urtypes.OutputDescriptor
+	Descriptor *bip380.Descriptor
 	Mnemonic   bip39.Mnemonic
 }{
 	Mnemonic: mnemonicFor("flip begin artist fringe online release swift genre wool general transfer arm"),
-	Descriptor: &urtypes.OutputDescriptor{
-		Script:    urtypes.P2WSH,
+	Descriptor: &bip380.Descriptor{
+		Script:    bip380.P2WSH,
 		Threshold: 2,
-		Type:      urtypes.SortedMulti,
-		Keys: []urtypes.KeyDescriptor{
+		Type:      bip380.SortedMulti,
+		Keys: []bip380.Key{
 			{
 				Network:           &chaincfg.MainNetParams,
 				MasterFingerprint: 0x5a0804e3,
-				DerivationPath:    urtypes.Path{0x80000030, 0x80000000, 0x80000000, 0x80000002},
+				DerivationPath:    bip32.Path{0x80000030, 0x80000000, 0x80000000, 0x80000002},
 				KeyData:           []byte{0x3, 0xa9, 0x39, 0x4a, 0x2f, 0x1a, 0x4f, 0x99, 0x61, 0x3a, 0x71, 0x69, 0x56, 0xc8, 0x54, 0xf, 0x6d, 0xba, 0x6f, 0x18, 0x93, 0x1c, 0x26, 0x39, 0x10, 0x72, 0x21, 0xb2, 0x67, 0xd7, 0x40, 0xaf, 0x23},
 				ChainCode:         []byte{0xdb, 0xe8, 0xc, 0xbb, 0x4e, 0xe, 0x41, 0x8b, 0x6, 0xf4, 0x70, 0xd2, 0xaf, 0xe7, 0xa8, 0xc1, 0x7b, 0xe7, 0x1, 0xab, 0x20, 0x6c, 0x59, 0xa6, 0x5e, 0x65, 0xa8, 0x24, 0x1, 0x6a, 0x6c, 0x70},
 				ParentFingerprint: 0xc7bce7a8,
@@ -1002,7 +1002,7 @@ var twoOfThree = struct {
 			{
 				Network:           &chaincfg.MainNetParams,
 				MasterFingerprint: 0xdd4fadee,
-				DerivationPath:    urtypes.Path{0x80000030, 0x80000000, 0x80000000, 0x80000002},
+				DerivationPath:    bip32.Path{0x80000030, 0x80000000, 0x80000000, 0x80000002},
 				KeyData:           []byte{0x2, 0x21, 0x96, 0xad, 0xc2, 0x5f, 0xde, 0x16, 0x9f, 0xe9, 0x2e, 0x70, 0x76, 0x90, 0x59, 0x10, 0x22, 0x75, 0xd2, 0xb4, 0xc, 0xc9, 0x87, 0x76, 0xea, 0xab, 0x92, 0xb8, 0x2a, 0x86, 0x13, 0x5e, 0x92},
 				ChainCode:         []byte{0x43, 0x8e, 0xff, 0x7b, 0x3b, 0x36, 0xb6, 0xd1, 0x1a, 0x60, 0xa2, 0x2c, 0xcb, 0x93, 0x6, 0xee, 0xa3, 0x5, 0xb0, 0x43, 0x9f, 0x1e, 0xa0, 0x9d, 0x59, 0x28, 0x1, 0x5d, 0xe3, 0x73, 0x81, 0x16},
 				ParentFingerprint: 0x22969377,
@@ -1010,7 +1010,7 @@ var twoOfThree = struct {
 			{
 				Network:           &chaincfg.MainNetParams,
 				MasterFingerprint: 0x9bacd5c0,
-				DerivationPath:    urtypes.Path{0x80000030, 0x80000000, 0x80000000, 0x80000002},
+				DerivationPath:    bip32.Path{0x80000030, 0x80000000, 0x80000000, 0x80000002},
 				KeyData:           []byte{0x2, 0xfb, 0x72, 0x50, 0x7f, 0xc2, 0xd, 0xdb, 0xa9, 0x29, 0x91, 0xb1, 0x7c, 0x4b, 0xb4, 0x66, 0x13, 0xa, 0xd9, 0x3a, 0x88, 0x6e, 0x73, 0x17, 0x50, 0x33, 0xbb, 0x43, 0xe3, 0xbc, 0x78, 0x5a, 0x6d},
 				ChainCode:         []byte{0x95, 0xb3, 0x49, 0x13, 0x93, 0x7f, 0xa5, 0xf1, 0xc6, 0x20, 0x5b, 0x52, 0x5b, 0xb5, 0x7d, 0xe1, 0x51, 0x76, 0x25, 0xe0, 0x45, 0x86, 0xb5, 0x95, 0xbe, 0x68, 0xe7, 0x13, 0x62, 0xd3, 0xed, 0xc5},
 				ParentFingerprint: 0x97ec38f9,

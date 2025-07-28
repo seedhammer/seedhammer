@@ -14,29 +14,29 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	"seedhammer.com/bc/urtypes"
+	"seedhammer.com/bip380"
 )
 
-func Change(desc *urtypes.OutputDescriptor, index uint32) (string, error) {
+func Change(desc *bip380.Descriptor, index uint32) (string, error) {
 	return address(desc, index, true)
 }
 
-func Receive(desc *urtypes.OutputDescriptor, index uint32) (string, error) {
+func Receive(desc *bip380.Descriptor, index uint32) (string, error) {
 	return address(desc, index, false)
 }
 
-func Supported(desc *urtypes.OutputDescriptor) bool {
+func Supported(desc *bip380.Descriptor) bool {
 	_, err := Receive(desc, 0)
 	return !errors.Is(err, errUnsupported)
 }
 
 var errUnsupported = errors.New("unsupported descriptor")
 
-func address(desc *urtypes.OutputDescriptor, index uint32, change bool) (string, error) {
+func address(desc *bip380.Descriptor, index uint32, change bool) (string, error) {
 	var addr btcutil.Address
 	var network *chaincfg.Params
 	switch desc.Type {
-	case urtypes.SortedMulti:
+	case bip380.SortedMulti:
 		var keys []*btcutil.AddressPubKey
 		for _, k := range desc.Keys {
 			pub, err := derivePubKey(k, index, change)
@@ -61,9 +61,9 @@ func address(desc *urtypes.OutputDescriptor, index uint32, change bool) (string,
 			return "", fmt.Errorf("address: %w", err)
 		}
 		switch desc.Script {
-		case urtypes.P2SH:
+		case bip380.P2SH:
 			addr, err = btcutil.NewAddressScriptHash(script, network)
-		case urtypes.P2WSH, urtypes.P2SH_P2WSH:
+		case bip380.P2WSH, bip380.P2SH_P2WSH:
 			hash := sha256.Sum256(script)
 			addr, err = btcutil.NewAddressWitnessScriptHash(hash[:], network)
 		default:
@@ -72,7 +72,7 @@ func address(desc *urtypes.OutputDescriptor, index uint32, change bool) (string,
 		if err != nil {
 			return "", fmt.Errorf("address: %w", err)
 		}
-	case urtypes.Singlesig:
+	case bip380.Singlesig:
 		k := desc.Keys[0]
 		network = k.Network
 		pub, err := derivePubKey(k, index, change)
@@ -80,13 +80,13 @@ func address(desc *urtypes.OutputDescriptor, index uint32, change bool) (string,
 			return "", fmt.Errorf("address: %w", err)
 		}
 		switch desc.Script {
-		case urtypes.P2PKH:
+		case bip380.P2PKH:
 			pkHash := btcutil.Hash160(pub.SerializeCompressed())
 			addr, err = btcutil.NewAddressPubKeyHash(pkHash, network)
-		case urtypes.P2WPKH, urtypes.P2SH_P2WPKH:
+		case bip380.P2WPKH, bip380.P2SH_P2WPKH:
 			pkHash := btcutil.Hash160(pub.SerializeCompressed())
 			addr, err = btcutil.NewAddressWitnessPubKeyHash(pkHash, network)
-		case urtypes.P2TR:
+		case bip380.P2TR:
 			tkey := txscript.ComputeTaprootKeyNoScript(pub)
 			addr, err = btcutil.NewAddressTaproot(schnorr.SerializePubKey(tkey), network)
 		default:
@@ -100,7 +100,7 @@ func address(desc *urtypes.OutputDescriptor, index uint32, change bool) (string,
 	}
 	// Derive wrapped address types.
 	switch desc.Script {
-	case urtypes.P2SH_P2WPKH, urtypes.P2SH_P2WSH:
+	case bip380.P2SH_P2WPKH, bip380.P2SH_P2WSH:
 		script, err := txscript.PayToAddrScript(addr)
 		if err != nil {
 			return "", fmt.Errorf("address: %w", err)
@@ -113,18 +113,18 @@ func address(desc *urtypes.OutputDescriptor, index uint32, change bool) (string,
 	return addr.String(), nil
 }
 
-func derivePubKey(k urtypes.KeyDescriptor, index uint32, change bool) (*secp256k1.PublicKey, error) {
+func derivePubKey(k bip380.Key, index uint32, change bool) (*secp256k1.PublicKey, error) {
 	children := k.Children
 	if len(children) == 0 {
 		// Default to <0;1>/*.
 		children = append(children,
-			urtypes.Derivation{
-				Type:  urtypes.RangeDerivation,
+			bip380.Derivation{
+				Type:  bip380.RangeDerivation,
 				Index: 0,
 				End:   1,
 			},
-			urtypes.Derivation{
-				Type: urtypes.WildcardDerivation,
+			bip380.Derivation{
+				Type: bip380.WildcardDerivation,
 			},
 		)
 	}
@@ -132,9 +132,9 @@ func derivePubKey(k urtypes.KeyDescriptor, index uint32, change bool) (*secp256k
 	for _, c := range children {
 		var id uint32
 		switch c.Type {
-		case urtypes.ChildDerivation:
+		case bip380.ChildDerivation:
 			id = c.Index
-		case urtypes.RangeDerivation:
+		case bip380.RangeDerivation:
 			if c.End != c.Index+1 {
 				return nil, errors.New("unsupported range path element")
 			}
@@ -142,7 +142,7 @@ func derivePubKey(k urtypes.KeyDescriptor, index uint32, change bool) (*secp256k
 			if change {
 				id = c.End
 			}
-		case urtypes.WildcardDerivation:
+		case bip380.WildcardDerivation:
 			id = index
 		default:
 			return nil, errors.New("unsupported path element")

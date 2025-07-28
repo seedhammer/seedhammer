@@ -11,12 +11,10 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 
-	"github.com/btcsuite/btcd/btcutil/hdkeychain"
-	"github.com/btcsuite/btcd/chaincfg"
-	"seedhammer.com/bc/urtypes"
+	"seedhammer.com/bip32"
+	"seedhammer.com/bip380"
 )
 
 // ElectrumSeed reports whether the seed phrase is a valid Electrum
@@ -34,11 +32,11 @@ func ElectrumSeed(phrase string) bool {
 	return false
 }
 
-func OutputDescriptor(enc []byte) (*urtypes.OutputDescriptor, error) {
+func OutputDescriptor(enc []byte) (*bip380.Descriptor, error) {
 	if bw, err := parseBlueWalletDescriptor(string(enc)); err == nil && bw.Title != "" {
 		return bw, nil
 	}
-	desc, err := parseTextOutputDescriptor(string(enc))
+	desc, err := bip380.Parse(string(enc))
 	if err == nil {
 		return desc, nil
 	}
@@ -47,7 +45,7 @@ func OutputDescriptor(enc []byte) (*urtypes.OutputDescriptor, error) {
 		Descriptor string `json:"descriptor"`
 	}
 	if err := json.Unmarshal(enc, &jsonDesc); err == nil {
-		desc, err := parseTextOutputDescriptor(jsonDesc.Descriptor)
+		desc, err := bip380.Parse(jsonDesc.Descriptor)
 		if err != nil {
 			return desc, err
 		}
@@ -56,17 +54,17 @@ func OutputDescriptor(enc []byte) (*urtypes.OutputDescriptor, error) {
 	}
 	// If the derivation path of a cosigner key expression matches
 	// a single-sig script, convert it to an output descriptor.
-	if k, err := parseHDKeyExpr(nil, enc); err == nil {
-		for _, s := range []urtypes.Script{urtypes.P2PKH, urtypes.P2WPKH, urtypes.P2SH_P2WPKH} {
+	if k, err := bip380.ParseKey(nil, enc); err == nil {
+		for _, s := range []bip380.Script{bip380.P2PKH, bip380.P2WPKH, bip380.P2SH_P2WPKH} {
 			path := s.DerivationPath()
 			if !reflect.DeepEqual(path, k.DerivationPath) {
 				continue
 			}
-			return &urtypes.OutputDescriptor{
-				Type:      urtypes.Singlesig,
+			return &bip380.Descriptor{
+				Type:      bip380.Singlesig,
 				Threshold: 1,
 				Script:    s,
-				Keys: []urtypes.KeyDescriptor{
+				Keys: []bip380.Key{
 					k,
 				},
 			}, nil
@@ -75,13 +73,13 @@ func OutputDescriptor(enc []byte) (*urtypes.OutputDescriptor, error) {
 	return nil, errors.New("nonstandard: unrecognized output descriptor format")
 }
 
-func parseBlueWalletDescriptor(txt string) (*urtypes.OutputDescriptor, error) {
+func parseBlueWalletDescriptor(txt string) (*bip380.Descriptor, error) {
 	lines := strings.Split(txt, "\n")
-	desc := &urtypes.OutputDescriptor{
-		Type: urtypes.SortedMulti,
+	desc := &bip380.Descriptor{
+		Type: bip380.SortedMulti,
 	}
 	var nkeys int
-	var path urtypes.Path
+	var path bip32.Path
 	seenKeys := make(map[string]string)
 	for len(lines) > 0 {
 		l := lines[0]
@@ -112,7 +110,7 @@ func parseBlueWalletDescriptor(txt string) (*urtypes.OutputDescriptor, error) {
 			if !strings.HasPrefix(val, "m/") {
 				return nil, fmt.Errorf("bluewallet: invalid derivation: %q", val)
 			}
-			p, err := parseDerivationPath(val[2:])
+			p, err := bip32.ParsePath(val[2:])
 			if err != nil {
 				return nil, fmt.Errorf("bluewallet: invalid derivation: %q", val)
 			}
@@ -120,16 +118,16 @@ func parseBlueWalletDescriptor(txt string) (*urtypes.OutputDescriptor, error) {
 		case "Format":
 			switch val {
 			case "P2WSH":
-				desc.Script = urtypes.P2WSH
+				desc.Script = bip380.P2WSH
 			case "P2SH":
-				desc.Script = urtypes.P2SH
+				desc.Script = bip380.P2SH
 			case "P2WSH-P2SH":
-				desc.Script = urtypes.P2SH_P2WSH
+				desc.Script = bip380.P2SH_P2WSH
 			default:
 				return nil, fmt.Errorf("bluewallet: unknown format %q", val)
 			}
 		default:
-			_, xpub, err := parseHDKey(val)
+			_, xpub, err := bip380.ParseExtendedKey(val)
 			if err != nil {
 				return nil, fmt.Errorf("bluewallet: invalid xpub: %q", val)
 			}
@@ -144,11 +142,11 @@ func parseBlueWalletDescriptor(txt string) (*urtypes.OutputDescriptor, error) {
 			if len(fp) > 4 {
 				return nil, fmt.Errorf("bluewallet: invalid fingerprint: %q", key)
 			}
-			network, err := networkFor(xpub)
+			network, err := bip32.NetworkFor(xpub)
 			if err != nil {
 				return nil, fmt.Errorf("bluewallet: unknown network: %q", key)
 			}
-			desc.Keys = append(desc.Keys, urtypes.KeyDescriptor{
+			desc.Keys = append(desc.Keys, bip380.Key{
 				Network:           network,
 				MasterFingerprint: binary.BigEndian.Uint32(fp),
 				DerivationPath:    path,
@@ -162,293 +160,6 @@ func parseBlueWalletDescriptor(txt string) (*urtypes.OutputDescriptor, error) {
 		return nil, fmt.Errorf("bluewallet: expected %d keys, but got %d", nkeys, len(desc.Keys))
 	}
 	return desc, nil
-}
-
-func networkFor(xpub *hdkeychain.ExtendedKey) (*chaincfg.Params, error) {
-	networks := []*chaincfg.Params{
-		&chaincfg.MainNetParams,
-		&chaincfg.TestNet3Params,
-		&chaincfg.SimNetParams,
-	}
-	for _, n := range networks {
-		if xpub.IsForNet(n) {
-			return n, nil
-		}
-	}
-	return nil, errors.New("unknown network")
-}
-
-func parsePathElement(p string) (uint32, error) {
-	offset := uint32(0)
-	if strings.HasSuffix(p, "h") || strings.HasSuffix(p, "'") {
-		offset = hdkeychain.HardenedKeyStart
-		p = p[:len(p)-1]
-	}
-	idx, err := strconv.ParseInt(p, 10, 0)
-	if err != nil {
-		return 0, fmt.Errorf("invalid path element: %q", p)
-	}
-	iu32 := uint32(idx)
-	if int64(iu32) != idx || iu32+offset < iu32 {
-		return 0, fmt.Errorf("path element out of range: %q", p)
-	}
-	return iu32 + offset, nil
-}
-
-func parseDerivationPath(path string) (urtypes.Path, error) {
-	var res urtypes.Path
-	parts := strings.Split(path, "/")
-	for _, p := range parts {
-		p, err := parsePathElement(p)
-		if err != nil {
-			return nil, err
-		}
-		res = append(res, p)
-	}
-	return res, nil
-}
-
-func parsePath(path string) ([]urtypes.Derivation, error) {
-	var res []urtypes.Derivation
-	for _, p := range strings.Split(path, "/") {
-		var d urtypes.Derivation
-		switch {
-		case p == "*":
-			d = urtypes.Derivation{Type: urtypes.WildcardDerivation}
-		case p == "*'" || p == "*h":
-			d = urtypes.Derivation{Type: urtypes.WildcardDerivation, Hardened: true}
-		case len(p) > 2 && p[0] == '<' && p[len(p)-1] == '>':
-			starts, ends, ok := strings.Cut(p[1:len(p)-1], ";")
-			if !ok {
-				return nil, fmt.Errorf("invalid range path element: %q", p)
-			}
-			start, err := parsePathElement(starts)
-			if err != nil {
-				return nil, err
-			}
-			end, err := parsePathElement(ends)
-			if err != nil {
-				return nil, err
-			}
-			// Assume for now that ranges can't be hardened.
-			if start > end || start >= hdkeychain.HardenedKeyStart || end >= hdkeychain.HardenedKeyStart {
-				return nil, fmt.Errorf("invalid range path element: %q", p)
-			}
-			d = urtypes.Derivation{
-				Type:  urtypes.RangeDerivation,
-				Index: start,
-				End:   end,
-			}
-		default:
-			e, err := parsePathElement(p)
-			if err != nil {
-				return nil, err
-			}
-			d = urtypes.Derivation{
-				Type:  urtypes.ChildDerivation,
-				Index: e,
-			}
-			if d.Index >= hdkeychain.HardenedKeyStart {
-				d.Index -= hdkeychain.HardenedKeyStart
-				d.Hardened = true
-			}
-		}
-		res = append(res, d)
-	}
-	return res, nil
-}
-
-// parseTextOutputDescriptor parses descriptors in textual form, as described in
-// https://github.com/bitcoin/bitcoin/blob/master/doc/descriptors.md.
-func parseTextOutputDescriptor(desc string) (*urtypes.OutputDescriptor, error) {
-	// Chop off checksum, if any.
-	if start := len(desc) - 9; start >= 0 && desc[start] == '#' {
-		desc = desc[:start]
-	}
-	parseFunc := func() (string, error) {
-		for i, r := range desc {
-			if r == '(' {
-				f := desc[:i]
-				if desc[len(desc)-1] != ')' {
-					return "", errors.New("missing ')'")
-				}
-				desc = desc[i+1 : len(desc)-1]
-				return f, nil
-			}
-		}
-		return "", errors.New("missing '('")
-	}
-	script, err := parseFunc()
-	if err != nil {
-		return nil, fmt.Errorf("descriptor: script: %w", err)
-	}
-	r := &urtypes.OutputDescriptor{
-		Threshold: 1,
-	}
-	switch script {
-	case "wsh":
-		r.Script = urtypes.P2WSH
-	case "pkh":
-		r.Script = urtypes.P2PKH
-	case "sh":
-		r.Script = urtypes.P2SH
-	case "wpkh":
-		r.Script = urtypes.P2WPKH
-	case "tr":
-		r.Script = urtypes.P2TR
-	default:
-		return nil, fmt.Errorf("descriptor: unknown script type: %q", script)
-	}
-	if script2, err := parseFunc(); err == nil {
-		switch script2 {
-		case "wpkh", "wsh":
-			if r.Script != urtypes.P2SH {
-				return nil, fmt.Errorf("descriptor: invalid wrapped script type: %q", script2)
-			}
-			if r.Script != urtypes.P2SH {
-				return nil, fmt.Errorf("descriptor: invalid wrapped script type: %q", script2)
-			}
-			switch script2 {
-			case "wpkh":
-				r.Script = urtypes.P2SH_P2WPKH
-			case "wsh":
-				r.Script = urtypes.P2SH_P2WSH
-			default:
-				return nil, fmt.Errorf("descriptor: unknown script type: %q", script2)
-			}
-			script2, err = parseFunc()
-		}
-		if err == nil {
-			switch script2 {
-			case "sortedmulti":
-				r.Type = urtypes.SortedMulti
-			default:
-				return nil, fmt.Errorf("descriptor: unknown script type: %q", script2)
-			}
-		}
-	}
-	var keys []string
-	switch r.Type {
-	case urtypes.Singlesig:
-		keys = []string{desc}
-	case urtypes.SortedMulti:
-		args := strings.Split(desc, ",")
-		threshold, err := strconv.Atoi(args[0])
-		if err != nil {
-			return nil, fmt.Errorf("descriptor: invalid multikey threshold: %q", desc)
-		}
-		r.Threshold = threshold
-		keys = args[1:]
-	}
-	for _, k := range keys {
-		key, err := parseHDKeyExpr(r.Script.DerivationPath(), []byte(k))
-		if err != nil {
-			return nil, fmt.Errorf("hdkey: %w", err)
-		}
-		r.Keys = append(r.Keys, key)
-	}
-	return r, nil
-}
-
-// parseHDKeyExpr parses an extended key on the form [mfp/path]key.
-func parseHDKeyExpr(impliedPath urtypes.Path, enc []byte) (urtypes.KeyDescriptor, error) {
-	k := string(enc)
-	key := urtypes.KeyDescriptor{
-		DerivationPath: impliedPath,
-	}
-	if len(k) > 0 && k[0] == '[' {
-		end := strings.Index(k, "]")
-		if end == -1 {
-			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: missing ']': %q", k)
-		}
-		originAndPath := k[1:end]
-		k = k[end+1:]
-		if len(originAndPath) < 9 || originAndPath[8] != '/' {
-			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: missing or invalid fingerprint: %q", k)
-		}
-		fp, err := hex.DecodeString(originAndPath[:8])
-		if err != nil {
-			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid fingerprint: %q", k)
-		}
-		key.MasterFingerprint = binary.BigEndian.Uint32(fp)
-		path, err := parseDerivationPath(originAndPath[9:])
-		if err != nil {
-			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid derivation path: %q", k)
-		}
-		key.DerivationPath = path
-	}
-	if xpubEnd := strings.Index(k, "/"); xpubEnd != -1 {
-		children := k[xpubEnd+1:]
-		k = k[:xpubEnd]
-		childPath, err := parsePath(children)
-		if err != nil {
-			return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid children path: %q", k)
-		}
-		key.Children = childPath
-	}
-	script, xpub, err := parseHDKey(k)
-	if err != nil {
-		return urtypes.KeyDescriptor{}, err
-	}
-	if key.DerivationPath == nil {
-		// This is a key with no implicit or explicit derivation path, fall back
-		// to deriving the path from the SLIP-132 version. We support only the
-		// common ones, because ideally the derivation path should always be provided.
-		key.DerivationPath = script.DerivationPath()
-	}
-	pub, err := xpub.ECPubKey()
-	if err != nil {
-		return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid public key: %q", k)
-	}
-	network, err := networkFor(xpub)
-	if err != nil {
-		return urtypes.KeyDescriptor{}, fmt.Errorf("hdkey: invalid network: %q", k)
-	}
-	key.Network = network
-	key.ChainCode = xpub.ChainCode()
-	key.KeyData = pub.SerializeCompressed()
-	key.ParentFingerprint = xpub.ParentFingerprint()
-	return key, nil
-}
-
-// parseHDKey parses an extended key, along with its implied script type. It returns
-// normalized xpubs where the version bytes matches a network.
-func parseHDKey(k string) (urtypes.Script, *hdkeychain.ExtendedKey, error) {
-	xpub, err := hdkeychain.NewKeyFromString(k)
-	if err != nil {
-		return 0, nil, fmt.Errorf("hdkey: invalid extended key: %q", k)
-	}
-	const (
-		xpubVer = "0488b21e"
-		zpubVer = "04b24746"
-		ypubVer = "049d7cb2"
-		YpubVer = "0295b43f"
-		ZpubVer = "02aa7ed3"
-
-		tpubVer = "043587cf"
-	)
-	version := hex.EncodeToString(xpub.Version())
-	var script urtypes.Script
-	switch version {
-	case xpubVer, tpubVer:
-		script = urtypes.P2PKH
-	case zpubVer:
-		script = urtypes.P2WPKH
-	case YpubVer:
-		script = urtypes.P2SH_P2WSH
-	case ZpubVer:
-		script = urtypes.P2WSH
-	default:
-		return 0, nil, fmt.Errorf("hdkey: unsupported version: %s", version)
-	}
-	// Now we have a derivation path, normalize the version bytes to xpub.
-	switch version {
-	case zpubVer, ypubVer, YpubVer, ZpubVer:
-		xpub.SetNet(&chaincfg.MainNetParams)
-	case tpubVer:
-		xpub.SetNet(&chaincfg.TestNet3Params)
-	}
-	return script, xpub, nil
 }
 
 type Decoder struct {

@@ -4,164 +4,26 @@
 package urtypes
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
 	"reflect"
-	"strconv"
-	"strings"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/fxamacker/cbor/v2"
+	"seedhammer.com/bip32"
+	"seedhammer.com/bip380"
 )
 
-type OutputDescriptor struct {
-	Title     string
-	Script    Script
-	Threshold int
-	Type      MultisigType
-	Keys      []KeyDescriptor
-}
-
-type KeyDescriptor struct {
-	Network           *chaincfg.Params
-	MasterFingerprint uint32
-	DerivationPath    Path
-	Children          []Derivation
-	KeyData           []byte
-	ChainCode         []byte
-	ParentFingerprint uint32
-}
-
-type Derivation struct {
-	Type DerivationType
-	// Index is the child index, without the hardening offset.
-	// For RangeDerivations, Index is the start of the range.
-	Index    uint32
-	Hardened bool
-	// End represents the end of a RangeDerivation.
-	End uint32
-}
-
-type DerivationType int
-
-const (
-	ChildDerivation DerivationType = iota
-	WildcardDerivation
-	RangeDerivation
-)
-
-type Script int
-
-const (
-	UnknownScript Script = iota
-	P2SH
-	P2SH_P2WSH
-	P2SH_P2WPKH
-	P2PKH
-	P2WSH
-	P2WPKH
-	P2TR
-)
-
-func (s Script) String() string {
-	switch s {
-	case P2SH:
-		return "Legacy (P2SH)"
-	case P2SH_P2WSH:
-		return "Nested Segwit (P2SH-P2WSH)"
-	case P2SH_P2WPKH:
-		return "Nested Segwit (P2SH-P2WPKH)"
-	case P2PKH:
-		return "Legacy (P2PKH)"
-	case P2WSH:
-		return "Segwit (P2WSH)"
-	case P2WPKH:
-		return "Segwit (P2WPKH)"
-	case P2TR:
-		return "Taproot (P2TR)"
-	default:
-		return "Unknown"
-	}
-}
-
-type MultisigType int
-
-const (
-	Singlesig MultisigType = iota
-	SortedMulti
-)
-
-// Singlesig reports whether the script is for single-sig.
-func (s Script) Singlesig() bool {
-	for _, s2 := range []Script{P2PKH, P2WPKH, P2SH_P2WPKH, P2TR} {
-		if s == s2 {
-			return true
-		}
-	}
-	return false
-}
-
-// DerivationPath returns the standard derivation path
-// for the script. It panics if the script is unknown.
-func (s Script) DerivationPath() Path {
-	switch s {
-	case P2WPKH:
-		return Path{
-			hdkeychain.HardenedKeyStart + 84,
-			hdkeychain.HardenedKeyStart + 0,
-			hdkeychain.HardenedKeyStart + 0,
-		}
-	case P2PKH:
-		return Path{
-			hdkeychain.HardenedKeyStart + 44,
-			hdkeychain.HardenedKeyStart + 0,
-			hdkeychain.HardenedKeyStart + 0,
-		}
-	case P2SH_P2WPKH:
-		return Path{
-			hdkeychain.HardenedKeyStart + 49,
-			hdkeychain.HardenedKeyStart + 0,
-			hdkeychain.HardenedKeyStart + 0,
-		}
-	case P2TR:
-		return Path{
-			hdkeychain.HardenedKeyStart + 86,
-			hdkeychain.HardenedKeyStart + 0,
-			hdkeychain.HardenedKeyStart + 0,
-		}
-	case P2SH:
-		return Path{
-			hdkeychain.HardenedKeyStart + 45,
-		}
-	case P2SH_P2WSH:
-		return Path{
-			hdkeychain.HardenedKeyStart + 48,
-			hdkeychain.HardenedKeyStart + 0,
-			hdkeychain.HardenedKeyStart + 0,
-			hdkeychain.HardenedKeyStart + 1,
-		}
-	case P2WSH:
-		return Path{
-			hdkeychain.HardenedKeyStart + 48,
-			hdkeychain.HardenedKeyStart + 0,
-			hdkeychain.HardenedKeyStart + 0,
-			hdkeychain.HardenedKeyStart + 2,
-		}
-	}
-	panic("unknown script")
-}
-
-// Encode the output descriptor in the format described by
+// EncodeDescriptor encodes d in the format described by
 // [BCR-2020-010].
 //
 // [BCR-2020-010]: https://github.com/BlockchainCommons/Research/blob/master/papers/bcr-2020-010-output-desc.md
-func (o OutputDescriptor) Encode() []byte {
+func EncodeDescriptor(o *bip380.Descriptor) []byte {
 	var v any
 	switch o.Type {
-	case SortedMulti:
+	case bip380.SortedMulti:
 		m := struct {
 			Threshold int        `cbor:"1,keyasint,omitempty"`
 			Keys      []cbor.Tag `cbor:"2,keyasint"`
@@ -171,36 +33,36 @@ func (o OutputDescriptor) Encode() []byte {
 		for _, k := range o.Keys {
 			m.Keys = append(m.Keys, cbor.Tag{
 				Number:  tagHDKey,
-				Content: k.toCBOR(),
+				Content: hdkeyFor(k),
 			})
 		}
 		v = cbor.Tag{
 			Number:  uint64(tagSortedMulti),
 			Content: m,
 		}
-	case Singlesig:
+	case bip380.Singlesig:
 		v = cbor.Tag{
 			Number:  tagHDKey,
-			Content: o.Keys[0].toCBOR(),
+			Content: hdkeyFor(o.Keys[0]),
 		}
 	default:
 		panic("invalid type")
 	}
 	var tags []uint64
 	switch o.Script {
-	case P2SH:
+	case bip380.P2SH:
 		tags = []uint64{tagSH}
-	case P2SH_P2WSH:
+	case bip380.P2SH_P2WSH:
 		tags = []uint64{tagSH, tagWSH}
-	case P2SH_P2WPKH:
+	case bip380.P2SH_P2WPKH:
 		tags = []uint64{tagSH, tagWPKH}
-	case P2PKH:
+	case bip380.P2PKH:
 		tags = []uint64{tagP2PKH}
-	case P2WSH:
+	case bip380.P2WSH:
 		tags = []uint64{tagWSH}
-	case P2WPKH:
+	case bip380.P2WPKH:
 		tags = []uint64{tagWPKH}
-	case P2TR:
+	case bip380.P2TR:
 		tags = []uint64{tagTR}
 	default:
 		panic("invalid type")
@@ -218,36 +80,18 @@ func (o OutputDescriptor) Encode() []byte {
 	return enc
 }
 
-func (k KeyDescriptor) ExtendedKey() *hdkeychain.ExtendedKey {
-	var fp [4]byte
-	binary.BigEndian.PutUint32(fp[:], k.ParentFingerprint)
-	childNum := uint32(0)
-	if len(k.DerivationPath) > 0 {
-		childNum = k.DerivationPath[len(k.DerivationPath)-1]
-	}
-	return hdkeychain.NewExtendedKey(
-		k.Network.HDPublicKeyID[:],
-		k.KeyData, k.ChainCode, fp[:], uint8(len(k.DerivationPath)),
-		childNum, false,
-	)
-}
-
-func (k KeyDescriptor) String() string {
-	return k.ExtendedKey().String()
-}
-
 // Encode the key in the format described by [BCR-2020-007].
 //
 // [BCR-2020-007]: https://github.com/BlockchainCommons/Research/blob/master/papers/bcr-2020-007-hdkey.md
-func (k KeyDescriptor) toCBOR() hdKey {
+func hdkeyFor(k bip380.Key) hdKey {
 	var children []any
 	for _, c := range k.Children {
 		switch c.Type {
-		case ChildDerivation:
+		case bip380.ChildDerivation:
 			children = append(children, c.Index, c.Hardened)
-		case RangeDerivation:
+		case bip380.RangeDerivation:
 			children = append(children, c.Index, c.End, c.Hardened)
-		case WildcardDerivation:
+		case bip380.WildcardDerivation:
 			children = append(children, []any{}, c.Hardened)
 		}
 	}
@@ -270,7 +114,7 @@ func (k KeyDescriptor) toCBOR() hdKey {
 		Origin: keyPath{
 			Fingerprint: k.MasterFingerprint,
 			Depth:       uint8(depth),
-			Components:  k.DerivationPath.components(),
+			Components:  pathComponents(k.DerivationPath),
 		},
 		Children: keyPath{
 			Components: children,
@@ -278,21 +122,7 @@ func (k KeyDescriptor) toCBOR() hdKey {
 	}
 }
 
-// Encode the key in the format described by [BCR-2020-007].
-//
-// [BCR-2020-007]: https://github.com/BlockchainCommons/Research/blob/master/papers/bcr-2020-007-hdkey.md
-func (k KeyDescriptor) Encode() []byte {
-	b, err := encMode.Marshal(k.toCBOR())
-	if err != nil {
-		// Always valid by construction.
-		panic(err)
-	}
-	return b
-}
-
-type Path []uint32
-
-func (p Path) components() []any {
+func pathComponents(p bip32.Path) []any {
 	var comp []any
 	for _, c := range p {
 		hard := c >= hdkeychain.HardenedKeyStart
@@ -304,21 +134,16 @@ func (p Path) components() []any {
 	return comp
 }
 
-func (p Path) String() string {
-	var d strings.Builder
-	d.WriteRune('m')
-	for _, p := range p {
-		d.WriteByte('/')
-		idx := p
-		if p >= hdkeychain.HardenedKeyStart {
-			idx -= hdkeychain.HardenedKeyStart
-		}
-		d.WriteString(strconv.Itoa(int(idx)))
-		if p >= hdkeychain.HardenedKeyStart {
-			d.WriteRune('h')
-		}
+// EncodeKey encodes k in the format described by [BCR-2020-007].
+//
+// [BCR-2020-007]: https://github.com/BlockchainCommons/Research/blob/master/papers/bcr-2020-007-hdkey.md
+func EncodeKey(k bip380.Key) []byte {
+	b, err := encMode.Marshal(hdkeyFor(k))
+	if err != nil {
+		// Always valid by construction.
+		panic(err)
 	}
-	return d.String()
+	return b
 }
 
 type seed struct {
@@ -453,24 +278,24 @@ func Parse(typ string, enc []byte) (any, error) {
 const mainnet = 0
 const testnet = 1
 
-func parseHDKey(enc []byte) (KeyDescriptor, error) {
+func parseHDKey(enc []byte) (bip380.Key, error) {
 	var k hdKey
 	if err := decMode.Unmarshal(enc, &k); err != nil {
-		return KeyDescriptor{}, fmt.Errorf("ur: crypto-hdkey decoding failed: %w", err)
+		return bip380.Key{}, fmt.Errorf("ur: crypto-hdkey decoding failed: %w", err)
 	}
 	const cointypeBTC = 0
 	if k.UseInfo.Type != cointypeBTC {
-		return KeyDescriptor{}, fmt.Errorf("ur: crypto-hdkey key has unsupported coin type %d", k.UseInfo.Type)
+		return bip380.Key{}, fmt.Errorf("ur: crypto-hdkey key has unsupported coin type %d", k.UseInfo.Type)
 	}
 	children, err := parseKeypath(k.Children.Components)
 	if err != nil {
-		return KeyDescriptor{}, err
+		return bip380.Key{}, err
 	}
 	if len(k.KeyData) != 33 {
-		return KeyDescriptor{}, fmt.Errorf("ur: crypto-hdkey key is %d bytes, expected 33", len(k.KeyData))
+		return bip380.Key{}, fmt.Errorf("ur: crypto-hdkey key is %d bytes, expected 33", len(k.KeyData))
 	}
 	if len(k.ChainCode) != 32 {
-		return KeyDescriptor{}, fmt.Errorf("ur: crypto-hdkey chain code is %d bytes, expected 32", len(k.ChainCode))
+		return bip380.Key{}, fmt.Errorf("ur: crypto-hdkey chain code is %d bytes, expected 32", len(k.ChainCode))
 	}
 	var net *chaincfg.Params
 	switch n := k.UseInfo.Network; n {
@@ -479,16 +304,16 @@ func parseHDKey(enc []byte) (KeyDescriptor, error) {
 	case testnet:
 		net = &chaincfg.TestNet3Params
 	default:
-		return KeyDescriptor{}, fmt.Errorf("ur: unknown coininfo network %d", n)
+		return bip380.Key{}, fmt.Errorf("ur: unknown coininfo network %d", n)
 	}
 	comps, err := parseKeypath(k.Origin.Components)
 	if err != nil {
-		return KeyDescriptor{}, err
+		return bip380.Key{}, err
 	}
-	var devPath Path
+	var devPath bip32.Path
 	for _, d := range comps {
-		if d.Type != ChildDerivation {
-			return KeyDescriptor{}, fmt.Errorf("ur: wildcards or ranges not allowed in origin path")
+		if d.Type != bip380.ChildDerivation {
+			return bip380.Key{}, fmt.Errorf("ur: wildcards or ranges not allowed in origin path")
 		}
 		idx := d.Index
 		if d.Hardened {
@@ -498,9 +323,9 @@ func parseHDKey(enc []byte) (KeyDescriptor, error) {
 	}
 	depth := k.Origin.Depth
 	if depth != 0 && int(depth) != len(devPath) {
-		return KeyDescriptor{}, fmt.Errorf("ur: origin depth is %d but expected %d", depth, len(devPath))
+		return bip380.Key{}, fmt.Errorf("ur: origin depth is %d but expected %d", depth, len(devPath))
 	}
-	return KeyDescriptor{
+	return bip380.Key{
 		Network:           net,
 		MasterFingerprint: k.Origin.Fingerprint,
 		DerivationPath:    devPath,
@@ -511,7 +336,7 @@ func parseHDKey(enc []byte) (KeyDescriptor, error) {
 	}, nil
 }
 
-func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (*OutputDescriptor, error) {
+func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (*bip380.Descriptor, error) {
 	var tags []uint64
 	for {
 		var raw cbor.RawTag
@@ -524,31 +349,31 @@ func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (*OutputDescriptor, er
 	if len(tags) == 0 {
 		return nil, errors.New("ur: missing descriptor tag")
 	}
-	desc := new(OutputDescriptor)
+	desc := new(bip380.Descriptor)
 	first := tags[0]
 	tags = tags[1:]
 	switch first {
 	case tagSH:
-		desc.Script = P2SH
+		desc.Script = bip380.P2SH
 		if len(tags) == 0 {
 			break
 		}
 		switch tags[0] {
 		case tagWSH:
-			desc.Script = P2SH_P2WSH
+			desc.Script = bip380.P2SH_P2WSH
 			tags = tags[1:]
 		case tagWPKH:
-			desc.Script = P2SH_P2WPKH
+			desc.Script = bip380.P2SH_P2WPKH
 			tags = tags[1:]
 		}
 	case tagP2PKH:
-		desc.Script = P2PKH
+		desc.Script = bip380.P2PKH
 	case tagTR:
-		desc.Script = P2TR
+		desc.Script = bip380.P2TR
 	case tagWSH:
-		desc.Script = P2WSH
+		desc.Script = bip380.P2WSH
 	case tagWPKH:
-		desc.Script = P2WPKH
+		desc.Script = bip380.P2WPKH
 	default:
 		return nil, fmt.Errorf("ur: unknown script type tag: %d", first)
 	}
@@ -562,7 +387,7 @@ func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (*OutputDescriptor, er
 	}
 	switch funcNumber {
 	case tagHDKey: // singlesig
-		desc.Type = Singlesig
+		desc.Type = bip380.Singlesig
 		k, err := parseHDKey(enc)
 		if err != nil {
 			return nil, err
@@ -570,7 +395,7 @@ func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (*OutputDescriptor, er
 		desc.Threshold = 1
 		desc.Keys = append(desc.Keys, k)
 	case tagSortedMulti:
-		desc.Type = SortedMulti
+		desc.Type = bip380.SortedMulti
 		var m multi
 		if err := mode.Unmarshal(enc, &m); err != nil {
 			return nil, err
@@ -589,28 +414,28 @@ func parseOutputDescriptor(mode cbor.DecMode, enc []byte) (*OutputDescriptor, er
 	return desc, nil
 }
 
-func parseKeypath(comp []any) ([]Derivation, error) {
+func parseKeypath(comp []any) ([]bip380.Derivation, error) {
 	if len(comp)%2 == 1 {
 		return nil, errors.New("odd number of components")
 	}
-	var path []Derivation
+	var path []bip380.Derivation
 	for i := 0; i < len(comp); i += 2 {
 		d, h := comp[i], comp[i+1]
-		var deriv Derivation
+		var deriv bip380.Derivation
 		switch d := d.(type) {
 		case uint64:
 			if d > math.MaxUint32 {
 				return nil, errors.New("child index out of range")
 			}
-			deriv = Derivation{
-				Type:  ChildDerivation,
+			deriv = bip380.Derivation{
+				Type:  bip380.ChildDerivation,
 				Index: uint32(d),
 			}
 		case []any:
 			switch len(d) {
 			case 0:
-				deriv = Derivation{
-					Type: WildcardDerivation,
+				deriv = bip380.Derivation{
+					Type: bip380.WildcardDerivation,
 				}
 			case 2:
 				start, ok1 := d[0].(uint64)
@@ -618,8 +443,8 @@ func parseKeypath(comp []any) ([]Derivation, error) {
 				if !ok1 || !ok2 || start > math.MaxUint32 || end > math.MaxUint32 {
 					return nil, errors.New("invalid range derivation")
 				}
-				deriv = Derivation{
-					Type:  RangeDerivation,
+				deriv = bip380.Derivation{
+					Type:  bip380.RangeDerivation,
 					Index: uint32(start),
 					End:   uint32(end),
 				}
