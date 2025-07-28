@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/seedhammer/kortschak-qr"
-	"seedhammer.com/bc/ur"
 	"seedhammer.com/bip39"
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/vector"
@@ -43,14 +42,13 @@ type Seed struct {
 	Size              PlateSize
 }
 
-type Descriptor struct {
-	Data   ur.Data
-	KeyIdx int
-	Font   *vector.Face
-	Size   PlateSize
+type Text struct {
+	Data []string
+	Font *vector.Face
+	Size PlateSize
 }
 
-var ErrDescriptorTooLarge = errors.New("output descriptor is too large to backup")
+var ErrTooLarge = errors.New("backup: data does not fit plate")
 
 const MaxTitleLen = 18
 
@@ -76,7 +74,7 @@ func planFits(plan engrave.Plan, scale int, size PlateSize) error {
 	bounds := engrave.Measure(plan)
 	safetyMargin := image.Pt(outerMargin*scale, outerMargin*scale)
 	if !bounds.In(image.Rectangle{Min: safetyMargin, Max: sz.Sub(safetyMargin)}) {
-		return ErrDescriptorTooLarge
+		return ErrTooLarge
 	}
 	return nil
 }
@@ -97,18 +95,17 @@ func EngraveSeed(params engrave.Params, plate Seed) (engrave.Plan, error) {
 	return side, nil
 }
 
-func EngraveDescriptor(params engrave.Params, plate Descriptor) (engrave.Plan, error) {
+func EngraveText(params engrave.Params, plate Text) (engrave.Plan, error) {
 	sz := plate.Size.Dims().Mul(params.Millimeter)
-	urs := ur.Split(plate.Data, plate.KeyIdx)
-	urQRs := make([]*qr.Code, 0, len(urs))
-	for _, ur := range urs {
-		qrcode, err := qr.Encode(ur, qr.M)
+	urQRs := make([]*qr.Code, 0, len(plate.Data))
+	for _, s := range plate.Data {
+		qrcode, err := qr.Encode(s, qr.M)
 		if err != nil {
 			return nil, err
 		}
 		urQRs = append(urQRs, qrcode)
 	}
-	side := descriptorSide(params, plate.Font, urs, urQRs, plate.Size, sz)
+	side := textSide(params, plate.Font, plate.Data, urQRs, plate.Size, sz)
 	if err := planFits(side, params.Millimeter, plate.Size); err != nil {
 		return nil, err
 	}
@@ -217,7 +214,7 @@ func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize 
 	return engrave.Commands(cmds...)
 }
 
-func descriptorSide(params engrave.Params, fnt *vector.Face, urs []string, urQRs []*qr.Code, size PlateSize, plateDims image.Point) engrave.Plan {
+func textSide(params engrave.Params, fnt *vector.Face, urs []string, urQRs []*qr.Code, size PlateSize, plateDims image.Point) engrave.Plan {
 	var cmds []engrave.Plan
 	cmd := func(c engrave.Plan) {
 		cmds = append(cmds, c)

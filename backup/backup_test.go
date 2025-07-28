@@ -9,13 +9,12 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
-	"seedhammer.com/bc/ur"
 	"seedhammer.com/bip32"
-	"seedhammer.com/bip380"
 	"seedhammer.com/bip39"
 	"seedhammer.com/driver/mjolnir"
 	"seedhammer.com/engrave"
@@ -25,36 +24,26 @@ import (
 var update = flag.Bool("update", false, "update golden files")
 
 func TestEngraveErrors(t *testing.T) {
-	p2wsh := []uint32{
-		hdkeychain.HardenedKeyStart + 48,
-		hdkeychain.HardenedKeyStart + 0,
-		hdkeychain.HardenedKeyStart + 0,
-		hdkeychain.HardenedKeyStart + 2,
-	}
+	longText := strings.Repeat("ABC", 1000)
 	tests := []struct {
-		threshold int
-		keys      int
-		side      int
-		path      []uint32
-		seedLen   int
-		err       error
+		data []string
+		err  error
 	}{
-		{1, 5, 0, p2wsh, 24, ErrDescriptorTooLarge},
+		{
+			[]string{longText},
+			ErrTooLarge,
+		},
 	}
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("error-%d", i), func(t *testing.T) {
-			desc := &bip380.Descriptor{
-				Title:     "Satoshi Stash",
-				Script:    bip380.P2WSH,
-				Threshold: test.threshold,
-				Type:      bip380.SortedMulti,
-				Keys:      make([]bip380.Key, test.keys),
+			txt := Text{
+				Data: test.data,
+				Font: constant.Font,
+				Size: LargePlate,
 			}
-			_, descDesc := genTestPlate(t, desc, test.path, test.seedLen, 0, LargePlate)
-			const ppmm = 4
-			_, err := EngraveDescriptor(mjolnir.Params, descDesc)
+			_, err := EngraveText(mjolnir.Params, txt)
 			if err == nil {
-				t.Fatalf("no error reported by Engrave, expected %v", test.err)
+				t.Fatalf("no error reported by EngraveText, expected %v", test.err)
 			}
 			if !errors.Is(err, test.err) {
 				t.Fatalf("got error %v, expected %v", err, test.err)
@@ -64,22 +53,15 @@ func TestEngraveErrors(t *testing.T) {
 }
 
 func BenchmarkEngraving(b *testing.B) {
-	p2wsh := []uint32{
-		hdkeychain.HardenedKeyStart + 48,
-		hdkeychain.HardenedKeyStart + 0,
-		hdkeychain.HardenedKeyStart + 0,
-		hdkeychain.HardenedKeyStart + 2,
+	longText := strings.Repeat("ABC", 100)
+	txt := Text{
+		Data: []string{longText},
+		Font: constant.Font,
+		Size: SquarePlate,
 	}
-	outDesc := &bip380.Descriptor{
-		Title:     "Satoshi Stash",
-		Script:    bip380.P2WSH,
-		Threshold: 1,
-		Type:      bip380.Singlesig,
-		Keys:      make([]bip380.Key, 1),
-	}
-	seed, desc := genTestPlate(b, outDesc, p2wsh, 24, 0, SquarePlate)
+	seed := genSeed(b, 0, 1, "Satoshi Stash", 24, SquarePlate)
 	for b.Loop() {
-		plan, err := EngraveDescriptor(mjolnir.Params, desc)
+		plan, err := EngraveText(mjolnir.Params, txt)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -94,126 +76,76 @@ func BenchmarkEngraving(b *testing.B) {
 	}
 }
 
-func TestEngrave(t *testing.T) {
+const ppmm = 4
+
+var params = engrave.Params{
+	StrokeWidth: 38,
+	Millimeter:  126,
+}
+
+func TestText(t *testing.T) {
 	tests := []struct {
-		threshold int
-		keys      int
-		side      int
-		script    bip380.Script
-		seedLen   int
-		size      PlateSize
+		data []string
+		size PlateSize
 	}{
-		// Seed only variants.
-		{1, 1, 0, bip380.P2SH, 12, SquarePlate},
-		{1, 1, 0, bip380.P2TR, 24, SquarePlate},
-		{1, 1, 1, bip380.P2WPKH, 24, SquarePlate},
-
-		{1, 1, 0, bip380.P2WSH, 12, SquarePlate},
-		{1, 1, 0, bip380.P2WSH, 24, SquarePlate},
-		{3, 5, 1, bip380.P2SH_P2WSH, 24, LargePlate},
-
-		// Descriptor variants, seed side.
-		{1, 1, 1, bip380.P2SH_P2WSH, 12, SquarePlate},
-		{1, 1, 1, bip380.P2SH_P2WSH, 24, SquarePlate},
-		{1, 2, 1, bip380.P2SH_P2WSH, 12, LargePlate},
-		{3, 5, 1, bip380.P2SH_P2WSH, 24, LargePlate},
-		// Descriptor side.
-		{1, 1, 0, bip380.P2SH_P2WSH, 12, SquarePlate},
-		{1, 2, 0, bip380.P2SH_P2WSH, 12, LargePlate},
-		{2, 3, 0, bip380.P2SH_P2WSH, 12, SquarePlate},
-		{3, 5, 0, bip380.P2SH_P2WSH, 12, LargePlate},
-		{9, 10, 0, bip380.P2SH_P2WSH, 12, SquarePlate},
+		{[]string{"UR:CRYPTO-OUTPUT/TAADMHTAADMETAADDLOXAXHDCLAOLBAOTTVYCXLRCXFLATSAKBMUVWLUOTOSRDOTRSHYZMJNADIELPTBCSPMAOFZPABNAAHDCXHTRDDAOYRYSGUYHLIDHGDMAAGEKIRFRTJZLOFSSRONUYIOJTKOMKTLSBCMIALBTIAMTAADDYOEADLOCSDYYKAEYKAEYKADYKAOCYCFWYAAPAAYCYWYAYDRTBJKREFHKB"}, SquarePlate},
+		{[]string{"UR:CRYPTO-OUTPUT/TAADMHTAADMETAADMSOEADADAOLFTAADDLOXAXHDCLAOLBAOTTVYCXLRCXFLATSAKBMUVWLUOTOSRDOTRSHYZMJNADIELPTBCSPMAOFZPABNAAHDCXHTRDDAOYRYSGUYHLIDHGDMAAGEKIRFRTJZLOFSSRONUYIOJTKOMKTLSBCMIALBTIAMTAADDYOEADLOCSDYYKAEYKAEYKADYKAOCYCFWYAAPAAYCYWYAYDRTBTAADDLOXAXHDCLAXSKURKKMDRFRNIYSFLRDAAYJOOXCKKNEESNEETEHSOYMYECENKGRHJYMYJPINCPAOAAHDCXUTWNIMCFPLDNOEBBKSVWGAWNMKYASFKPJYOYSELDMECWRDHDJKENQZCAZCDETIRYAMTAADDYOEADLOCSDYYKAEYKAEYKADYKAOCYIYGYGWHTAYCYIMCLGACWNLGORYYK"}, LargePlate},
+		{[]string{"UR:CRYPTO-OUTPUT/1-2/LPADAOCFADFXCYDAPRLRMSHDOETAADMHTAADMETAADMSOEADAOAOLSTAADDLOXAXHDCLAOLBAOTTVYCXLRCXFLATSAKBMUVWLUOTOSRDOTRSHYZMJNADIELPTBCSPMAOFZPABNAAHDCXHTRDDAOYRYSGUYHLIDHGDMAAGEKIRFRTJZLOFSSRONUYIOJTKOMKTLSBCMIALBTIAMTAADDYOEADLOCSDYYKAEYKAEYKADYKAOCYCFWYAAPAAYCYWYAYDRTBTAADDLOXAXHDCLAXSKURKKMDRFRNIYSFLRDAAYJOOXCKKNEESNEETEHSOYMYECENKGRHJYMYJPINCPAOAAHDCXUTWNSFKGIHUY"}, SquarePlate},
+		{[]string{"UR:CRYPTO-OUTPUT/1-6/LPADAMCFAOBYCYAHSKHGGLHDHKTAADMHTAADMETAADMSOEADAXAOLPTAADDLOXAXHDCLAOLBAOTTVYCXLRCXFLATSAKBMUVWLUOTOSRDOTRSHYZMJNADIELPTBCSPMAOFZPABNAAHDCXHTRDDAOYRYSGUYHLIDHGDMAAGEKIRFRTJZLOFSSRONUYIOJTKOMKTLSBCMIALBTINSSOBTIE", "UR:CRYPTO-OUTPUT/48-6/LPCSDYAMCFAOBYCYAHSKHGGLHDHKGHTAUYLSADDNFXZSUOBBGYJLRSURMKWFBDDNCNSNPKBZHNBBWLISOTNSWTUTFZURROKIRHNBHFMWYAWSWTDEAHNDJKZCSEFELDOLNSOYZSISHETIOLOTENCEHDROMNWNGELNECCMCWMHYADTUOTYTNPETKPTRYUYDEFYBSJENYPERPFDJKBSMKESWY"}, LargePlate},
 	}
 	for i, test := range tests {
 		i, test := i, test
-		name := fmt.Sprintf("%d-%d-of-%d-%d-words", i, test.threshold, test.keys, test.seedLen)
+		name := fmt.Sprintf("%d-shards-%d", i, len(test.data))
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			desc := &bip380.Descriptor{
-				Title:     "Satoshi Stash",
-				Script:    test.script,
-				Threshold: test.threshold,
-				Type:      bip380.Singlesig,
-				Keys:      make([]bip380.Key, test.keys),
+			txt := Text{
+				Data: test.data,
+				Font: constant.Font,
+				Size: test.size,
 			}
-			if len(desc.Keys) > 1 {
-				desc.Type = bip380.SortedMulti
-			}
-			path := desc.Script.DerivationPath()
-			seedDesc, descDesc := genTestPlate(t, desc, path, test.seedLen, 0, test.size)
-			const ppmm = 4
-			params := mjolnir.Params
-			var side engrave.Plan
-			var err error
-			if test.side == 0 {
-				side, err = EngraveDescriptor(params, descDesc)
-			} else {
-				side, err = EngraveSeed(params, seedDesc)
-			}
+			p, err := EngraveText(params, txt)
 			if err != nil {
 				t.Fatal(err)
 			}
-			sz := test.size.Dims().Mul(ppmm)
-			bounds := image.Rectangle{
-				Max: sz,
-			}
-			name := fmt.Sprintf("plate-%d-side-%d-%d-of-%d-words-%d.png", i, test.side, desc.Threshold, len(desc.Keys), test.seedLen)
-			golden := filepath.Join("testdata", name)
-			got := image.NewAlpha(bounds)
-			scaled := func(yield func(engrave.Command) bool) {
-				for c := range side {
-					c.Coord = c.Coord.Mul(ppmm).Div(params.Millimeter)
-					if !yield(c) {
-						return
-					}
-				}
-			}
-			engrave.Rasterize(got, scaled)
-			if *update {
-				var buf bytes.Buffer
-				if err := png.Encode(&buf, got); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(golden, buf.Bytes(), 0o640); err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			f, err := os.Open(golden)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want, _, err := image.Decode(f)
-			if err != nil {
-				t.Fatal(err)
-			}
-			f.Close()
-			if w, g := want.Bounds().Size(), got.Bounds().Size(); w != g {
-				t.Fatalf("golden image bounds mismatch: got %v, want %v", g, w)
-			}
-			mismatches := 0
-			pixels := 0
-			width, height := want.Bounds().Dx(), want.Bounds().Dy()
-			gotOff := bounds.Min
-			for y := 0; y < height; y++ {
-				for x := 0; x < width; x++ {
-					wanty16, _, _, _ := want.At(x, y).RGBA()
-					want := wanty16 != 0
-					got := got.AlphaAt(gotOff.X+x, gotOff.Y+y).A != 0
-					if want {
-						pixels++
-					}
-					if got != want {
-						mismatches++
-					}
-				}
-			}
-			if mismatches > 0 {
-				t.Errorf("%d/%d pixels golden image mismatches", mismatches, pixels)
-			}
+			compareGolden(t, "text-"+name+".png", test.size, p)
 		})
 	}
+}
+
+func TestSeed(t *testing.T) {
+	tests := []struct {
+		keys    int
+		seedLen int
+		size    PlateSize
+	}{
+		{1, 24, SquarePlate},
+		{5, 24, LargePlate},
+		{1, 12, SquarePlate},
+		{2, 12, LargePlate},
+		{5, 24, LargePlate},
+	}
+	for i, test := range tests {
+		i, test := i, test
+		name := fmt.Sprintf("%d-words-%d-size-%v", i, test.seedLen, test.size)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			seedDesc := genSeed(t, 0, test.keys, "Satoshi Stash", test.seedLen, test.size)
+			p, err := EngraveSeed(params, seedDesc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			compareGolden(t, "seed-"+name+".png", test.size, p)
+		})
+	}
+}
+
+func runGolden(t *testing.T, name string, f func(t *testing.T)) {
+	t.Run(name, func(t *testing.T) {
+		t.Parallel()
+		f(t)
+	})
 }
 
 func TestTitleString(t *testing.T) {
@@ -235,60 +167,89 @@ func TestTitleString(t *testing.T) {
 	}
 }
 
-func genTestPlate(t testing.TB, desc *bip380.Descriptor, path []uint32, seedlen int, keyIdx int, plateSize PlateSize) (Seed, Descriptor) {
-	var mnemonic bip39.Mnemonic
-	for i := range desc.Keys {
-		m := make(bip39.Mnemonic, seedlen)
-		for j := range m {
-			m[j] = bip39.Word(i*seedlen + j)
-		}
-		m = m.FixChecksum()
-		seed := bip39.MnemonicSeed(m, "")
-		network := &chaincfg.MainNetParams
-		mk, err := hdkeychain.NewMaster(seed, network)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(path) == 0 {
-			// Ensure the master fingerprint is derived.
-			path = bip32.Path{0}
-		}
-		mfp, xpub, err := bip32.Derive(mk, path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pub, err := xpub.ECPubKey()
-		if err != nil {
-			t.Fatal(err)
-		}
-		desc.Keys[i] = bip380.Key{
-			Network:           network,
-			MasterFingerprint: mfp,
-			DerivationPath:    path,
-			ParentFingerprint: xpub.ParentFingerprint(),
-			ChainCode:         xpub.ChainCode(),
-			KeyData:           pub.SerializeCompressed(),
-		}
-		if i == keyIdx {
-			mnemonic = m
-		}
+func genSeed(t testing.TB, idx, shards int, title string, seedlen int, plateSize PlateSize) Seed {
+	m := make(bip39.Mnemonic, seedlen)
+	for j := range m {
+		m[j] = bip39.Word(j)
+	}
+	m = m.FixChecksum()
+	seed := bip39.MnemonicSeed(m, "")
+	network := &chaincfg.MainNetParams
+	mk, err := hdkeychain.NewMaster(seed, network)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := bip32.Path{0}
+	mfp, _, err := bip32.Derive(mk, path)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return Seed{
-			Title:             desc.Title,
-			KeyIdx:            keyIdx,
-			Mnemonic:          mnemonic,
-			Keys:              len(desc.Keys),
-			MasterFingerprint: desc.Keys[keyIdx].MasterFingerprint,
-			Font:              constant.Font,
-			Size:              plateSize,
-		}, Descriptor{
-			Data: ur.Data{
-				Data:      desc.Encode(),
-				Threshold: desc.Threshold,
-				Shards:    len(desc.Keys),
-			},
-			KeyIdx: keyIdx,
-			Font:   constant.Font,
-			Size:   plateSize,
+		Title:             title,
+		KeyIdx:            idx,
+		Mnemonic:          m,
+		Keys:              shards,
+		MasterFingerprint: mfp,
+		Font:              constant.Font,
+		Size:              plateSize,
+	}
+}
+
+func compareGolden(t *testing.T, name string, psz PlateSize, plan engrave.Plan) {
+	bounds := image.Rectangle{
+		Max: psz.Dims().Mul(ppmm),
+	}
+	golden := filepath.Join("testdata", name)
+	got := image.NewAlpha(bounds)
+	scaled := func(yield func(engrave.Command) bool) {
+		for c := range plan {
+			c.Coord = c.Coord.Mul(ppmm).Div(params.Millimeter)
+			if !yield(c) {
+				return
+			}
 		}
+	}
+	engrave.Rasterize(got, scaled)
+	if *update {
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, got); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(golden, buf.Bytes(), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	f, err := os.Open(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _, err := image.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if w, g := want.Bounds().Size(), got.Bounds().Size(); w != g {
+		t.Fatalf("golden image bounds mismatch: got %v, want %v", g, w)
+	}
+	mismatches := 0
+	pixels := 0
+	width, height := want.Bounds().Dx(), want.Bounds().Dy()
+	gotOff := bounds.Min
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			wanty16, _, _, _ := want.At(x, y).RGBA()
+			want := wanty16 != 0
+			got := got.AlphaAt(gotOff.X+x, gotOff.Y+y).A != 0
+			if want {
+				pixels++
+			}
+			if got != want {
+				mismatches++
+			}
+		}
+	}
+	if mismatches > 0 {
+		t.Errorf("%d/%d pixels golden image mismatches", mismatches, pixels)
+	}
 }
