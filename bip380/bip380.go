@@ -171,9 +171,110 @@ func (s Script) DerivationPath() bip32.Path {
 	panic("unknown script")
 }
 
+// Encode the descriptor into bip380 format.
+func (d *Descriptor) Encode() string {
+	return d.encode(false)
+}
+
+// EncodeCompact is like Encode, but with key origins and
+// the checksum omitted.
+func (d *Descriptor) EncodeCompact() string {
+	return d.encode(true)
+}
+
+// encode the descriptor into bip380 format. Key origins
+// and the checksum are omitted if compact is true.
+func (d *Descriptor) encode(compact bool) string {
+	res := new(strings.Builder)
+	parens := 1
+	switch d.Script {
+	case P2SH_P2WSH, P2SH_P2WPKH:
+		res.WriteString("sh(")
+		parens++
+	}
+	var script string
+	switch d.Script {
+	case P2SH:
+		script = "sh"
+	case P2PKH:
+		script = "pkh"
+	case P2WSH, P2SH_P2WSH:
+		script = "wsh"
+	case P2WPKH, P2SH_P2WPKH:
+		script = "wpkh"
+	case P2TR:
+		script = "tr"
+	default:
+		panic("unknown script")
+	}
+	res.WriteString(script)
+	res.WriteByte('(')
+	switch d.Type {
+	case SortedMulti:
+		res.WriteString("sortedmulti(")
+		res.WriteString(strconv.Itoa(d.Threshold))
+		res.WriteString(",")
+		parens++
+	}
+	for i, k := range d.Keys {
+		if mfp := k.MasterFingerprint; !compact && mfp != 0 {
+			res.WriteByte('[')
+			fmt.Fprintf(res, "%.8x", mfp)
+			res.WriteString(k.DerivationPath.Encode())
+			res.WriteByte(']')
+		}
+		res.WriteString(k.String())
+		for _, d := range k.Children {
+			res.WriteString(d.Encode())
+		}
+		if i < len(d.Keys)-1 {
+			res.WriteByte(',')
+		}
+	}
+	for range parens {
+		res.WriteByte(')')
+	}
+	s := res.String()
+	if !compact {
+		sum, ok := checksum(s)
+		if !ok {
+			panic("impossible by construction")
+		}
+		s = s + "#" + sum
+	}
+	return s
+}
+
+func (d Derivation) Encode() string {
+	res := new(strings.Builder)
+	res.WriteByte('/')
+	switch d.Type {
+	case ChildDerivation:
+		res.WriteString(strconv.Itoa(int(d.Index)))
+	case WildcardDerivation:
+		res.WriteByte('*')
+	case RangeDerivation:
+		res.WriteByte('<')
+		res.WriteString(strconv.Itoa(int(d.Index)))
+		res.WriteByte(';')
+		res.WriteString(strconv.Itoa(int(d.End)))
+		res.WriteByte('>')
+	default:
+		panic("invalid derivation")
+	}
+	if d.Hardened {
+		res.WriteByte('h')
+	}
+	return res.String()
+}
+
 // Parse a descriptor in textual form, as described in
 // https://github.com/bitcoin/bitcoin/blob/master/doc/descriptors.md.
 func Parse(desc string) (*Descriptor, error) {
+	desc, checksum, ok := strings.Cut(desc, "#")
+	if ok && !validChecksum(desc, checksum) {
+		return nil, errors.New("bip380: invalid checksum")
+	}
 	// Chop off checksum, if any.
 	if start := len(desc) - 9; start >= 0 && desc[start] == '#' {
 		desc = desc[:start]
@@ -193,7 +294,7 @@ func Parse(desc string) (*Descriptor, error) {
 	}
 	script, err := parseFunc()
 	if err != nil {
-		return nil, fmt.Errorf("descriptor: script: %w", err)
+		return nil, fmt.Errorf("bip380: script: %w", err)
 	}
 	r := &Descriptor{
 		Threshold: 1,
@@ -210,16 +311,16 @@ func Parse(desc string) (*Descriptor, error) {
 	case "tr":
 		r.Script = P2TR
 	default:
-		return nil, fmt.Errorf("descriptor: unknown script type: %q", script)
+		return nil, fmt.Errorf("bip380: unknown script type: %q", script)
 	}
 	if script2, err := parseFunc(); err == nil {
 		switch script2 {
 		case "wpkh", "wsh":
 			if r.Script != P2SH {
-				return nil, fmt.Errorf("descriptor: invalid wrapped script type: %q", script2)
+				return nil, fmt.Errorf("bip380: invalid wrapped script type: %q", script2)
 			}
 			if r.Script != P2SH {
-				return nil, fmt.Errorf("descriptor: invalid wrapped script type: %q", script2)
+				return nil, fmt.Errorf("bip380: invalid wrapped script type: %q", script2)
 			}
 			switch script2 {
 			case "wpkh":
@@ -227,7 +328,7 @@ func Parse(desc string) (*Descriptor, error) {
 			case "wsh":
 				r.Script = P2SH_P2WSH
 			default:
-				return nil, fmt.Errorf("descriptor: unknown script type: %q", script2)
+				return nil, fmt.Errorf("bip380: unknown script type: %q", script2)
 			}
 			script2, err = parseFunc()
 		}
@@ -236,7 +337,7 @@ func Parse(desc string) (*Descriptor, error) {
 			case "sortedmulti":
 				r.Type = SortedMulti
 			default:
-				return nil, fmt.Errorf("descriptor: unknown script type: %q", script2)
+				return nil, fmt.Errorf("bip380: unknown script type: %q", script2)
 			}
 		}
 	}
@@ -248,7 +349,7 @@ func Parse(desc string) (*Descriptor, error) {
 		args := strings.Split(desc, ",")
 		threshold, err := strconv.Atoi(args[0])
 		if err != nil {
-			return nil, fmt.Errorf("descriptor: invalid multikey threshold: %q", desc)
+			return nil, fmt.Errorf("bip380: invalid multikey threshold: %q", desc)
 		}
 		r.Threshold = threshold
 		keys = args[1:]
@@ -256,7 +357,7 @@ func Parse(desc string) (*Descriptor, error) {
 	for _, k := range keys {
 		key, err := ParseKey(r.Script.DerivationPath(), []byte(k))
 		if err != nil {
-			return nil, fmt.Errorf("hdkey: %w", err)
+			return nil, err
 		}
 		r.Keys = append(r.Keys, key)
 	}
@@ -295,7 +396,7 @@ func ParseKey(impliedPath bip32.Path, enc []byte) (Key, error) {
 		k = k[:xpubEnd]
 		childPath, err := parsePath(children)
 		if err != nil {
-			return Key{}, fmt.Errorf("hdkey: invalid children path: %q", k)
+			return Key{}, fmt.Errorf("hdkey: invalid children path: %q", children)
 		}
 		key.Children = childPath
 	}

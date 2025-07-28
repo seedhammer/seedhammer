@@ -89,3 +89,19 @@ func ParsePath(path string) (Path, error) {
 	}
 	return res, nil
 }
+
+func (p Path) Encode() string {
+	res := new(strings.Builder)
+	for _, e := range p {
+		res.WriteByte('/')
+		hard := e >= hdkeychain.HardenedKeyStart
+		if hard {
+			e -= hdkeychain.HardenedKeyStart
+		}
+		res.WriteString(strconv.Itoa(int(e)))
+		if hard {
+			res.WriteByte('h')
+		}
+	}
+	return res.String()
+}
