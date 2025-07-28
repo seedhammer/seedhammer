@@ -34,9 +34,7 @@ func (p PlateSize) Dims() image.Point {
 
 type Seed struct {
 	Title             string
-	KeyIdx            int
 	Mnemonic          bip39.Mnemonic
-	Keys              int
 	MasterFingerprint uint32
 	Font              *vector.Face
 	Size              PlateSize
@@ -134,22 +132,14 @@ func frontSideSeed(params engrave.Params, plate Seed, qrc *qr.Code, plateDims im
 	col1Height := pfs * endCol1
 
 	// Engrave version, mfp and page.
-	const version = "V1"
 	innerMargin := params.I(innerMargin)
 	metaMargin := params.I(4)
-	page := fmt.Sprintf("%d/%d", plate.KeyIdx+1, plate.Keys)
 	mfp := strings.ToUpper(fmt.Sprintf("%.8x", plate.MasterFingerprint))
 	{
 		offy := (plateDims.Y-col1Height)/2 - metaMargin
-		pageStr := engrave.String(plate.Font, params.F(plateSmallFontSize), page)
-		pagesz := pageStr.Measure()
-		cmd(engrave.Offset(innerMargin, offy-pagesz.Y, pageStr.Engrave()))
 		mfpStr := engrave.String(plate.Font, params.F(plateSmallFontSize), mfp)
 		mfpsz := mfpStr.Measure()
 		cmd(engrave.Offset((plateDims.X-mfpsz.X)/2, offy-mfpsz.Y, mfpStr.Engrave()))
-		txtStr := engrave.String(plate.Font, params.F(plateSmallFontSize), version)
-		txtsz := txtStr.Measure()
-		cmd(engrave.Offset(plateDims.X-txtsz.X-innerMargin, offy-txtsz.Y, txtStr.Engrave()))
 	}
 
 	// Engrave column 1.

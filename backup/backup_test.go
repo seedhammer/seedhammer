@@ -59,7 +59,7 @@ func BenchmarkEngraving(b *testing.B) {
 		Font: constant.Font,
 		Size: SquarePlate,
 	}
-	seed := genSeed(b, 0, 1, "Satoshi Stash", 24, SquarePlate)
+	seed := genSeed(b, "Satoshi Stash", 24, SquarePlate)
 	for b.Loop() {
 		plan, err := EngraveText(mjolnir.Params, txt)
 		if err != nil {
@@ -115,15 +115,14 @@ func TestText(t *testing.T) {
 
 func TestSeed(t *testing.T) {
 	tests := []struct {
-		keys    int
 		seedLen int
 		size    PlateSize
 	}{
-		{1, 24, SquarePlate},
-		{5, 24, LargePlate},
-		{1, 12, SquarePlate},
-		{2, 12, LargePlate},
-		{5, 24, LargePlate},
+		{24, SquarePlate},
+		{24, LargePlate},
+		{12, SquarePlate},
+		{12, LargePlate},
+		{24, LargePlate},
 	}
 	for i, test := range tests {
 		i, test := i, test
@@ -131,7 +130,7 @@ func TestSeed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			seedDesc := genSeed(t, 0, test.keys, "Satoshi Stash", test.seedLen, test.size)
+			seedDesc := genSeed(t, "Satoshi Stash", test.seedLen, test.size)
 			p, err := EngraveSeed(params, seedDesc)
 			if err != nil {
 				t.Fatal(err)
@@ -167,7 +166,7 @@ func TestTitleString(t *testing.T) {
 	}
 }
 
-func genSeed(t testing.TB, idx, shards int, title string, seedlen int, plateSize PlateSize) Seed {
+func genSeed(t testing.TB, title string, seedlen int, plateSize PlateSize) Seed {
 	m := make(bip39.Mnemonic, seedlen)
 	for j := range m {
 		m[j] = bip39.Word(j)
@@ -186,9 +185,7 @@ func genSeed(t testing.TB, idx, shards int, title string, seedlen int, plateSize
 	}
 	return Seed{
 		Title:             title,
-		KeyIdx:            idx,
 		Mnemonic:          m,
-		Keys:              shards,
 		MasterFingerprint: mfp,
 		Font:              constant.Font,
 		Size:              plateSize,
