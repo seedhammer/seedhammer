@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"seedhammer.com/bc/urtypes"
+	"seedhammer.com/bip380"
 )
 
 func TestDecode(t *testing.T) {
@@ -134,18 +135,18 @@ func TestSplit(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			for m := 1; m <= n; m++ {
-				desc := &urtypes.OutputDescriptor{
+				desc := &bip380.Descriptor{
 					Title:     "Some title",
-					Script:    urtypes.P2WSH,
+					Script:    bip380.P2WSH,
 					Threshold: m,
-					Type:      urtypes.Singlesig,
-					Keys:      make([]urtypes.KeyDescriptor, n),
+					Type:      bip380.Singlesig,
+					Keys:      make([]bip380.Key, n),
 				}
 				if len(desc.Keys) > 1 {
-					desc.Type = urtypes.SortedMulti
+					desc.Type = bip380.SortedMulti
 				}
 				data := Data{
-					Data:      desc.Encode(),
+					Data:      urtypes.EncodeDescriptor(desc),
 					Threshold: desc.Threshold,
 					Shards:    len(desc.Keys),
 				}
