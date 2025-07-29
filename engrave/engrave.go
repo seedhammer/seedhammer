@@ -1177,10 +1177,11 @@ func assertConstantQR(cmd *constantQRCmd) {
 
 type cmdYielder func(Command) bool
 
-func String(face *vector.Face, em int, txt string) *StringCmd {
+func String(face *vector.Face, mm, em int, txt string) *StringCmd {
 	return &StringCmd{
 		LineHeight: 1,
 		face:       face,
+		mm:         mm,
 		em:         em,
 		txt:        txt,
 	}
@@ -1190,6 +1191,7 @@ type StringCmd struct {
 	LineHeight int
 
 	face *vector.Face
+	mm   int
 	em   int
 	txt  string
 }
@@ -1226,6 +1228,7 @@ func (s *StringCmd) engrave(yield func(Command) bool) image.Point {
 			panic(fmt.Errorf("unsupported rune: %s", string(r)))
 		}
 		if yield != nil {
+			var p0 image.Point
 			for {
 				seg, ok := segs.Next()
 				if !ok {
@@ -1235,9 +1238,25 @@ func (s *StringCmd) engrave(yield func(Command) bool) image.Point {
 				case vector.SegmentOpMoveTo:
 					p1 := addScale(pos, seg.Arg)
 					cont = cont && yield(Move(p1))
+					p0 = p1
 				case vector.SegmentOpLineTo:
 					p1 := addScale(pos, seg.Arg)
 					cont = cont && yield(Line(p1))
+					p0 = p1
+				case vector.SegmentOpQuadTo:
+					p12 := addScale(pos, seg.Arg)
+					p3 := addScale(pos, seg.Arg1)
+					// Expand to cubic.
+					p1 := mix(p12, p0, 1.0/3.0)
+					p2 := mix(p12, p3, 1.0/3.0)
+					cont = cont && approxCubeBezier(yield, s.mm, toVec2f(p0), p1, p2, toVec2f(p3))
+					p0 = p3
+				case vector.SegmentOpCubeTo:
+					p1 := addScale(pos, seg.Arg)
+					p2 := addScale(pos, seg.Arg1)
+					p3 := addScale(pos, seg.Arg2)
+					cont = cont && approxCubeBezier(yield, s.mm, toVec2f(p0), toVec2f(p1), toVec2f(p2), toVec2f(p3))
+					p0 = p3
 				default:
 					panic(errors.New("unsupported segment"))
 				}
@@ -1310,4 +1329,82 @@ func Measure(plan Plan) image.Rectangle {
 		b = image.Rectangle{}
 	}
 	return b
+}
+
+type vec2f struct {
+	X float32
+	Y float32
+}
+
+func toVec2f(p image.Point) vec2f {
+	return vec2f{
+		X: float32(p.X),
+		Y: float32(p.Y),
+	}
+}
+
+// approxCubeBezier uses de Casteljau subdivision to approximate a cubic Bézier
+// curve with line segments.
+//
+// See "Piecewise Linear Approximation of Bézier Curves" by Kaspar Fischer, October 16, 2000,
+// http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.86.162&rep=rep1&type=pdf.
+func approxCubeBezier(yield func(Command) bool, mm int, p0, p1, p2, p3 vec2f) bool {
+	cont := true
+	if isFlat(mm, p0, p1, p2, p3) {
+		cont = cont && yield(Line(roundCoord(p3)))
+	} else {
+		l0, l1, l2, l3 := subdivideCubeBezier(0, .5, p0, p1, p2, p3)
+		cont = cont && approxCubeBezier(yield, mm, l0, l1, l2, l3)
+		r0, r1, r2, r3 := subdivideCubeBezier(.5, 1, p0, p1, p2, p3)
+		cont = cont && approxCubeBezier(yield, mm, r0, r1, r2, r3)
+	}
+	return cont
+}
+
+func subdivideCubeBezier(t0, t1 float32, p0, p1, p2, p3 vec2f) (s0, s1, s2, s3 vec2f) {
+	u0 := 1 - t0
+	u1 := 1 - t1
+	s0.X = u0*u0*u0*p0.X + (t0*u0*u0+u0*t0*u0+u0*u0*t0)*p1.X + (t0*t0*u0+u0*t0*t0+t0*u0*t0)*p2.X + t0*t0*t0*p3.X
+	s0.Y = u0*u0*u0*p0.Y + (t0*u0*u0+u0*t0*u0+u0*u0*t0)*p1.Y + (t0*t0*u0+u0*t0*t0+t0*u0*t0)*p2.Y + t0*t0*t0*p3.Y
+	s1.X = u0*u0*u1*p0.X + (t0*u0*u1+u0*t0*u1+u0*u0*t1)*p1.X + (t0*t0*u1+u0*t0*t1+t0*u0*t1)*p2.X + t0*t0*t1*p3.X
+	s1.Y = u0*u0*u1*p0.Y + (t0*u0*u1+u0*t0*u1+u0*u0*t1)*p1.Y + (t0*t0*u1+u0*t0*t1+t0*u0*t1)*p2.Y + t0*t0*t1*p3.Y
+	s2.X = u0*u1*u1*p0.X + (t0*u1*u1+u0*t1*u1+u0*u1*t1)*p1.X + (t0*t1*u1+u0*t1*t1+t0*u1*t1)*p2.X + t0*t1*t1*p3.X
+	s2.Y = u0*u1*u1*p0.Y + (t0*u1*u1+u0*t1*u1+u0*u1*t1)*p1.Y + (t0*t1*u1+u0*t1*t1+t0*u1*t1)*p2.Y + t0*t1*t1*p3.Y
+	s3.X = u1*u1*u1*p0.X + (t1*u1*u1+u1*t1*u1+u1*u1*t1)*p1.X + (t1*t1*u1+u1*t1*t1+t1*u1*t1)*p2.X + t1*t1*t1*p3.X
+	s3.Y = u1*u1*u1*p0.Y + (t1*u1*u1+u1*t1*u1+u1*u1*t1)*p1.Y + (t1*t1*u1+u1*t1*t1+t1*u1*t1)*p2.Y + t1*t1*t1*p3.Y
+	return
+}
+
+func isFlat(mm int, p0, p1, p2, p3 vec2f) bool {
+	const tolerance = .2
+	ux := 3.0*p1.X - 2.0*p0.X - p3.X
+	uy := 3.0*p1.Y - 2.0*p0.Y - p3.Y
+	vx := 3.0*p2.X - 2.0*p3.X - p0.X
+	vy := 3.0*p2.Y - 2.0*p3.Y - p0.Y
+	ux *= ux
+	uy *= uy
+	vx *= vx
+	vy *= vy
+	if ux < vx {
+		ux = vx
+	}
+	if uy < vy {
+		uy = vy
+	}
+	st := float32(mm) * tolerance
+	return ux+uy <= 16*st*st
+}
+
+func mix(p1, p2 image.Point, a float32) vec2f {
+	return vec2f{
+		X: float32(p1.X)*(1.-a) + float32(p2.X)*a,
+		Y: float32(p1.Y)*(1.-a) + float32(p2.Y)*a,
+	}
+}
+
+func roundCoord(p vec2f) image.Point {
+	return image.Point{
+		X: int(math.Round(float64(p.X))),
+		Y: int(math.Round(float64(p.Y))),
+	}
 }

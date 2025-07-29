@@ -128,7 +128,7 @@ func frontSideSeed(params engrave.Params, plate Seed, qrc *qr.Code, plateDims im
 		endCol1 = len(plate.Mnemonic)
 	}
 	pfs := params.F(plateFontSize)
-	col1 := wordColumn(constant, plate.Font, pfs, plate.Mnemonic, 0, endCol1)
+	col1 := wordColumn(constant, plate.Font, params.Millimeter, pfs, plate.Mnemonic, 0, endCol1)
 	col1Height := pfs * endCol1
 
 	// Engrave version, mfp and page.
@@ -137,7 +137,7 @@ func frontSideSeed(params engrave.Params, plate Seed, qrc *qr.Code, plateDims im
 	mfp := strings.ToUpper(fmt.Sprintf("%.8x", plate.MasterFingerprint))
 	{
 		offy := (plateDims.Y-col1Height)/2 - metaMargin
-		mfpStr := engrave.String(plate.Font, params.F(plateSmallFontSize), mfp)
+		mfpStr := engrave.String(plate.Font, params.Millimeter, params.F(plateSmallFontSize), mfp)
 		mfpsz := mfpStr.Measure()
 		cmd(engrave.Offset((plateDims.X-mfpsz.X)/2, offy-mfpsz.Y, mfpStr.Engrave()))
 	}
@@ -150,7 +150,7 @@ func frontSideSeed(params engrave.Params, plate Seed, qrc *qr.Code, plateDims im
 	if endCol2 > len(plate.Mnemonic) {
 		endCol2 = len(plate.Mnemonic)
 	}
-	col2 := wordColumn(constant, plate.Font, params.F(plateFontSize), plate.Mnemonic, endCol1, endCol2)
+	col2 := wordColumn(constant, plate.Font, params.Millimeter, params.F(plateFontSize), plate.Mnemonic, endCol1, endCol2)
 	cmd(engrave.Offset(params.I(44), (plateDims.Y-col1Height)/2, col2))
 
 	// Engrave seed QR.
@@ -165,7 +165,7 @@ func frontSideSeed(params engrave.Params, plate Seed, qrc *qr.Code, plateDims im
 	{
 		// Engrave bottom of column 2.
 		fs := params.F(plateFontSize)
-		col2 := wordColumn(constant, plate.Font, fs, plate.Mnemonic, endCol2, len(plate.Mnemonic))
+		col2 := wordColumn(constant, plate.Font, params.Millimeter, fs, plate.Mnemonic, endCol2, len(plate.Mnemonic))
 		height := (len(plate.Mnemonic) - endCol2) * fs
 		cmd(engrave.Offset(params.I(44), (plateDims.Y+col1Height)/2-height, col2))
 	}
@@ -174,7 +174,7 @@ func frontSideSeed(params engrave.Params, plate Seed, qrc *qr.Code, plateDims im
 	title := strings.ToUpper(plate.Title)
 	{
 		offy := (plateDims.Y+col1Height)/2 + metaMargin
-		title := engrave.String(plate.Font, params.F(plateSmallFontSize), title)
+		title := engrave.String(plate.Font, params.Millimeter, params.F(plateSmallFontSize), title)
 		titlesz := title.Measure()
 		cmd(engrave.Offset((plateDims.X-titlesz.X)/2, offy, title.Engrave()))
 	}
@@ -186,11 +186,11 @@ func frontSideSeed(params engrave.Params, plate Seed, qrc *qr.Code, plateDims im
 	return all, nil
 }
 
-func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, fontSize int, mnemonic bip39.Mnemonic, start, end int) engrave.Plan {
+func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, mm, fontSize int, mnemonic bip39.Mnemonic, start, end int) engrave.Plan {
 	var cmds []engrave.Plan
 	y := 0
 	for i := start; i < end; i++ {
-		num := engrave.String(font, fontSize, fmt.Sprintf("%2d ", i+1))
+		num := engrave.String(font, mm, fontSize, fmt.Sprintf("%2d ", i+1))
 		d := num.Measure()
 		w := mnemonic[i]
 		word := strings.ToUpper(bip39.LabelFor(w))
@@ -211,7 +211,7 @@ func textSide(params engrave.Params, fnt *vector.Face, urs []string, urQRs []*qr
 	}
 	fontSize := params.F(plateFontSizeUR)
 	str := func(s string) engrave.Plan {
-		return engrave.String(fnt, fontSize, s).Engrave()
+		return engrave.String(fnt, params.Millimeter, fontSize, s).Engrave()
 	}
 
 	// Compute character width, assuming the font is fixed width.

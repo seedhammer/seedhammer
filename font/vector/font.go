@@ -20,7 +20,7 @@ type Glyph struct {
 	Start, End uint16
 }
 
-// Segments is an iterator over a glyph's segments
+// Segments is an iterator over a glyph's segments.
 type Segments struct {
 	segs []byte
 }
@@ -37,13 +37,31 @@ func (s *Segments) Next() (Segment, bool) {
 		},
 	}
 	s.segs = s.segs[3:]
+	switch seg.Op {
+	case SegmentOpQuadTo:
+		seg.Arg1 = image.Point{
+			X: int(int8(s.segs[0])),
+			Y: int(int8(s.segs[1])),
+		}
+		s.segs = s.segs[2:]
+	case SegmentOpCubeTo:
+		seg.Arg1 = image.Point{
+			X: int(int8(s.segs[0])),
+			Y: int(int8(s.segs[1])),
+		}
+		seg.Arg2 = image.Point{
+			X: int(int8(s.segs[2])),
+			Y: int(int8(s.segs[3])),
+		}
+		s.segs = s.segs[4:]
+	}
 	return seg, true
 }
 
 // Segment is like sfnt.Segment but with integer coordinates.
 type Segment struct {
-	Op  SegmentOp
-	Arg image.Point
+	Op              SegmentOp
+	Arg, Arg1, Arg2 image.Point
 }
 
 type Metrics struct {
@@ -55,6 +73,8 @@ type SegmentOp uint32
 const (
 	SegmentOpMoveTo SegmentOp = iota
 	SegmentOpLineTo
+	SegmentOpQuadTo
+	SegmentOpCubeTo
 )
 
 const (

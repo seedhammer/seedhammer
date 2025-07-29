@@ -21,7 +21,10 @@ import (
 	"seedhammer.com/font/vector"
 )
 
-var packageName = flag.String("package", "main", "package name")
+var (
+	packageName = flag.String("package", "main", "package name")
+	scale       = flag.Int("scale", 1, "scale font")
+)
 
 type Face struct {
 	Metrics vector.Metrics
@@ -180,8 +183,9 @@ func findAttr(e xml.StartElement, name string) (string, bool) {
 }
 
 func mustInt(v float64) int {
-	i := int(v)
-	if float64(i) != v {
+	sf := float64(*scale)
+	i := int(v * sf)
+	if float64(i) != v*sf {
 		panic("non-integer floating point number")
 	}
 	return i
@@ -399,8 +403,22 @@ func parseSegments(face *Face, d *xml.Decoder, e xml.StartElement, offx, offy in
 				if op == 'm' {
 					initPoint = newPen
 				}
-			case 'c', 's':
-				return errors.New("cubic splines not supported")
+			case 'c':
+				for i := 0; i < len(points); i += 3 {
+					p1, p2, p3 := points[i], points[i+1], points[i+2]
+					encode(vector.SegmentOpCubeTo, p1, p2, p3)
+					newPen = p3
+					newCtrl2 = p2
+				}
+			case 's':
+				for i := 0; i < len(points); i += 2 {
+					p2, p3 := points[i], points[i+1]
+					// Compute p1 by reflecting p2 on to the line that contains pen and p2.
+					p1 := pen.Mul(2).Sub(ctrl2)
+					encode(vector.SegmentOpCubeTo, p1, p2, p3)
+					newPen = p3
+					newCtrl2 = p2
+				}
 			}
 			pen = newPen
 			ctrl2 = newCtrl2
@@ -454,6 +472,8 @@ func mapChar(id string) (rune, bool) {
 			r = '9'
 		case "colon":
 			r = ':'
+		case "semicolon":
+			r = ';'
 		case "comma":
 			r = ','
 		case "slash":
@@ -482,6 +502,10 @@ func mapChar(id string) (rune, bool) {
 			r = '*'
 		case "at":
 			r = '@'
+		case "lt":
+			r = '<'
+		case "gt":
+			r = '>'
 		default:
 			return 0, false
 		}
