@@ -41,9 +41,15 @@ type Seed struct {
 }
 
 type Text struct {
-	Data []string
-	Font *vector.Face
-	Size PlateSize
+	Paragraphs []Paragraph
+	Font       *vector.Face
+	Size       PlateSize
+}
+
+type Paragraph struct {
+	Text    string
+	QR      *qr.Code
+	QRScale int
 }
 
 var ErrTooLarge = errors.New("backup: data does not fit plate")
@@ -94,16 +100,7 @@ func EngraveSeed(params engrave.Params, plate Seed) (engrave.Plan, error) {
 }
 
 func EngraveText(params engrave.Params, plate Text) (engrave.Plan, error) {
-	sz := plate.Size.Dims().Mul(params.Millimeter)
-	urQRs := make([]*qr.Code, 0, len(plate.Data))
-	for _, s := range plate.Data {
-		qrcode, err := qr.Encode(s, qr.M)
-		if err != nil {
-			return nil, err
-		}
-		urQRs = append(urQRs, qrcode)
-	}
-	side := textSide(params, plate.Font, plate.Data, urQRs, plate.Size, sz)
+	side := engraveText(params, plate)
 	if err := planFits(side, params.Millimeter, plate.Size); err != nil {
 		return nil, err
 	}
@@ -204,12 +201,13 @@ func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, mm, fontS
 	return engrave.Commands(cmds...)
 }
 
-func textSide(params engrave.Params, fnt *vector.Face, urs []string, urQRs []*qr.Code, size PlateSize, plateDims image.Point) engrave.Plan {
+func engraveText(params engrave.Params, plate Text) engrave.Plan {
 	var cmds []engrave.Plan
 	cmd := func(c engrave.Plan) {
 		cmds = append(cmds, c)
 	}
 	fontSize := params.F(plateFontSizeUR)
+	fnt := plate.Font
 	str := func(s string) engrave.Plan {
 		return engrave.String(fnt, params.Millimeter, fontSize, s).Engrave()
 	}
@@ -222,28 +220,37 @@ func textSide(params engrave.Params, fnt *vector.Face, urs []string, urQRs []*qr
 	charWidth := int(float32(charWidthf*fontSize) / float32(fnt.Metrics().Height))
 	margin := params.I(outerMargin)
 	innerMargin := params.I(innerMargin)
-	if size == LargePlate {
+	if plate.Size == LargePlate {
 		margin = innerMargin
 	}
 	holeChars := int(math.Ceil(float64(innerMargin-margin) / float64(charWidth)))
 	holeLines := int(math.Ceil(float64(innerMargin-margin) / float64(fontSize)))
+	plateDims := plate.Size.Dims().Mul(params.Millimeter)
 	width := plateDims.X - 2*margin
 	charPerLine := int(width / charWidth)
 	offy := params.I(outerMargin)
-	for i, ur := range urs {
-		qrcode := urQRs[i]
-		const qrScale = 2
-		qr := engrave.QR(params.StrokeWidth, qrScale, qrcode)
-		qrsz := qrcode.Size * params.StrokeWidth * qrScale
+	for i, p := range plate.Paragraphs {
+		qrLines := 0
+		charPerQRLine := 0
+		qrsz := 0
 		qrBorder := params.I(2)
-		charPerQRLine := (width - 2*qrBorder - qrsz) / charWidth
-		qrLines := (qrsz + 2*qrBorder + fontSize - 1) / fontSize
-		qrLineStart := holeLines
+		var qr engrave.Plan
+		if p.QR != nil {
+			qrScale := p.QRScale
+			if qrScale == 0 {
+				qrScale = 2
+			}
+			qr = engrave.QR(params.StrokeWidth, qrScale, p.QR)
+			qrsz = p.QR.Size * params.StrokeWidth * qrScale
+			charPerQRLine = (width - 2*qrBorder - qrsz) / charWidth
+			qrLines = (qrsz + 2*qrBorder + fontSize - 1) / fontSize
+		}
 		lineno := 0
-		for len(ur) > 0 {
+		txt := p.Text
+		for len(txt) > 0 {
 			n := charPerLine
 			offx := 0
-			isQRLine := qrLineStart <= lineno && lineno < qrLineStart+qrLines
+			isQRLine := holeLines <= lineno && lineno < holeLines+qrLines
 			if isQRLine {
 				n = charPerQRLine
 			}
@@ -262,19 +269,25 @@ func textSide(params engrave.Params, fnt *vector.Face, urs []string, urQRs []*qr
 			if n < 1 {
 				n = 1
 			}
-			if n > len(ur) {
-				n = len(ur)
+			if l := len(txt); n > l {
+				n = l
 			}
-			s := ur[:n]
-			ur = ur[n:]
+			s := txt[:n]
+			txt = txt[n:]
 			cmd(engrave.Offset(offx+margin, offy+lineno*fontSize, str(s)))
 			lineno++
 		}
-		qrx := plateDims.X - qrsz - margin - qrBorder
-		qry := qrLineStart*fontSize + (qrLines*fontSize-qrsz)/2
-		cmd(engrave.Offset(qrx, offy+qry, qr))
+		if qr != nil {
+			qrx := plateDims.X - qrsz - margin - qrBorder
+			qry := offy + holeLines*fontSize + (qrLines*fontSize-qrsz)/2
+			if len(p.Text) == 0 {
+				// Center QR.
+				qrx, qry = (plateDims.X-qrsz)/2, (plateDims.Y-qrsz)/2
+			}
+			cmd(engrave.Offset(qrx, qry, qr))
+		}
 		offy += lineno * fontSize
-		if i != len(urs)-1 {
+		if i != len(plate.Paragraphs)-1 {
 			// Space UR sections.
 			offy += params.I(1)
 		}
