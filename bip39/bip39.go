@@ -27,6 +27,8 @@ type Roll [5]int
 
 const NumWords = Word(len(index))
 
+const wordBits = 11
+
 var ErrInvalidChecksum = errors.New("bip39: invalid checksum")
 
 // DiceToWord converts a dice roll to its bip39 word index. It returns
@@ -150,7 +152,6 @@ func (m Mnemonic) String() string {
 
 func splitMnemonic(m Mnemonic) (entropy []byte, checksum byte) {
 	ent := big.NewInt(0)
-	const wordBits = 11
 	shift11 := big.NewInt(1 << wordBits)
 	for _, w := range m {
 		ent.Mul(ent, shift11)
@@ -171,7 +172,7 @@ func splitMnemonic(m Mnemonic) (entropy []byte, checksum byte) {
 	return entBytes, byte(check)
 }
 
-func Checksum(entropy []byte) byte {
+func checksum(entropy []byte) byte {
 	h := sha256.New()
 	h.Write(entropy)
 	check := h.Sum(nil)[0]
@@ -185,7 +186,7 @@ func Checksum(entropy []byte) byte {
 func ChecksumWord(entropy []byte) Word {
 	checkBits := len(entropy) / 4
 	last := entropy[len(entropy)-1]
-	w := Word(last)<<checkBits | Word(Checksum(entropy))
+	w := Word(last)<<checkBits | Word(checksum(entropy))
 	return w % Word(len(index))
 }
 
@@ -198,6 +199,35 @@ func MnemonicSeed(m Mnemonic, password string) []byte {
 		}
 	}
 	return pbkdf2.Key([]byte(sentence.String()), []byte("mnemonic"+password), 2048, 64, sha512.New)
+}
+
+func New(entropy []byte) Mnemonic {
+	if len(entropy) < 16 || 32 < len(entropy) {
+		panic("invalid entropy length")
+	}
+	if len(entropy)%4 != 0 {
+		panic("odd entropy length")
+	}
+	ent := big.NewInt(0).SetBytes(entropy)
+	check := checksum(entropy)
+	// Shift entropy and append checksum bits.
+	checkBits := len(entropy) / 4
+	ent.Mul(ent, big.NewInt(1<<checkBits))
+	ent.Or(ent, big.NewInt(int64(check)))
+	shift11 := big.NewInt(1 << wordBits)
+	mask := big.NewInt(0).Add(shift11, big.NewInt(-1))
+	w := big.NewInt(0)
+	m := make(Mnemonic, (len(entropy)*8+checkBits)/wordBits)
+	for i := range m {
+		w.And(ent, mask)
+		ent.Div(ent, shift11)
+		idx := w.Int64()
+		m[len(m)-1-i] = Word(idx)
+	}
+	if !m.Valid() {
+		panic("unreachable")
+	}
+	return m
 }
 
 func Parse(buf []byte) (Mnemonic, error) {

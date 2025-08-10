@@ -22,7 +22,7 @@ func TestVectors(t *testing.T) {
 		if !bytes.Equal(e, ent) {
 			t.Errorf("entropy mismatch")
 		}
-		if want := Checksum(ent); want != check {
+		if want := checksum(ent); want != check {
 			t.Errorf("checksum mismatch, got %d, want %d", check, want)
 		}
 		checkWord := m[len(m)-1]
@@ -53,6 +53,10 @@ func TestVectors(t *testing.T) {
 		}
 		if !reflect.DeepEqual(m, m3) {
 			t.Fatalf("Parse parsed differently than ParseMnemonic for %q", v.mnemonic)
+		}
+		m4 := New(ent)
+		if got := m4.String(); got != v.mnemonic {
+			t.Errorf("%s: round-tripped to %s", v.mnemonic, got)
 		}
 	}
 }
