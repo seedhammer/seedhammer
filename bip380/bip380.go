@@ -385,7 +385,7 @@ func ParseKey(impliedPath bip32.Path, enc []byte) (Key, error) {
 			return Key{}, fmt.Errorf("hdkey: invalid fingerprint: %q", k)
 		}
 		key.MasterFingerprint = binary.BigEndian.Uint32(fp)
-		path, err := bip32.ParsePath(originAndPath[9:])
+		path, err := bip32.ParsePath("m/" + originAndPath[9:])
 		if err != nil {
 			return Key{}, fmt.Errorf("hdkey: invalid derivation path: %q", k)
 		}

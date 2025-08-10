@@ -68,11 +68,11 @@ func ParsePathElement(p string) (uint32, error) {
 	}
 	idx, err := strconv.ParseInt(p, 10, 0)
 	if err != nil {
-		return 0, fmt.Errorf("invalid path element: %q", p)
+		return 0, fmt.Errorf("bip32: invalid path element: %q", p)
 	}
 	iu32 := uint32(idx)
 	if int64(iu32) != idx || iu32+offset < iu32 {
-		return 0, fmt.Errorf("path element out of range: %q", p)
+		return 0, fmt.Errorf("bip32: path element out of range: %q", p)
 	}
 	return iu32 + offset, nil
 }
@@ -80,6 +80,10 @@ func ParsePathElement(p string) (uint32, error) {
 func ParsePath(path string) (Path, error) {
 	var res Path
 	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] != "m" {
+		return nil, fmt.Errorf("bip32: missing m/ prefix: %q", path)
+	}
+	parts = parts[1:]
 	for _, p := range parts {
 		p, err := ParsePathElement(p)
 		if err != nil {

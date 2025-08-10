@@ -107,12 +107,9 @@ func parseBlueWalletDescriptor(txt string) (*bip380.Descriptor, error) {
 				return nil, fmt.Errorf("bluewallet: invalid Policy header: %q", val)
 			}
 		case "Derivation":
-			if !strings.HasPrefix(val, "m/") {
-				return nil, fmt.Errorf("bluewallet: invalid derivation: %q", val)
-			}
-			p, err := bip32.ParsePath(val[2:])
+			p, err := bip32.ParsePath(val)
 			if err != nil {
-				return nil, fmt.Errorf("bluewallet: invalid derivation: %q", val)
+				return nil, err
 			}
 			path = p
 		case "Format":
