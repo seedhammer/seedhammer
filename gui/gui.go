@@ -25,6 +25,7 @@ import (
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip380"
 	"seedhammer.com/bip39"
+	"seedhammer.com/codex32"
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/font/sh"
@@ -1578,6 +1579,27 @@ func (m *MainScreen) Flow(ctx *Context, ops op.Ctx) {
 			case bip39.Mnemonic:
 				backupWalletFlow(ctx, ops, th, scan)
 				continue
+			case codex32.String:
+				id, _, _ := scan.Split()
+				network := &chaincfg.MainNetParams
+				mk, err := hdkeychain.NewMaster(scan.Seed(), network)
+				if err != nil {
+					break
+				}
+				path := bip32.Path{0}
+				mfp, _, err := bip32.Derive(mk, path)
+				if err != nil {
+					break
+				}
+				s := backup.SeedString{
+					Title:             id,
+					Seed:              scan.String(),
+					MasterFingerprint: mfp,
+					Font:              constant.Font,
+					Size:              backup.SquarePlate,
+				}
+				backupSeedStringFlow(ctx, ops, th, s)
+				continue
 			case *bip380.Descriptor:
 				descriptorFlow(ctx, ops, th, scan)
 				continue
@@ -1847,7 +1869,7 @@ loop:
 	}
 }
 
-func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic []bip39.Word) {
+func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) {
 	ss := new(SeedScreen)
 	for {
 		if !ss.Confirm(ctx, ops, th, mnemonic) {
@@ -1869,6 +1891,23 @@ func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic []bip39.Wor
 			}
 			continue
 		}
+		completed := NewEngraveScreen(ctx, plate).Engrave(ctx, ops, &engraveTheme)
+		if completed {
+			return
+		}
+	}
+}
+
+func backupSeedStringFlow(ctx *Context, ops op.Ctx, th *Colors, s backup.SeedString) {
+	p, err := backup.EngraveSeedString(ctx.Platform.EngraverParams(), s)
+	if err != nil {
+		return
+	}
+	plate := Plate{
+		Size: s.Size,
+		Plan: p,
+	}
+	for {
 		completed := NewEngraveScreen(ctx, plate).Engrave(ctx, ops, &engraveTheme)
 		if completed {
 			return

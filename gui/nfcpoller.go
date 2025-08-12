@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"seedhammer.com/bip39"
+	"seedhammer.com/codex32"
 	"seedhammer.com/nfc/poller"
 	"seedhammer.com/nonstandard"
 )
@@ -67,6 +68,8 @@ func Scan(d poller.Device) iter.Seq[scanResult] {
 					res.Content = m
 				} else if d, err := nonstandard.OutputDescriptor(buf); err == nil {
 					res.Content = d
+				} else if s, err := codex32.New(string(buf)); err == nil {
+					res.Content = s
 				} else if bytes.Equal(buf, []byte("FOREVERLAURA!")) {
 					res.Content = debugMode{}
 				} else {
