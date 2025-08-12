@@ -40,6 +40,14 @@ type Seed struct {
 	Size              PlateSize
 }
 
+type SeedString struct {
+	Title             string
+	Seed              string
+	MasterFingerprint uint32
+	Font              *vector.Face
+	Size              PlateSize
+}
+
 type Text struct {
 	Paragraphs []Paragraph
 	Font       *vector.Face
@@ -99,6 +107,23 @@ func EngraveSeed(params engrave.Params, plate Seed) (engrave.Plan, error) {
 	return side, nil
 }
 
+func EngraveSeedString(params engrave.Params, plate SeedString) (engrave.Plan, error) {
+	sz := plate.Size.Dims().Mul(params.Millimeter)
+	seed := strings.ToUpper(plate.Seed)
+	qrc, err := qr.Encode(seed, qr.M)
+	if err != nil {
+		return nil, err
+	}
+	side, err := engraveSeedString(params, plate, qrc, sz)
+	if err != nil {
+		return nil, err
+	}
+	if err := planFits(side, params.Millimeter, plate.Size); err != nil {
+		return nil, err
+	}
+	return side, nil
+}
+
 func EngraveText(params engrave.Params, plate Text) (engrave.Plan, error) {
 	side := engraveText(params, plate)
 	if err := planFits(side, params.Millimeter, plate.Size); err != nil {
@@ -111,6 +136,75 @@ const plateFontSize = 4.1
 const plateFontSizeUR = 3.8
 const plateSmallFontSize = 3.
 
+const groupLen = 10
+
+func engraveSeedString(params engrave.Params, plate SeedString, qrc *qr.Code, plateDims image.Point) (engrave.Plan, error) {
+	constant := engrave.NewConstantStringer(plate.Font)
+	var cmds []engrave.Plan
+	cmd := func(c engrave.Plan) {
+		cmds = append(cmds, c)
+	}
+
+	const (
+		maxCol1 = 16
+		maxCol2 = 4
+		qrScale = 3
+	)
+	seed := strings.ToUpper(plate.Seed)
+	ngroups := (len(seed) + groupLen - 1) / groupLen
+	endCol1 := min(ngroups, maxCol1)
+	pfs := params.F(plateFontSize)
+	col1 := stringColumn(constant, plate.Font, params.Millimeter, pfs, seed, 0, endCol1)
+	qrsz := qrc.Size * params.StrokeWidth * qrScale
+	col1Height := max(qrsz, pfs*endCol1)
+
+	// Engrave version, mfp and page.
+	innerMargin := params.I(innerMargin)
+	metaMargin := params.I(4)
+	mfp := strings.ToUpper(fmt.Sprintf("%.8x", plate.MasterFingerprint))
+	{
+		offy := (plateDims.Y-col1Height)/2 - metaMargin
+		mfpStr := engrave.String(plate.Font, params.Millimeter, params.F(plateSmallFontSize), mfp)
+		mfpsz := mfpStr.Measure()
+		cmd(engrave.Offset((plateDims.X-mfpsz.X)/2, offy-mfpsz.Y, mfpStr.Engrave()))
+	}
+
+	// Engrave column 1.
+	cmd(engrave.Offset(innerMargin, (plateDims.Y-col1Height)/2, col1))
+
+	// Engrave (top of) column 2.
+	endCol2 := min(ngroups, endCol1+maxCol2)
+	col2 := stringColumn(constant, plate.Font, params.Millimeter, params.F(plateFontSize), seed, endCol1, endCol2)
+	cmd(engrave.Offset(params.I(44), (plateDims.Y-col1Height)/2, col2))
+
+	// Engrave seed QR.
+	qrCmd := engrave.QR(params.StrokeWidth, qrScale, qrc)
+	cmd(engrave.Offset(params.I(60)-qrsz/2, (plateDims.Y-qrsz)/2, qrCmd))
+
+	{
+		// Engrave bottom of column 2.
+		fs := params.F(plateFontSize)
+		col2 := stringColumn(constant, plate.Font, params.Millimeter, fs, seed, endCol2, ngroups)
+		height := (ngroups - endCol2) * fs
+		cmd(engrave.Offset(params.I(44), (plateDims.Y+col1Height)/2-height, col2))
+	}
+
+	// Engrave title.
+	title := strings.ToUpper(plate.Title)
+	{
+		offy := (plateDims.Y+col1Height)/2 + metaMargin
+		title := engrave.String(plate.Font, params.Millimeter, params.F(plateSmallFontSize), title)
+		titlesz := title.Measure()
+		cmd(engrave.Offset((plateDims.X-titlesz.X)/2, offy, title.Engrave()))
+	}
+	all := engrave.Commands(cmds...)
+	if plate.Size == LargePlate {
+		// Avoid the middle holes.
+		return engrave.Offset(0, params.F(24.5), all), nil
+	}
+	return all, nil
+}
+
 func frontSideSeed(params engrave.Params, plate Seed, qrc *qr.Code, plateDims image.Point) (engrave.Plan, error) {
 	constant := engrave.NewConstantStringer(plate.Font)
 	var cmds []engrave.Plan
@@ -118,8 +212,10 @@ func frontSideSeed(params engrave.Params, plate Seed, qrc *qr.Code, plateDims im
 		cmds = append(cmds, c)
 	}
 
-	maxCol1 := 16
-	maxCol2 := 4
+	const (
+		maxCol1 = 16
+		maxCol2 = 4
+	)
 	endCol1 := maxCol1
 	if endCol1 > len(plate.Mnemonic) {
 		endCol1 = len(plate.Mnemonic)
@@ -201,6 +297,20 @@ func wordColumn(constant *engrave.ConstantStringer, font *vector.Face, mm, fontS
 	return engrave.Commands(cmds...)
 }
 
+func stringColumn(constant *engrave.ConstantStringer, font *vector.Face, mm, fontSize int, s string, start, end int) engrave.Plan {
+	var cmds []engrave.Plan
+	y := 0
+	for i := start; i < end; i++ {
+		word := s[i*groupLen:]
+		word = word[:min(len(word), groupLen)]
+		txt := engrave.String(font, mm, fontSize, word)
+		cmds = append(cmds,
+			engrave.Offset(0, y, txt.Engrave()),
+		)
+		y += fontSize
+	}
+	return engrave.Commands(cmds...)
+}
 func engraveText(params engrave.Params, plate Text) engrave.Plan {
 	var cmds []engrave.Plan
 	cmd := func(c engrave.Plan) {

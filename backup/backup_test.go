@@ -17,6 +17,7 @@ import (
 	"github.com/seedhammer/kortschak-qr"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
+	"seedhammer.com/codex32"
 	"seedhammer.com/driver/mjolnir"
 	"seedhammer.com/engrave"
 	"seedhammer.com/font/constant"
@@ -174,6 +175,44 @@ func TestSeed(t *testing.T) {
 				t.Fatal(err)
 			}
 			compareGolden(t, "seed-"+name+".png", test.size, p)
+		})
+	}
+}
+
+func TestCodex32(t *testing.T) {
+	tests := []codex32.String{
+		"ms13cashsllhdmn9m42vcsamx24zrxgs3qqjzqud4m0d6nln",
+		"ms10leetsllhdmn9m42vcsamx24zrxgs3qrl7ahwvhw4fnzrhve25gvezzyq0pgjxpzx0ysaam",
+	}
+	for i, test := range tests {
+		i, test := i, test
+		name := fmt.Sprintf("%d", i)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			network := &chaincfg.MainNetParams
+			mk, err := hdkeychain.NewMaster(test.Seed(), network)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := bip32.Path{0}
+			mfp, _, err := bip32.Derive(mk, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id, _, _ := test.Split()
+			s := SeedString{
+				Title:             id,
+				Seed:              string(test),
+				MasterFingerprint: mfp,
+				Font:              constant.Font,
+				Size:              SquarePlate,
+			}
+			p, err := EngraveSeedString(params, s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			compareGolden(t, "codex32-"+name+".png", s.Size, p)
 		})
 	}
 }
