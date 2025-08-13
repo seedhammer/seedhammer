@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kortschak/qr"
+	"github.com/seedhammer/kortschak-qr"
 	"seedhammer.com/bip39"
 	"seedhammer.com/font/constant"
 	"seedhammer.com/seedqr"

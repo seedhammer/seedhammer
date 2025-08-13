@@ -16,7 +16,7 @@ import (
 	"math/rand"
 	"slices"
 
-	"github.com/kortschak/qr"
+	"github.com/seedhammer/kortschak-qr"
 	"seedhammer.com/bresenham"
 	"seedhammer.com/font/vector"
 )

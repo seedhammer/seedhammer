@@ -18,7 +18,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/kortschak/qr"
+	"github.com/seedhammer/kortschak-qr"
 	"seedhammer.com/backup"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip380"

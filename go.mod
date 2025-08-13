@@ -8,7 +8,7 @@ require (
 	github.com/btcsuite/btcd/btcutil v1.1.3
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/fxamacker/cbor/v2 v2.4.0
-	github.com/kortschak/qr v0.3.0
+	github.com/seedhammer/kortschak-qr v0.3.2
 	github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07
 	golang.org/x/crypto v0.7.0
 	golang.org/x/image v0.6.0
@@ -24,5 +24,3 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/text v0.8.0 // indirect
 )
-
-replace github.com/kortschak/qr => github.com/seedhammer/kortschak-qr v0.0.0-20240113235555-375796488df0

@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/kortschak/qr"
+	"github.com/seedhammer/kortschak-qr"
 	"seedhammer.com/bc/fountain"
 	"seedhammer.com/bc/ur"
 	"seedhammer.com/bc/urtypes"

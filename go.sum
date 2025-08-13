@@ -67,8 +67,8 @@ github.com/onsi/gomega v1.7.1/go.mod h1:XdKZgCCFLUoM/7CFJVPcG8C1xQ1AJ0vpAezJrB7J
 github.com/onsi/gomega v1.10.1/go.mod h1:iN09h71vgCQne3DLsj+A5owkum+a2tYe+TOCB1ybHNo=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/seedhammer/kortschak-qr v0.0.0-20240113235555-375796488df0 h1:C/GBca2LVCIeBQWOMBgrbcMV70hW2S5gO8aSAgSLJOc=
-github.com/seedhammer/kortschak-qr v0.0.0-20240113235555-375796488df0/go.mod h1:l0kMewIexD8HRZ8iW+lFf8y74IvP7652/0wAlaRf22U=
+github.com/seedhammer/kortschak-qr v0.3.2 h1:wH4doJU08wDGQgdOY/U2FtN4bxl+oUa6n86R9ND05+M=
+github.com/seedhammer/kortschak-qr v0.3.2/go.mod h1:zapN/iP6EUgPZCGPRI1SXZqUOgaw1/7nWIJVlunN8VQ=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.7.0 h1:nwc3DEeHmmLAfoZucVR881uASk0Mfjw8xYJ99tb5CcY=
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
