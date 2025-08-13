@@ -5,7 +5,6 @@ package ili9488
 
 import (
 	"device/rp"
-	"fmt"
 	"image"
 	"machine"
 	"runtime"
@@ -17,22 +16,22 @@ import (
 )
 
 type Device struct {
-	pio                       *rp.PIO0_Type
-	channel                   dma.ChannelID
-	dc, cs, rst, wrx, db0, te machine.Pin
-	window                    image.Rectangle
-	cmdBuf                    [20]byte
-	firstFrame                bool
-	firstDraw                 bool
+	pio                            *rp.PIO0_Type
+	channel                        dma.ChannelID
+	dc, cs, rst, wrx, rdx, db0, te machine.Pin
+	window                         image.Rectangle
+	cmdBuf                         [20]byte
+	firstFrame                     bool
+	firstDraw                      bool
 }
 
 type Config struct {
 }
 
-func New(dc, cs, rst, wrx, db0, te machine.Pin, pio *rp.PIO0_Type) (*Device, error) {
+func New(dc, cs, rst, wrx, rdx, db0, te machine.Pin, pio *rp.PIO0_Type) (*Device, error) {
 	ch, err := dma.Reserve()
 	if err != nil {
-		return nil, fmt.Errorf("ili9488: %w", err)
+		return nil, err
 	}
 	return &Device{
 		channel: ch,
@@ -41,6 +40,7 @@ func New(dc, cs, rst, wrx, db0, te machine.Pin, pio *rp.PIO0_Type) (*Device, err
 		cs:      cs,
 		rst:     rst,
 		wrx:     wrx,
+		rdx:     rdx,
 		db0:     db0,
 		te:      te,
 	}, nil
@@ -53,7 +53,7 @@ const pioStateMachine = 0
 func (d *Device) Configure(c Config) error {
 	d.firstFrame = true
 
-	for _, p := range []machine.Pin{d.cs, d.rst, d.dc} {
+	for _, p := range []machine.Pin{d.cs, d.rst, d.dc, d.rdx} {
 		p.Configure(machine.PinConfig{Mode: machine.PinOutput})
 		p.High()
 	}
@@ -82,9 +82,8 @@ func (d *Device) Configure(c Config) error {
 
 	// Set up pins.
 	d.te.Configure(machine.PinConfig{Mode: machine.PinInput})
-	pio.ConfigurePins(d.pio, pioStateMachine, d.db0, 8)
+	d.configurePIOPins()
 	pio.Pindirs(d.pio, pioStateMachine, d.db0, 8, machine.PinOutput)
-	pio.ConfigurePins(d.pio, pioStateMachine, d.wrx, 1)
 	pio.Pindirs(d.pio, pioStateMachine, d.wrx, 8, machine.PinOutput)
 
 	d.cs.Low()
@@ -148,6 +147,56 @@ func (d *Device) sendCommand(cmd byte, data ...byte) {
 	for _, b := range data {
 		d.sendByte(b)
 	}
+}
+
+func (d *Device) ReadSerial() [9]byte {
+	var serial [9]byte
+	d.read(RDDID, serial[:3])
+	d.read(RDID1, serial[3:4])
+	d.read(RDID2, serial[4:5])
+	d.read(RDID3, serial[5:6])
+	d.read(RDID4, serial[6:9])
+	return serial
+}
+
+func (d *Device) read(cmd byte, buf []byte) {
+	d.sendCommand(cmd)
+
+	// Configure pins for input.
+	pin := d.db0
+	for range 8 {
+		pin.Configure(machine.PinConfig{Mode: machine.PinInput})
+		pin++
+	}
+	defer d.configurePIOPins()
+	// Skip garbage first byte.
+	d.readByte()
+	for i := range buf {
+		buf[i] = d.readByte()
+	}
+}
+
+func (d *Device) readByte() byte {
+	d.rdx.Low()
+	time.Sleep(trdlfm)
+	defer time.Sleep(trdhfm)
+	defer d.rdx.High()
+
+	var b byte
+	pin := d.db0
+	for range 8 {
+		b >>= 1
+		if pin.Get() {
+			b |= 0x80
+		}
+		pin++
+	}
+	return b
+}
+
+func (d *Device) configurePIOPins() {
+	pio.ConfigurePins(d.pio, pioStateMachine, d.db0, 8)
+	pio.ConfigurePins(d.pio, pioStateMachine, d.wrx, 1)
 }
 
 func (d *Device) sendByte(data byte) {
@@ -244,68 +293,68 @@ const (
 	// register constants based on source:
 	// https://github.com/adafruit/Adafruit_ILI9341/blob/master/Adafruit_ILI9341.h
 
-	NOP     = 0x00 ///< No-op register
-	SWRESET = 0x01 ///< Software reset register
-	RDDID   = 0x04 ///< Read display identification information
-	RDDST   = 0x09 ///< Read Display Status
+	NOP     = 0x00 // No-op register
+	SWRESET = 0x01 // Software reset register
+	RDDID   = 0x04 // Read display identification information
+	RDDST   = 0x09 // Read Display Status
 
-	SLPIN  = 0x10 ///< Enter Sleep Mode
-	SLPOUT = 0x11 ///< Sleep Out
-	PTLON  = 0x12 ///< Partial Mode ON
-	NORON  = 0x13 ///< Normal Display Mode ON
+	SLPIN  = 0x10 // Enter Sleep Mode
+	SLPOUT = 0x11 // Sleep Out
+	PTLON  = 0x12 // Partial Mode ON
+	NORON  = 0x13 // Normal Display Mode ON
 
-	RDMODE     = 0x0A ///< Read Display Power Mode
-	RDMADCTL   = 0x0B ///< Read Display MADCTL
-	RDPIXFMT   = 0x0C ///< Read Display Pixel Format
-	RDIMGFMT   = 0x0D ///< Read Display Image Format
-	RDSELFDIAG = 0x0F ///< Read Display Self-Diagnostic Result
+	RDMODE     = 0x0A // Read Display Power Mode
+	RDMADCTL   = 0x0B // Read Display MADCTL
+	RDPIXFMT   = 0x0C // Read Display Pixel Format
+	RDIMGFMT   = 0x0D // Read Display Image Format
+	RDSELFDIAG = 0x0F // Read Display Self-Diagnostic Result
 
-	INVOFF   = 0x20 ///< Display Inversion OFF
-	INVON    = 0x21 ///< Display Inversion ON
-	GAMMASET = 0x26 ///< Gamma Set
-	DISPOFF  = 0x28 ///< Display OFF
-	DISPON   = 0x29 ///< Display ON
+	INVOFF   = 0x20 // Display Inversion OFF
+	INVON    = 0x21 // Display Inversion ON
+	GAMMASET = 0x26 // Gamma Set
+	DISPOFF  = 0x28 // Display OFF
+	DISPON   = 0x29 // Display ON
 
-	CASET = 0x2A ///< Column Address Set
-	PASET = 0x2B ///< Page Address Set
-	RAMWR = 0x2C ///< Memory Write
-	RAMRD = 0x2E ///< Memory Read
+	CASET = 0x2A // Column Address Set
+	PASET = 0x2B // Page Address Set
+	RAMWR = 0x2C // Memory Write
+	RAMRD = 0x2E // Memory Read
 
-	PTLAR    = 0x30 ///< Partial Area
-	VSCRDEF  = 0x33 ///< Vertical Scrolling Definition
-	TEOFF    = 0x34 ///< TEOFF: Tearing Effect Line OFF
-	TEON     = 0x35 ///< TEON: Tearing Effect Line ON
-	MADCTL   = 0x36 ///< Memory Access Control
-	VSCRSADD = 0x37 ///< Vertical Scrolling Start Address
-	PIXFMT   = 0x3A ///< COLMOD: Pixel Format Set
+	PTLAR    = 0x30 // Partial Area
+	VSCRDEF  = 0x33 // Vertical Scrolling Definition
+	TEOFF    = 0x34 // TEOFF: Tearing Effect Line OFF
+	TEON     = 0x35 // TEON: Tearing Effect Line ON
+	MADCTL   = 0x36 // Memory Access Control
+	VSCRSADD = 0x37 // Vertical Scrolling Start Address
+	PIXFMT   = 0x3A // COLMOD: Pixel Format Set
 
 	IFMODE  = 0xB0
-	FRMCTR1 = 0xB1 ///< Frame Rate Control (In Normal Mode/Full Colors)
-	FRMCTR2 = 0xB2 ///< Frame Rate Control (In Idle Mode/8 colors)
-	FRMCTR3 = 0xB3 ///< Frame Rate control (In Partial Mode/Full Colors)
-	INVCTR  = 0xB4 ///< Display Inversion Control
-	DFUNCTR = 0xB6 ///< Display Function Control
+	FRMCTR1 = 0xB1 // Frame Rate Control (In Normal Mode/Full Colors)
+	FRMCTR2 = 0xB2 // Frame Rate Control (In Idle Mode/8 colors)
+	FRMCTR3 = 0xB3 // Frame Rate control (In Partial Mode/Full Colors)
+	INVCTR  = 0xB4 // Display Inversion Control
+	DFUNCTR = 0xB6 // Display Function Control
 
-	PWCTR1 = 0xC0 ///< Power Control 1
-	PWCTR2 = 0xC1 ///< Power Control 2
-	PWCTR3 = 0xC2 ///< Power Control 3
-	PWCTR4 = 0xC3 ///< Power Control 4
-	PWCTR5 = 0xC4 ///< Power Control 5
-	VMCTR1 = 0xC5 ///< VCOM Control 1
-	VMCTR2 = 0xC7 ///< VCOM Control 2
+	PWCTR1 = 0xC0 // Power Control 1
+	PWCTR2 = 0xC1 // Power Control 2
+	PWCTR3 = 0xC2 // Power Control 3
+	PWCTR4 = 0xC3 // Power Control 4
+	PWCTR5 = 0xC4 // Power Control 5
+	VMCTR1 = 0xC5 // VCOM Control 1
+	VMCTR2 = 0xC7 // VCOM Control 2
 
-	RDID1 = 0xDA ///< Read ID 1
-	RDID2 = 0xDB ///< Read ID 2
-	RDID3 = 0xDC ///< Read ID 3
-	RDID4 = 0xDD ///< Read ID 4
+	RDID1 = 0xDA // Read ID 1
+	RDID2 = 0xDB // Read ID 2
+	RDID3 = 0xDC // Read ID 3
+	RDID4 = 0xDD // Read ID 4
 
-	GMCTRP1 = 0xE0 ///< Positive Gamma Correction
-	GMCTRN1 = 0xE1 ///< Negative Gamma Correction
+	GMCTRP1 = 0xE0 // Positive Gamma Correction
+	GMCTRN1 = 0xE1 // Negative Gamma Correction
 
 	SETIMAGE = 0xE9
 	ADJCTR3  = 0xF7
 
-	MADCTL_RGB = 0x00 ///< Red-Green-Blue pixel order
+	MADCTL_RGB = 0x00 // Red-Green-Blue pixel order
 )
 
 const (
@@ -315,4 +364,16 @@ const (
 	MADCTL_ML  = 1 << 4
 	MADCTL_BGR = 1 << 3
 	MADCTL_MH  = 1 << 2
+)
+
+// Datasheet section 17.4.1. "DBI Type B Timing Characteristics".
+const (
+	// Read access time.
+	tratfm = 340 * time.Nanosecond
+	// Read output disable time.
+	trod = 80 * time.Nanosecond
+	// Read Control H duration (FM)
+	trdhfm = 90 * time.Nanosecond
+	// Read Control L duration (FM).
+	trdlfm = 355 * time.Nanosecond
 )

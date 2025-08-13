@@ -179,10 +179,7 @@ func Init() (*Platform, error) {
 	}
 
 	// LCD RDX pin unused.
-	LCD_RDX.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	LCD_RDX.High()
-
-	lcd, err := ili9488.New(LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_DB0, LCD_TE, lcdPIO)
+	lcd, err := ili9488.New(LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_RDX, LCD_DB0, LCD_TE, lcdPIO)
 	if err != nil {
 		return nil, err
 	}
