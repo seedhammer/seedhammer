@@ -30,6 +30,7 @@ var (
 	id        = seedFlags.String("id", "", "4-character bech32 id")
 	seedLen   = seedFlags.Int("seedlen", 32, "seed length in bytes (16-64)")
 	seedIdx   = seedFlags.String("idx", "S", "codex32 share index ('A', 'C', 'D', ...) or 'S'")
+	hrp       = seedFlags.String("hrp", "ms", "codex32 HRP")
 
 	randFlags = flag.NewFlagSet("rand", flag.ExitOnError)
 	randLen   = randFlags.Int("n", 32, "number of bytes to generate (min 16)")
@@ -132,7 +133,7 @@ func derive(stdout io.Writer, stdin io.Reader) error {
 	}
 	if len(path) > 0 {
 		if path[0] != bip85.PathRoot {
-			return fmt.Errorf("derive: derivation path %q must start with m/%d'/...", dpath,
+			return fmt.Errorf("derive: derivation path %q must start with m/%dh/...", dpath,
 				bip85.PathRoot-hdkeychain.HardenedKeyStart)
 		}
 		for _, p := range path {
@@ -295,7 +296,7 @@ func genSeed(stdout io.Writer, stdin io.Reader) error {
 	if got, want := len(seed), conf.SeedLen; got != want {
 		return fmt.Errorf("codex32: read %d bytes of entropy, expected %d", got, want)
 	}
-	key, err := codex32.NewSeed("ms", conf.Threshold, conf.ID, conf.Index, seed)
+	key, err := codex32.NewSeed(*hrp, conf.Threshold, conf.ID, conf.Index, seed)
 	if err != nil {
 		return err
 	}
