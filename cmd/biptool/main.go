@@ -43,6 +43,9 @@ var (
 
 	bip39Flags = flag.NewFlagSet("bip39", flag.ExitOnError)
 	words      = bip39Flags.Int("words", 24, "number of seed words")
+
+	deriveSeedFlags = flag.NewFlagSet("seed", flag.ExitOnError)
+	bytesLength     = deriveSeedFlags.Int("n", 0, "seed length in bytes (zero means all available)")
 )
 
 var chain = &chaincfg.MainNetParams
@@ -186,10 +189,20 @@ func derive(stdout io.Writer, stdin io.Reader) error {
 		m := bip39.New(seed[:entLen])
 		fmt.Fprintln(stdout, m)
 	case "seed":
+		if err := deriveSeedFlags.Parse(args); err != nil {
+			deriveSeedFlags.Usage()
+		}
+		n := *bytesLength
+		if n == 0 {
+			n = len(seed)
+		}
+		if n > len(seed) {
+			return fmt.Errorf("derive: only %d bytes of seed available", len(seed))
+		}
 		if len(seed) == 0 {
 			return fmt.Errorf("derive: no seed provided")
 		}
-		stdout.Write(seed)
+		stdout.Write(seed[:n])
 	case "xpub":
 		if !isXprvDeriv {
 			return fmt.Errorf("derive: xpub derivation path %q does not begin with m/83696968h/32h/", dpath)
