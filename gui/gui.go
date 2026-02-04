@@ -889,8 +889,6 @@ func plateImage(p backup.PlateSize) image.RGBA64Image {
 	switch p {
 	case backup.SquarePlate:
 		return assets.Sh02
-	case backup.LargePlate:
-		return assets.Sh03
 	default:
 		panic("unsupported plate")
 	}
