@@ -250,14 +250,6 @@ var (
 	//go:embed sh02.bin
 	Sh02Data string
 
-	Sh03 = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(Sh03Data[:5720]), len(Sh03Data[:5720])),
-		Rect:    paletted.Rectangle{MinX: 1, MinY: 0, MaxX: 89, MaxY: 65},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(Sh03Data[5720:]), len(Sh03Data[5720:]))),
-	}
-	//go:embed sh03.bin
-	Sh03Data string
-
 	WarningBoxBg = ninepatch.New(&paletted.Image{
 		Pix:     unsafe.Slice(unsafe.StringData(WarningBoxBgData[:405]), len(WarningBoxBgData[:405])),
 		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 27, MaxY: 15},
