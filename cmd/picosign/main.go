@@ -24,12 +24,13 @@ import (
 )
 
 var (
-	hashCmd   = flag.NewFlagSet("hash", flag.ExitOnError)
-	signCmd   = flag.NewFlagSet("sign", flag.ExitOnError)
-	clear     = signCmd.Bool("clear", false, "zero public key and signature")
-	pubKey    = signCmd.String("pubkey", "", "public key in hex-encoded 33-byte compressed form")
-	sig       = signCmd.String("sig", "", "64 byte signature")
-	sigFormat = signCmd.String("sigfmt", "raw", "signature format ('der', 'raw')")
+	hashCmd    = flag.NewFlagSet("hash", flag.ExitOnError)
+	signCmd    = flag.NewFlagSet("sign", flag.ExitOnError)
+	extractCmd = flag.NewFlagSet("extract", flag.ExitOnError)
+	clear      = signCmd.Bool("clear", false, "zero public key and signature")
+	pubKey     = signCmd.String("pubkey", "", "compressed public key in hex-encoded 33-byte form (-signfmt=raw) or DER (-sigfmt=der)")
+	sig        = signCmd.String("sig", "", "signature in 64-byte hex-encoded form")
+	sigFormat  = signCmd.String("sigfmt", "raw", "signature format ('der', 'raw')")
 )
 
 func main() {
@@ -50,6 +51,11 @@ func main() {
 			signCmd.Usage()
 		}
 		err = sign()
+	case "extract":
+		if err := extractCmd.Parse(args); err != nil {
+			hashCmd.Usage()
+		}
+		err = extract()
 	default:
 		fmt.Fprintf(os.Stderr, "picosign: unknown command: %q\n", cmd)
 		os.Exit(2)
@@ -58,6 +64,31 @@ func main() {
 		fmt.Fprintf(os.Stderr, "picosign: %v\n", err)
 		os.Exit(2)
 	}
+}
+
+// extract and print the first signature from a firmware image.
+func extract() error {
+	path := extractCmd.Arg(0)
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	r := uf2.NewReader(f, uf2.FamilyRP2350ARMSigned)
+	firmware, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("extract: %s: %v", path, err)
+	}
+	finfo, err := picobin.Read(firmware)
+	if err != nil {
+		return fmt.Errorf("extract: %s: %v", path, err)
+	}
+	_, sig, err := finfo.Signature(firmware)
+	if err != nil {
+		return fmt.Errorf("extract: %s: %v", path, err)
+	}
+	fmt.Printf("%x\n", sig)
+	return nil
 }
 
 // hash dumps the data covered by a firmware image to standard out.
@@ -96,7 +127,7 @@ func sign() (cerr error) {
 		}
 		pkeyEnc, err := hex.DecodeString(*pubKey)
 		if err != nil {
-			return fmt.Errorf("sign: invalid publi key %q", *pubKey)
+			return fmt.Errorf("sign: invalid public key %q", *pubKey)
 		}
 		pkey, err := secp256k1.ParsePubKey(pkeyEnc)
 		if err != nil {
@@ -159,11 +190,12 @@ func sign() (cerr error) {
 		return err
 	}
 	rw := uf2.NewReader(f, uf2.FamilyRP2350ARMSigned)
-	skip := make([]byte, finfo.SignatureOffset)
-	if _, err := io.ReadFull(rw, skip); err != nil {
-		return err
+	if _, err := io.Copy(io.Discard, io.LimitReader(rw, int64(finfo.SignatureOffset))); err != nil {
+		return fmt.Errorf("sign: %s: %v", path, err)
 	}
 	// Rewrite the signature in place.
-	_, err = rw.Write(keyAndSig)
-	return err
+	if _, err := rw.Write(keyAndSig); err != nil {
+		return fmt.Errorf("sign: %s: %v", path, err)
+	}
+	return nil
 }

@@ -213,14 +213,14 @@ func read(data []byte) (Image, error) {
 	return img, nil
 }
 
-func (in *Image) Signature(image []byte) ([]byte, []byte, error) {
+func (in *Image) Signature(image []byte) (pubKey []byte, sig []byte, err error) {
 	off := in.SignatureOffset
 	h := readItemHeader(image[off-4:])
 	if h.itype != blockItemSignature {
 		return nil, nil, errors.New("picobin: missing SIGNATURE item")
 	}
-	pubKey := image[off : off+64]
-	sig := image[off+64 : off+sigSecp256k1Len]
+	pubKey = image[off : off+64]
+	sig = image[off+64 : off+sigSecp256k1Len]
 	return pubKey, sig, nil
 }
 
