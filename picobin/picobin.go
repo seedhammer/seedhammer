@@ -7,12 +7,16 @@
 package picobin
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
+	"io"
 )
 
 type Image struct {
+	r                *imageReader
 	blockStartOffset uint32
 	loadMapOffset    uint32
 	hashDefOffset    uint32
@@ -54,97 +58,156 @@ const (
 	maxLoopLen = 100
 )
 
-func Read(image []byte) (Image, error) {
-	img, err := read(image)
-	if err != nil {
-		return Image{}, fmt.Errorf("picobin: %v", err)
-	}
-	return img, nil
-}
-
-// Sign image by replacing its HASH_VALUE or SIGNATURE with a SIGNATURE item
-// containing the public key and signature.
-// Sign assumes that the replaced item is the last item in the
-// block with the highest address.
-func Sign(image, pubKey, signature []byte) ([]byte, error) {
-	inf, err := read(image)
+func NewImage(img io.ReadSeeker) (*Image, error) {
+	bin, err := read(img)
 	if err != nil {
 		return nil, fmt.Errorf("picobin: %v", err)
 	}
-	var signed []byte
+	return bin, nil
+}
+
+// Sign image to w by replacing its HASH_VALUE or SIGNATURE with a SIGNATURE item
+// containing the public key and signature.
+// Sign assumes that the replaced item is the last item in the
+// block with the highest address.
+func (img *Image) Sign(w io.Writer, pubKey, signature []byte) error {
+	var err error
 	switch {
-	case inf.hashValueOffset != 0:
-		signed, err = inf.signHashed(image, pubKey, signature)
-	case inf.SignatureOffset != 0:
-		signed, err = inf.resign(image, pubKey, signature)
+	case img.hashValueOffset != 0:
+		err = img.signHashed(w, pubKey, signature)
+	case img.SignatureOffset != 0:
+		err = img.resign(w, pubKey, signature)
 	default:
 		err = errors.New("picobin: missing SIGNATURE or HASH_VALUE item")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("picobin: %w", err)
+		return fmt.Errorf("picobin: %w", err)
 	}
-	return signed, nil
+	return nil
 }
 
-func (inf *Image) resign(image, pubKey, signature []byte) ([]byte, error) {
-	oldKey, oldSig, err := inf.Signature(image)
+func (inf *Image) resign(w io.Writer, pubKey, signature []byte) error {
+	oldKey, oldSig, err := inf.Signature()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if len(oldKey) != len(pubKey) || len(oldSig) != len(signature) {
-		return nil, errors.New("incompatible signature")
+		return errors.New("incompatible signature")
 	}
-	signed := append([]byte{}, image...)
-	sigOff := inf.SignatureOffset
-	copy(signed[sigOff:], pubKey)
-	copy(signed[sigOff+uint32(len(pubKey)):], signature)
-	return signed, nil
+	if _, err := inf.r.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if _, err := io.CopyN(w, inf.r, int64(inf.SignatureOffset)); err != nil {
+		return err
+	}
+	w.Write(pubKey)
+	w.Write(signature)
+	n := int64(len(pubKey) + len(signature))
+	if _, err := inf.r.Seek(n, io.SeekCurrent); err != nil {
+		return err
+	}
+	_, err = io.Copy(w, inf.r)
+	return err
 }
 
-func (inf *Image) signHashed(image, pubKey, signature []byte) ([]byte, error) {
-	imgHash, err := inf.Hash(image)
+func (inf *Image) signHashed(w io.Writer, pubKey, signature []byte) error {
+	imgHash, err := inf.Hash()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	hashItemSize := 4 + len(imgHash)
 	lastItem := inf.hashValueOffset + uint32(hashItemSize)
-	last := readItemHeader(image[lastItem:])
+	last := readItemHeader(inf.r, lastItem)
 	if last.itype != blockItemLast {
-		return nil, errors.New("HASH_VALUE is not last in block")
+		return errors.New("HASH_VALUE is not last in block")
 	}
 	// Read block link.
-	link, err := readFooter(image[lastItem+4:])
+	link, err := readFooter(inf.r, lastItem+4)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	// Write image up to just before the HASH_VALUE item.
-	signed := append([]byte{}, image[:inf.hashValueOffset]...)
+	// Copy image up to just before the HASH_VALUE item.
+	if _, err := inf.r.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if _, err := io.CopyN(w, inf.r, int64(inf.hashValueOffset)); err != nil {
+		return err
+	}
 	bo := binary.LittleEndian
 	// Write a SIGNATURE_ITEM.
 	sigItemSize := 4 + len(pubKey) + len(signature)
 	header := uint32(blockItemSignature) | // SIGNATURE item.
 		uint32(sigItemSize/4)<<8 | // Size in words.
 		sigSecp256k1<<24 // Algorithm.
-	signed = bo.AppendUint32(signed, header)
-	signed = append(signed, pubKey...)
-	signed = append(signed, signature...)
+	u32 := make([]byte, 4)
+	bo.PutUint32(u32, header)
+	w.Write(u32)
+	w.Write(pubKey)
+	w.Write(signature)
 	// Adjust size because of expanded item.
 	sizeAdj := uint32(sigItemSize - hashItemSize)
 	// Add footer.
 	header = 0x80 | uint32(blockItemLast) | // LAST_ITEM with 2-byte size.
 		(uint32(last.size)+sizeAdj/4)<<8
-	signed = bo.AppendUint32(signed, header)
-	signed = bo.AppendUint32(signed, link)
-	signed = bo.AppendUint32(signed, footer)
-	return signed, nil
+	bo.PutUint32(u32, header)
+	w.Write(u32)
+	bo.PutUint32(u32, link)
+	w.Write(u32)
+	bo.PutUint32(u32, footer)
+	w.Write(u32)
+	return nil
 }
 
-func read(data []byte) (Image, error) {
-	bo := binary.LittleEndian
+type imageReader struct {
+	r   io.ReadSeeker
+	pos int64
+	buf [4]byte
+	err error
+}
+
+func newImageReader(r io.ReadSeeker) *imageReader {
+	return &imageReader{r: r}
+}
+
+func (r *imageReader) Uint32(idx uint32) uint32 {
+	if _, err := r.r.Seek(int64(idx), io.SeekStart); err != nil {
+		return 0
+	}
+	buf := r.buf[:4]
+	if _, err := io.ReadFull(r.r, buf); err != nil {
+		return 0
+	}
+	return binary.LittleEndian.Uint32(buf)
+}
+
+func (r *imageReader) Seek(offset int64, whence int) (int64, error) {
+	if r.err != nil {
+		return r.pos, r.err
+	}
+	n, err := r.r.Seek(offset, whence)
+	r.pos = n
+	r.err = err
+	return r.pos, r.err
+}
+
+func (r *imageReader) Read(d []byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	n, err := r.r.Read(d)
+	r.pos += int64(n)
+	r.err = err
+	return n, r.err
+}
+
+func read(data io.ReadSeeker) (*Image, error) {
+	img := &Image{
+		r: newImageReader(data),
+	}
 	idx := uint32(0)
 	// Scan first 4k for first block header.
 	for range 1024 {
-		h := bo.Uint32(data[idx:])
+		h := img.r.Uint32(idx)
 		if h == header {
 			break
 		}
@@ -153,24 +216,23 @@ func read(data []byte) (Image, error) {
 	firstBlock := idx
 	hidx := idx
 	nblocks := 0
-	var img Image
 	for {
-		h := bo.Uint32(data[idx:])
+		h := img.r.Uint32(idx)
 		if h != header {
-			return Image{}, errors.New("missing block header")
+			return nil, errors.New("missing block header")
 		}
 		img.blockStartOffset = idx
 		idx += 4
 		totalSize := uint(0)
 		// Scan items.
 		for {
-			h := readItemHeader(data[idx:])
+			h := readItemHeader(img.r, idx)
 			if h.size == 0 {
-				return Image{}, errors.New("zero-sized block item")
+				return nil, errors.New("zero-sized block item")
 			}
 			if h.itype == blockItemLast {
 				if totalSize != uint(h.size) {
-					return Image{}, errors.New("mismatched total item size")
+					return nil, errors.New("mismatched total item size")
 				}
 				break
 			}
@@ -189,20 +251,20 @@ func read(data []byte) (Image, error) {
 				img.hashValueOffset = idx
 			case blockItemSignature:
 				if int(h.size) != 32+1 {
-					return Image{}, errors.New("invalid SIGNATURE item size")
+					return nil, errors.New("invalid SIGNATURE item size")
 				}
 				img.SignatureOffset = idx + 4
 			}
 			idx += uint32(h.size) * 4
 		}
 		// Verify footer and jump to next block in loop.
-		link, err := readFooter(data[idx+4:])
+		link, err := readFooter(img.r, idx+4)
 		if err != nil {
-			return Image{}, err
+			return nil, err
 		}
 		nblocks++
 		if nblocks == maxLoopLen {
-			return Image{}, errors.New("block loop too long")
+			return nil, errors.New("block loop too long")
 		}
 		hidx += link
 		if hidx == firstBlock {
@@ -210,43 +272,47 @@ func read(data []byte) (Image, error) {
 		}
 		idx = hidx
 	}
-	return img, nil
+	return img, img.r.err
 }
 
-func (in *Image) Signature(image []byte) (pubKey []byte, sig []byte, err error) {
+func (in *Image) Signature() (pubKey []byte, sig []byte, err error) {
 	off := in.SignatureOffset
-	h := readItemHeader(image[off-4:])
+	h := readItemHeader(in.r, off-4)
 	if h.itype != blockItemSignature {
 		return nil, nil, errors.New("picobin: missing SIGNATURE item")
 	}
-	pubKey = image[off : off+64]
-	sig = image[off+64 : off+sigSecp256k1Len]
-	return pubKey, sig, nil
+	data := make([]byte, 128)
+	_, err = io.ReadFull(in.r, data)
+	pubKey, sig = data[:64], data[64:]
+	return pubKey, sig, err
 }
 
-func (in *Image) Hash(img []byte) ([]byte, error) {
-	h := readItemHeader(img[in.hashValueOffset:])
+func (in *Image) Hash() ([]byte, error) {
+	h := readItemHeader(in.r, in.hashValueOffset)
 	if h.itype != blockItemHashValue {
 		return nil, errors.New("picobin: missing HASH_VALUE item")
 	}
-	return img[in.hashValueOffset+4 : in.hashValueOffset+uint32(h.size)*4], nil
+	hash := make([]byte, h.size*4-4)
+	_, err := io.ReadFull(in.r, hash)
+	return hash, err
 }
 
-func (in *Image) HashData(img []byte, imageAddr uint32) ([]byte, error) {
+func (in *Image) HashData(img io.ReadSeeker, imageAddr uint32) ([]byte, error) {
+	r := newImageReader(img)
 	// Read HASH_DEF item.
-	h := readItemHeader(img[in.hashDefOffset:])
+	h := readItemHeader(r, in.hashDefOffset)
 	if h.itype != blockItemHashDef {
 		return nil, errors.New("picobin: missing HASH_DEF item")
 	}
 	if a := h.data >> 8; a != hashSHA256 {
 		return nil, errors.New("unknown HASH_DEF hash algorithm")
 	}
-	bo := binary.LittleEndian
 	// Read number of block bytes to hash.
-	blockHashed := 4 * (bo.Uint32(img[in.hashDefOffset+4:]) & 0xffff)
-	var hashData []byte
+	blockHashed := 4 * (r.Uint32(in.hashDefOffset+4) & 0xffff)
+	hasher := sha256.New()
+	buf := make([]byte, 1024)
 	// Read LOAD_MAP item.
-	h = readItemHeader(img[in.loadMapOffset:])
+	h = readItemHeader(r, in.loadMapOffset)
 	if h.itype != blockItemLoadMap {
 		return nil, errors.New("picobin: missing LOAD_MAP item")
 	}
@@ -255,11 +321,13 @@ func (in *Image) HashData(img []byte, imageAddr uint32) ([]byte, error) {
 	absolute := h.data&0x8000 != 0
 	eidx := in.loadMapOffset + 4
 	for i := range uint32(nentries) {
-		storageStart := bo.Uint32(img[eidx+i*12+0:])
-		size := bo.Uint32(img[eidx+i*12+8:])
+		storageStart := r.Uint32(eidx + i*12 + 0)
+		size := r.Uint32(eidx + i*12 + 8)
 		if storageStart == 0 {
 			// The size itself is hashed, not the storage.
-			hashData = append(hashData, img[eidx+8:eidx+12]...)
+			if err := hashData(r, hasher, buf, eidx+8, 4); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		if absolute {
@@ -268,26 +336,46 @@ func (in *Image) HashData(img []byte, imageAddr uint32) ([]byte, error) {
 		} else {
 			storageStart += in.loadMapOffset
 		}
-		hashData = append(hashData, img[storageStart:storageStart+size]...)
+		if err := hashData(r, hasher, buf, storageStart, size); err != nil {
+			return nil, err
+		}
 	}
 	// Hash block.
-	blockHashData := img[in.blockStartOffset : in.blockStartOffset+blockHashed]
-	hashData = append(hashData, blockHashData...)
-	return hashData, nil
+	if err := hashData(r, hasher, buf, in.blockStartOffset, blockHashed); err != nil {
+		return nil, err
+	}
+	return hasher.Sum(nil), r.err
 }
 
-func readFooter(img []byte) (uint32, error) {
-	bo := binary.LittleEndian
-	link, f := bo.Uint32(img), bo.Uint32(img[4:])
+func hashData(r io.ReadSeeker, h hash.Hash, buf []byte, idx, size uint32) error {
+	if _, err := r.Seek(int64(idx), io.SeekStart); err != nil {
+		return err
+	}
+	for size > 0 {
+		buf := buf[:min(len(buf), int(size))]
+		n, err := r.Read(buf)
+		size -= uint32(n)
+		h.Write(buf[:n])
+		if err != nil {
+			if err == io.EOF && size == 0 {
+				break
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func readFooter(r *imageReader, idx uint32) (uint32, error) {
+	link, f := r.Uint32(idx), r.Uint32(idx+4)
 	if f != footer {
 		return 0, errors.New("missing block footer")
 	}
 	return link, nil
 }
 
-func readItemHeader(img []byte) itemHeader {
-	bo := binary.LittleEndian
-	w := bo.Uint32(img)
+func readItemHeader(r *imageReader, idx uint32) itemHeader {
+	w := r.Uint32(idx)
 	typeAndSize := byte(w)
 	sflag := typeAndSize & 0x80
 	h := itemHeader{

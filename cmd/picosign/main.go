@@ -8,7 +8,7 @@
 package main
 
 import (
-	"crypto/sha256"
+	"bytes"
 	"encoding/asn1"
 	"encoding/hex"
 	"errors"
@@ -79,11 +79,11 @@ func extract() error {
 	if err != nil {
 		return fmt.Errorf("extract: %s: %v", path, err)
 	}
-	finfo, err := picobin.Read(firmware)
+	finfo, err := picobin.NewImage(bytes.NewReader(firmware))
 	if err != nil {
 		return fmt.Errorf("extract: %s: %v", path, err)
 	}
-	_, sig, err := finfo.Signature(firmware)
+	_, sig, err := finfo.Signature()
 	if err != nil {
 		return fmt.Errorf("extract: %s: %v", path, err)
 	}
@@ -104,15 +104,14 @@ func hash() error {
 	if err != nil {
 		return fmt.Errorf("%s: %v", path, err)
 	}
-	finfo, err := picobin.Read(firmware)
+	finfo, err := picobin.NewImage(bytes.NewReader(firmware))
 	if err != nil {
 		return fmt.Errorf("%s: %v", path, err)
 	}
-	hashData, err := finfo.HashData(firmware, r.StartAddr)
+	hash, err := finfo.HashData(bytes.NewReader(firmware), r.StartAddr)
 	if err != nil {
 		return fmt.Errorf("%s: %v", path, err)
 	}
-	hash := sha256.Sum256(hashData)
 	os.Stdout.Write(hash[:])
 	return nil
 }
@@ -181,13 +180,16 @@ func sign() (cerr error) {
 	if err != nil {
 		return fmt.Errorf("sign: %s: %v", path, err)
 	}
-	finfo, err := picobin.Read(firmware)
+	finfo, err := picobin.NewImage(bytes.NewReader(firmware))
 	if err != nil {
 		return fmt.Errorf("sign: %s: %v", path, err)
 	}
+	if finfo.SignatureOffset == 0 {
+		return fmt.Errorf("sign: %s: missing SIGNATURE section", path)
+	}
 	// Rewind the file and seek to the signature.
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return err
+		return fmt.Errorf("sign: %s: %v", path, err)
 	}
 	rw := uf2.NewReader(f, uf2.FamilyRP2350ARMSigned)
 	if _, err := io.Copy(io.Discard, io.LimitReader(rw, int64(finfo.SignatureOffset))); err != nil {
