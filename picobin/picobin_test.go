@@ -3,7 +3,6 @@ package picobin
 import (
 	"bytes"
 	"compress/gzip"
-	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"io"
@@ -23,11 +22,12 @@ var (
 )
 
 func TestSignature(t *testing.T) {
-	finfo, err := Read(signedImage)
+	img := bytes.NewReader(signedImage)
+	finfo, err := NewImage(img)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkey, sig, err := finfo.Signature(signedImage)
+	pkey, sig, err := finfo.Signature()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,15 +42,20 @@ func TestSign(t *testing.T) {
 	newKey := bytes.Repeat([]byte{0xde, 0xad}, 32)
 	newSig := bytes.Repeat([]byte{0xbe, 0xef}, 32)
 	for _, img := range [][]byte{signedImage, hashedImage} {
-		resigned, err := Sign(img, newKey, newSig)
+		img, err := NewImage(bytes.NewReader(img))
 		if err != nil {
 			t.Fatal(err)
 		}
-		finfo, err := Read(resigned)
+		resigned := new(bytes.Buffer)
+		if err := img.Sign(resigned, newKey, newSig); err != nil {
+			t.Fatal(err)
+		}
+		r := bytes.NewReader(resigned.Bytes())
+		finfo, err := NewImage(r)
 		if err != nil {
 			t.Fatal(err)
 		}
-		pkey, sig, err := finfo.Signature(resigned)
+		pkey, sig, err := finfo.Signature()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,15 +66,15 @@ func TestSign(t *testing.T) {
 }
 
 func TestHashData(t *testing.T) {
-	finfo, err := Read(signedImage)
+	img := bytes.NewReader(signedImage)
+	finfo, err := NewImage(img)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hashData, err := finfo.HashData(signedImage, 0x10000000)
+	hash, err := finfo.HashData(img, 0x10000000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hash := sha256.Sum256(hashData)
 	wantHash := unhex("15cf016da39866e8d1c0dff1aaa29fd0429876f9b55a290c1fc6fce819783557")
 	if !slices.Equal(hash[:], wantHash) {
 		t.Errorf("hash mismatch: got\n%x\nexpected\n%x", hash, wantHash)
@@ -77,11 +82,12 @@ func TestHashData(t *testing.T) {
 }
 
 func TestHash(t *testing.T) {
-	finfo, err := Read(hashedImage)
+	img := bytes.NewReader(hashedImage)
+	finfo, err := NewImage(img)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := finfo.Hash(hashedImage)
+	h, err := finfo.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
