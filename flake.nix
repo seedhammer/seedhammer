@@ -125,6 +125,16 @@
                 -serial=uart "$@" \
                 ./cmd/controller
             '';
+            copy-signature = pkgs.writeShellScriptBin "copy-signature" ''
+              set -eu -o pipefail
+
+              PUBKEY="03bcea00fedcd40ddbb67f4a3f2fafb59bb942e7b2130a76ffbed5568497477bfd"
+              SRC="$1"; shift
+              DST="$1"; shift
+              SIGNATURE=$(${pkgs.go}/bin/go run seedhammer.com/cmd/picosign extract "$SRC")
+              ${pkgs.go}/bin/go run seedhammer.com/cmd/picosign sign -pubkey "$PUBKEY" -sig "$SIGNATURE" "$DST"
+              echo "wat" $?
+            '';
           }
         );
         devShells =
@@ -142,6 +152,7 @@
                 picotool
                 selfpkgs.build-firmware
                 selfpkgs.flash-firmware
+                selfpkgs.copy-signature
               ];
             };
           };
