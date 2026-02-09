@@ -81,6 +81,9 @@ func (r *Reader) Write(buf []byte) (int, error) {
 		return 0, errors.New("writes not supported")
 	}
 	for {
+		if err := r.loadBlock(); err != nil {
+			return 0, err
+		}
 		n := min(int(r.header.PayloadSize()-r.idx), len(buf))
 		var err error
 		if n > 0 {
@@ -91,9 +94,6 @@ func (r *Reader) Write(buf []byte) (int, error) {
 		r.idx += uint32(n)
 		if err != nil || len(buf) == 0 {
 			return bytes, err
-		}
-		if err := r.loadBlock(); err != nil {
-			return 0, err
 		}
 	}
 }
