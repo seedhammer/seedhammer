@@ -71,7 +71,7 @@ func Split(data Data, keyIdx int) (urs []string) {
 			shares = [][]int{{keyIdx}}
 		} else {
 			all := make([]int, 0, m)
-			for i := 0; i < m; i++ {
+			for i := range m {
 				all = append(all, i)
 			}
 			shares = [][]int{all}

@@ -76,7 +76,7 @@ var firstLetters [26]uint8
 
 func init() {
 	var letter byte = 'a' - 1
-	for i := 0; i < len(abbrev)/2; i++ {
+	for i := range len(abbrev) / 2 {
 		if l1 := abbrev[i*2]; l1 != letter {
 			letter = l1
 			firstLetters[letter-'a'] = uint8(i)

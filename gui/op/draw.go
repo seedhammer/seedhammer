@@ -29,7 +29,7 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 						for y := dr.Min.Y; y < dr.Max.Y; y++ {
 							poff := dst.PixOffset(dr.Min.X, y)
 							dstPix := dstPix[poff : poff+maxx]
-							for x := 0; x < maxx; x++ {
+							for x := range maxx {
 								dstPix[x] = rgb
 							}
 						}
@@ -48,7 +48,7 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 						dstPix := dstPix[dstOff : dstOff+maxx]
 						srcOff := src.PixOffset(pos.X, pos.Y+y)
 						srcPix := srcPix[srcOff : srcOff+maxx]
-						for x := 0; x < maxx; x++ {
+						for x := range maxx {
 							srcCol, a := p.At(srcPix[x])
 							dstCol := dstPix[x]
 							// The following call is inlined manually:
@@ -119,7 +119,7 @@ func drawAlphaUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA,
 		dstOff := dst.PixOffset(dr.Min.X, dr.Min.Y+y)
 		dstPix := dstPix[dstOff : dstOff+maxx]
 		maskOff := mask.PixOffset(maskOff.X, maskOff.Y+y)
-		for x := 0; x < maxx; x++ {
+		for x := range maxx {
 			i := maskOff + x
 			a := alpha4.Val(i, maskPix[i/2])
 			a16 := uint16(a)

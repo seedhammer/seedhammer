@@ -143,7 +143,7 @@ outer:
 }
 
 func (s *State) stepClear(dims image.Point) {
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		s.snake = append(s.snake, joint{Point: image.Point{
 			s.clear.x,
 			s.clear.y,

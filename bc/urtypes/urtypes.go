@@ -204,13 +204,13 @@ var decMode cbor.DecMode
 
 func init() {
 	tags := cbor.NewTagSet()
-	if err := tags.Add(cbor.TagOptions{DecTag: cbor.DecTagOptional}, reflect.TypeOf(hdKey{}), tagHDKey); err != nil {
+	if err := tags.Add(cbor.TagOptions{DecTag: cbor.DecTagOptional}, reflect.TypeFor[hdKey](), tagHDKey); err != nil {
 		panic(err)
 	}
-	if err := tags.Add(cbor.TagOptions{DecTag: cbor.DecTagOptional, EncTag: cbor.EncTagRequired}, reflect.TypeOf(keyPath{}), tagKeyPath); err != nil {
+	if err := tags.Add(cbor.TagOptions{DecTag: cbor.DecTagOptional, EncTag: cbor.EncTagRequired}, reflect.TypeFor[keyPath](), tagKeyPath); err != nil {
 		panic(err)
 	}
-	if err := tags.Add(cbor.TagOptions{DecTag: cbor.DecTagOptional, EncTag: cbor.EncTagRequired}, reflect.TypeOf(useInfo{}), tagUseInfo); err != nil {
+	if err := tags.Add(cbor.TagOptions{DecTag: cbor.DecTagOptional, EncTag: cbor.EncTagRequired}, reflect.TypeFor[useInfo](), tagUseInfo); err != nil {
 		panic(err)
 	}
 	em, err := cbor.CoreDetEncOptions().EncModeWithTags(tags)

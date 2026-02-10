@@ -328,8 +328,8 @@ func compareImages(imgPath string, update bool, img image.Image) error {
 	pixels := 0
 	width, height := want.Bounds().Dx(), want.Bounds().Dy()
 	gotOff := img.Bounds().Min
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := range height {
+		for x := range width {
 			wanta, _, _, _ := want.At(x, y).RGBA()
 			want := wanta != 0
 			gota, _, _, _ := img.At(gotOff.X+x, gotOff.Y+y).RGBA()

@@ -11,6 +11,7 @@ import (
 	"log"
 	"math"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -1786,7 +1787,7 @@ func layoutMainPager(ops op.Ctx, th *Colors, page program) image.Point {
 		return image.Point{}
 	}
 	sz := assets.CircleFilled.Bounds().Size()
-	for i := 0; i < npages; i++ {
+	for i := range npages {
 		op.Offset(ops, image.Pt((sz.X+space)*i, 0))
 		mask := assets.Circle
 		if i == int(page) {
@@ -2096,10 +2097,8 @@ events:
 }
 
 func isMnemonicComplete(m bip39.Mnemonic) bool {
-	for _, w := range m {
-		if w == -1 {
-			return false
-		}
+	if slices.Contains(m, -1) {
+		return false
 	}
 	return len(m) > 0
 }

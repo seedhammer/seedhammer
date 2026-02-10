@@ -72,7 +72,7 @@ func parseCompactSeedQR(qr []byte) (bip39.Mnemonic, bool) {
 	for _, b := range qr {
 		buf.WriteString(fmt.Sprintf("%.8b", b))
 	}
-	for i := 0; i < checksum; i++ {
+	for range checksum {
 		buf.WriteRune('0')
 	}
 	bitstream := buf.String()

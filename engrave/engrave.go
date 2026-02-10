@@ -279,8 +279,8 @@ func QR(strokeWidth int, scale int, qr *qr.Code) Engraving {
 		dim := qr.Size
 		cont := true
 		radius := strokeWidth / 2
-		for y := 0; y < dim; y++ {
-			for i := 0; i < scale; i++ {
+		for y := range dim {
+			for i := range scale {
 				draw := false
 				var firstx int
 				line := y*scale + i
@@ -371,8 +371,8 @@ func constantTimeStartEnd(dim int) (start, end bezier.Point) {
 func bitmapForQR(qr *qr.Code) bitmap {
 	dim := qr.Size
 	bm := newBitmap(dim, dim)
-	for y := 0; y < dim; y++ {
-		for x := 0; x < dim; x++ {
+	for y := range dim {
+		for x := range dim {
 			if qr.Black(x, y) {
 				bm.Set(bezier.Pt(x, y))
 			}

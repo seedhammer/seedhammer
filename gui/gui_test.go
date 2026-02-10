@@ -264,7 +264,7 @@ func TestEngraveScreen(t *testing.T) {
 
 func TestWordKeyboardScreen(t *testing.T) {
 	ctx := NewContext(newPlatform())
-	for i := bip39.Word(0); i < bip39.NumWords; i++ {
+	for i := range bip39.NumWords {
 		w := bip39.LabelFor(i)
 		runes(&ctx.Router, strings.ToUpper(w))
 		click(&ctx.Router, Button2)

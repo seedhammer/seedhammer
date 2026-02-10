@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -113,12 +114,7 @@ func (k Key) String() string {
 
 // Singlesig reports whether the script is for single-sig.
 func (s Script) Singlesig() bool {
-	for _, s2 := range []Script{P2PKH, P2WPKH, P2SH_P2WPKH, P2TR} {
-		if s == s2 {
-			return true
-		}
-	}
-	return false
+	return slices.Contains([]Script{P2PKH, P2WPKH, P2SH_P2WPKH, P2TR}, s)
 }
 
 // DerivationPath returns the standard derivation path
@@ -467,7 +463,7 @@ func ParseExtendedKey(k string) (Script, *hdkeychain.ExtendedKey, error) {
 
 func parsePath(path string) ([]Derivation, error) {
 	var res []Derivation
-	for _, p := range strings.Split(path, "/") {
+	for p := range strings.SplitSeq(path, "/") {
 		var d Derivation
 		switch {
 		case p == "*":

@@ -66,10 +66,7 @@ func DiceToWord(roll Roll) (Word, bool) {
 	}
 	column := row / rowsPerSubcolumn
 	word := column*2*rowsPerSubcolumn + row%rowsPerSubcolumn
-	subrows := (rowsPerPage - column*rowsPerSubcolumn)
-	if subrows > rowsPerSubcolumn {
-		subrows = rowsPerSubcolumn
-	}
+	subrows := min((rowsPerPage - column*rowsPerSubcolumn), rowsPerSubcolumn)
 	word += subrows * subcol
 	word += page * 2 * rowsPerPage
 	w := Word(word)
