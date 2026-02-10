@@ -32,7 +32,7 @@ func TestGenerator(t *testing.T) {
 		var s Source
 		s.Seed(([32]byte)(seed))
 		got := make([]byte, len(want))
-		for i := 0; i < len(want); i++ {
+		for i := range want {
 			got[i] = byte(s.Uint64() % 100)
 		}
 		if !bytes.Equal(got, want) {

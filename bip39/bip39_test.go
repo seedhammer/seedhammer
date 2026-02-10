@@ -93,7 +93,7 @@ func TestInvalidSeeds(t *testing.T) {
 
 func TestChecksumWord(t *testing.T) {
 	mnemonic := make(Mnemonic, 12)
-	for i := 0; i < 1e4; i++ {
+	for range int(1e4) {
 		for j := range mnemonic {
 			mnemonic[j] = RandomWord()
 		}

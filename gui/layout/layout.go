@@ -94,18 +94,12 @@ func (r Rectangle) Size() image.Point {
 }
 
 func (r Rectangle) CutTop(height int) (top Rectangle, bottom Rectangle) {
-	cuty := r.Min.Y + height
-	if cuty > r.Max.Y {
-		cuty = r.Max.Y
-	}
+	cuty := min(r.Min.Y+height, r.Max.Y)
 	return r.cutY(cuty)
 }
 
 func (r Rectangle) CutBottom(height int) (top Rectangle, bottom Rectangle) {
-	cuty := r.Max.Y - height
-	if cuty < r.Min.Y {
-		cuty = r.Min.Y
-	}
+	cuty := max(r.Max.Y-height, r.Min.Y)
 	return r.cutY(cuty)
 }
 
@@ -116,18 +110,12 @@ func (r Rectangle) cutY(cuty int) (top Rectangle, bottom Rectangle) {
 }
 
 func (r Rectangle) CutStart(width int) (start Rectangle, end Rectangle) {
-	cutx := r.Min.X + width
-	if cutx > r.Max.X {
-		cutx = r.Max.X
-	}
+	cutx := min(r.Min.X+width, r.Max.X)
 	return r.cutX(cutx)
 }
 
 func (r Rectangle) CutEnd(width int) (start Rectangle, end Rectangle) {
-	cuty := r.Max.X - width
-	if cuty < r.Min.X {
-		cuty = r.Min.X
-	}
+	cuty := max(r.Max.X-width, r.Min.X)
 	return r.cutX(cuty)
 }
 

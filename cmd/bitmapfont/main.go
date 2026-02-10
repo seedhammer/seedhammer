@@ -163,7 +163,7 @@ func parse(ttf []byte, ppem int) (*Face, error) {
 		}
 		b.WriteByte(i)
 	}
-	for i := uint8(0); i < unicode.MaxASCII; i++ {
+	for i := range uint8(unicode.MaxASCII) {
 		if unicode.IsSpace(rune(i)) {
 			b.WriteByte(i)
 		}

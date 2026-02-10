@@ -186,7 +186,6 @@ func TestSeed(t *testing.T) {
 		{12},
 	}
 	for i, test := range tests {
-		i, test := i, test
 		name := fmt.Sprintf("%d-words-%d", i, test.seedLen)
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -107,7 +107,7 @@ func TestChooseDegree(t *testing.T) {
 	var degrees []int
 	for nonce := 1; nonce <= 200; nonce++ {
 		rng := new(xoshiro256.Source)
-		h := sha256.Sum256([]byte(fmt.Sprintf("Wolf-%d", nonce)))
+		h := sha256.Sum256(fmt.Appendf(nil, "Wolf-%d", nonce))
 		rng.Seed(h)
 		degrees = append(degrees, chooseDegree(seqLen, rng))
 	}

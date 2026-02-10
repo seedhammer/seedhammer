@@ -172,10 +172,7 @@ func frontSideSeed(params engrave.Params, plate Seed, qrc *engrave.ConstantQRCmd
 			maxCol1 = 16
 			maxCol2 = 4
 		)
-		endCol1 := maxCol1
-		if endCol1 > len(plate.Mnemonic) {
-			endCol1 = len(plate.Mnemonic)
-		}
+		endCol1 := min(maxCol1, len(plate.Mnemonic))
 		col1Height := pfs * endCol1
 
 		// Engrave master fingerprint.
@@ -195,10 +192,7 @@ func frontSideSeed(params engrave.Params, plate Seed, qrc *engrave.ConstantQRCmd
 		wordColumn(off, constant, plate.Font, pfs, plate.Mnemonic, plate.ShortestWord, plate.LongestWord, 0, endCol1)
 
 		// Engrave (top of) column 2.
-		endCol2 := endCol1 + maxCol2
-		if endCol2 > len(plate.Mnemonic) {
-			endCol2 = len(plate.Mnemonic)
-		}
+		endCol2 := min(endCol1+maxCol2, len(plate.Mnemonic))
 		off = t.Offset(params.I(44), (plateDims.Y-col1Height)/2)
 		wordColumn(off, constant, plate.Font, pfs, plate.Mnemonic, plate.ShortestWord, plate.LongestWord, endCol1, endCol2)
 
