@@ -29,7 +29,7 @@ type Config struct {
 }
 
 func New(dc, cs, rst, wrx, rdx, db0, te machine.Pin, pio *rp.PIO0_Type) (*Device, error) {
-	ch, err := dma.Reserve()
+	ch, err := dma.ReserveChannel()
 	if err != nil {
 		return nil, err
 	}

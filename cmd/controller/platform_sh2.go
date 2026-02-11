@@ -697,9 +697,7 @@ func (e *engraver) execute0(needleActivation time.Duration, mode engraverMode, s
 	needleAct := uint(needleActivation * time.Duration(engraverConf.TicksPerSecond) / time.Second)
 	needlePeriod := uint(needlePeriod * time.Duration(engraverConf.TicksPerSecond) / time.Second)
 	d := stepper.Engrave(e.Dev, done, spline)
-	if err := e.Dev.Enable(d.HandleTransferCompleted, needleAct, needlePeriod); err != nil {
-		return err
-	}
+	e.Dev.Enable(d.HandleTransferCompleted, needleAct, needlePeriod)
 	defer e.Dev.Disable()
 	d.Run()
 	if mode == modeHoming {
