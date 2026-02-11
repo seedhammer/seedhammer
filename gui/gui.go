@@ -2373,7 +2373,7 @@ func (s *EngraveScreen) moveStep(p Platform) bool {
 		}
 		go func() {
 			defer p.Wakeup()
-			errs <- p.Engrave(true, pspline, nil, quit)
+			errs <- p.Engrave(true, pspline, quit)
 		}()
 	}
 	return false
@@ -2597,7 +2597,8 @@ type Platform interface {
 	LockBoot() error
 	AppendEvents(deadline time.Time, evts []Event) []Event
 	Wakeup()
-	Engrave(stall bool, spline bspline.Curve, status chan<- EngraverStatus, quit <-chan struct{}) error
+	Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error
+	EngraverStatus() EngraverStatus
 	NFCReader() io.Reader
 	EngraverParams() engrave.Params
 	DisplaySize() image.Point

@@ -397,7 +397,11 @@ func (p *testPlatform) NFCReader() io.Reader {
 	return nil
 }
 
-func (p *testPlatform) Engrave(stall bool, spline bspline.Curve, status chan<- EngraverStatus, quit <-chan struct{}) error {
+func (p *testPlatform) EngraverStatus() EngraverStatus {
+	return EngraverStatus{}
+}
+
+func (p *testPlatform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error {
 	defer close(p.engrave.done)
 	p.engrave.quit = quit
 	select {

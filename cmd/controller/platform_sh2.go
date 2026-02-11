@@ -14,6 +14,7 @@ import (
 	"machine"
 	"runtime"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -437,6 +438,7 @@ func (p *Platform) EngraverParams() engrave.Params {
 }
 
 type engraver struct {
+	axisLock         sync.Mutex
 	XAxis, YAxis     *tmc2209.Device
 	PD               *ap33772s.Device
 	Dev              *mjolnir2.Device
@@ -444,7 +446,6 @@ type engraver struct {
 	mode             engraverMode
 	diag             chan axis
 	ready            chan struct{}
-	status           chan<- gui.EngraverStatus
 	quit             <-chan struct{}
 }
 
@@ -563,15 +564,23 @@ func (e *engraver) engrave(mode engraverMode, spline bspline.Curve) error {
 	current := stepperPower * 1000 / voltage
 	// Wait a bit before enabling each stepper.
 	time.Sleep(200 * time.Millisecond)
-	if err := e.XAxis.Enable(current); err != nil {
-		return err
-	}
-	defer e.XAxis.Enable(0)
+	defer func() {
+		e.axisLock.Lock()
+		defer e.axisLock.Unlock()
+		e.XAxis.Enable(0)
+		e.YAxis.Enable(0)
+	}()
+	e.axisLock.Lock()
+	xerr := e.XAxis.Enable(current)
 	time.Sleep(200 * time.Millisecond)
-	if err := e.YAxis.Enable(current); err != nil {
-		return err
+	yerr := e.YAxis.Enable(current)
+	e.axisLock.Unlock()
+	if yerr != nil {
+		return yerr
 	}
-	defer e.YAxis.Enable(0)
+	if xerr != nil {
+		return xerr
+	}
 	// Wait for standstill tuning of the drivers.
 	time.Sleep(tmc2209.StandstillTuningPeriod)
 
@@ -630,6 +639,8 @@ func (e *engraver) execute(needleActivation time.Duration, mode engraverMode, sp
 	if err := e.execute0(needleActivation, mode, spline, quit); err != nil {
 		return err
 	}
+	e.axisLock.Lock()
+	defer e.axisLock.Unlock()
 	if err := e.XAxis.Error(); err != nil {
 		return fmt.Errorf("X axis: %w", err)
 	}
@@ -650,43 +661,12 @@ func (e *engraver) execute0(needleActivation time.Duration, mode engraverMode, s
 	go func() {
 		defer close(done)
 		for {
-			xload, err1 := e.XAxis.Load()
-			yload, err2 := e.YAxis.Load()
-			xstep, err3 := e.XAxis.StepDuration()
-			ystep, err4 := e.YAxis.StepDuration()
-			err := err1
-			switch {
-			case err2 != nil:
-				err = err2
-			case err3 != nil:
-				err = err3
-			case err4 != nil:
-				err = err4
-			}
-			xspeed, yspeed := 0, 0
-			if xstep > 0 {
-				xspeed = int(time.Second / (mm * xstep))
-			}
-			if ystep > 0 {
-				yspeed = int(time.Second / (mm * ystep))
-			}
-			st := gui.EngraverStatus{
-				StallSpeed: minimumStallVelocity / mm,
-				XSpeed:     xspeed,
-				YSpeed:     yspeed,
-				XLoad:      xload,
-				YLoad:      yload,
-				XStalls:    int(e.xstalls.Load()),
-				YStalls:    int(e.ystalls.Load()),
-				Error:      err,
-			}
 			select {
 			case axis := <-e.diag:
 				blocked |= axis
 				if mode != modeHoming || blocked == (xaxis|yaxis) {
 					return
 				}
-			case e.status <- st:
 			case <-quit:
 				return
 			case <-quitStatus:
@@ -734,14 +714,50 @@ func (p *Platform) NFCReader() io.Reader {
 	return poller.New(p.nfc)
 }
 
-func (p *Platform) Engrave(stall bool, spline bspline.Curve, status chan<- gui.EngraverStatus, quit <-chan struct{}) error {
-	p.engraver.status = status
+func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error {
 	p.engraver.quit = quit
 	mode := modeEngrave
 	if !stall {
 		mode = modeNostall
 	}
 	return p.engraver.engrave(mode, spline)
+}
+
+func (p *Platform) EngraverStatus() gui.EngraverStatus {
+	e := p.engraver
+	e.axisLock.Lock()
+	defer e.axisLock.Unlock()
+	xload, err1 := e.XAxis.Load()
+	yload, err2 := e.YAxis.Load()
+	xstep, err3 := e.XAxis.StepDuration()
+	ystep, err4 := e.YAxis.StepDuration()
+	err := err1
+	switch {
+	case err2 != nil:
+		err = err2
+	case err3 != nil:
+		err = err3
+	case err4 != nil:
+		err = err4
+	}
+	xspeed, yspeed := 0, 0
+	if xstep > 0 {
+		xspeed = int(time.Second / (mm * xstep))
+	}
+	if ystep > 0 {
+		yspeed = int(time.Second / (mm * ystep))
+	}
+	xstalls, ystalls := int(e.xstalls.Load()), int(e.ystalls.Load())
+	return gui.EngraverStatus{
+		StallSpeed: minimumStallVelocity / mm,
+		XSpeed:     xspeed,
+		YSpeed:     yspeed,
+		XLoad:      xload,
+		YLoad:      yload,
+		XStalls:    xstalls,
+		YStalls:    ystalls,
+		Error:      err,
+	}
 }
 
 func (p *Platform) DisplaySize() image.Point {
