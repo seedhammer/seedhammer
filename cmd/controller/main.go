@@ -1,4 +1,6 @@
 // command controller is the user interface for engraving SeedHammer plates.
+//go:build tinygo && rp
+
 package main
 
 import (
