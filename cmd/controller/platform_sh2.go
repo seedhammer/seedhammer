@@ -194,7 +194,7 @@ func Init() (*Platform, error) {
 		return nil, err
 	}
 	// Home and move needle to origin.
-	go e.engrave(modeHoming, nil)
+	go e.engrave(modeHoming, nil, nil)
 
 	stdin := make(chan gui.Event)
 	p := &Platform{
@@ -446,7 +446,6 @@ type engraver struct {
 	mode             engraverMode
 	diag             chan axis
 	ready            chan struct{}
-	quit             <-chan struct{}
 }
 
 type engraverMode uint32
@@ -526,7 +525,7 @@ func (e *engraver) handleDiag(pin machine.Pin) {
 	}
 }
 
-func (e *engraver) engrave(mode engraverMode, spline bspline.Curve) error {
+func (e *engraver) engrave(mode engraverMode, spline bspline.Curve, quit <-chan struct{}) error {
 	<-e.ready
 	defer func() {
 		e.ready <- struct{}{}
@@ -595,7 +594,7 @@ func (e *engraver) engrave(mode engraverMode, spline bspline.Curve) error {
 		return nil
 	}
 	defer e.home(act)
-	if err := e.execute(act, mode, spline, e.quit); err != nil {
+	if err := e.execute(act, mode, spline, quit); err != nil {
 		return err
 	}
 	return nil
@@ -636,7 +635,7 @@ func (e *engraver) execute(needleActivation time.Duration, mode engraverMode, sp
 		}
 		defer pin.SetInterrupt(0, nil)
 	}
-	if err := e.execute0(needleActivation, mode, spline, quit); err != nil {
+	if err := e.execute0(needleActivation, spline, quit); err != nil {
 		return err
 	}
 	e.axisLock.Lock()
@@ -650,7 +649,7 @@ func (e *engraver) execute(needleActivation time.Duration, mode engraverMode, sp
 	return nil
 }
 
-func (e *engraver) execute0(needleActivation time.Duration, mode engraverMode, spline bspline.Curve, quit <-chan struct{}) error {
+func (e *engraver) execute0(needleActivation time.Duration, spline bspline.Curve, quit <-chan struct{}) error {
 	done := make(chan struct{})
 	quitStatus := make(chan struct{})
 	defer func() {
@@ -664,7 +663,7 @@ func (e *engraver) execute0(needleActivation time.Duration, mode engraverMode, s
 			select {
 			case axis := <-e.diag:
 				blocked |= axis
-				if mode != modeHoming || blocked == (xaxis|yaxis) {
+				if e.mode != modeHoming || blocked == (xaxis|yaxis) {
 					return
 				}
 			case <-quit:
@@ -680,7 +679,7 @@ func (e *engraver) execute0(needleActivation time.Duration, mode engraverMode, s
 	e.Dev.Enable(d.HandleTransferCompleted, needleAct, needlePeriod)
 	defer e.Dev.Disable()
 	d.Run()
-	if mode == modeHoming {
+	if e.mode == modeHoming {
 		if blocked != (xaxis | yaxis) {
 			return errors.New("mjolnir2: homing timed out")
 		}
@@ -715,12 +714,11 @@ func (p *Platform) NFCReader() io.Reader {
 }
 
 func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error {
-	p.engraver.quit = quit
 	mode := modeEngrave
 	if !stall {
 		mode = modeNostall
 	}
-	return p.engraver.engrave(mode, spline)
+	return p.engraver.engrave(mode, spline, quit)
 }
 
 func (p *Platform) EngraverStatus() gui.EngraverStatus {
