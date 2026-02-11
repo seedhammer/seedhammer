@@ -116,9 +116,9 @@ func runEngraving(quit <-chan struct{}, spline bspline.Curve) iter.Seq[uint8] {
 		transfers: make(chan buffer, 1),
 	}
 	result := make(chan struct{}, 1)
-	driver := Engrave(d, quit, spline)
+	driver := Engrave(d)
 	go func() {
-		driver.Run()
+		driver.Run(ModeEngrave, quit, nil, spline)
 		close(result)
 	}()
 	yieldOk := true

@@ -1,10 +1,26 @@
 package stepper
 
 import (
+	"errors"
 	"iter"
 
 	"seedhammer.com/bezier"
 	"seedhammer.com/bspline"
+)
+
+type Mode uint32
+
+const (
+	ModeEngrave Mode = iota
+	ModeHoming
+	ModeNostall
+)
+
+type Axis uint8
+
+const (
+	XAxis Axis = 0b1 << iota
+	YAxis
 )
 
 const MaxSplineLength = 256
@@ -18,8 +34,6 @@ type Driver struct {
 	knotCh  chan bspline.Knot
 	stall   chan struct{}
 	knots   knotBuffer
-	spline  bspline.Curve
-	quit    <-chan struct{}
 	// safeKnots track the number of knots that
 	// are safe to traverse, because they end in
 	// standstill.
@@ -192,7 +206,7 @@ func (e *Driver) empty() bool {
 	return e.idx == 0
 }
 
-func Engrave(d Device, quit <-chan struct{}, spline bspline.Curve) *Driver {
+func Engrave(d Device) *Driver {
 	const bufSize = 64
 
 	return &Driver{
@@ -200,27 +214,32 @@ func Engrave(d Device, quit <-chan struct{}, spline bspline.Curve) *Driver {
 		dev:    d,
 		knotCh: make(chan bspline.Knot, bufSize),
 		stall:  make(chan struct{}, 1),
-		spline: spline,
-		quit:   quit,
 	}
 }
 
-func (d *Driver) Run() {
-	knots, c := iter.Pull(iter.Seq[bspline.Knot](d.spline))
+func (d *Driver) Run(mode Mode, quit <-chan struct{}, diag <-chan Axis, spline bspline.Curve) error {
+	knots, c := iter.Pull(iter.Seq[bspline.Knot](spline))
 	defer c()
 	knot, moreCommands := knots()
 	if !moreCommands {
-		return
+		return nil
 	}
 	stalled := true
+	var blocked Axis
+loop:
 	for {
 		stallKnots := d.knotCh
 		if !moreCommands {
 			stallKnots = nil
 		}
 		select {
-		case <-d.quit:
-			return
+		case axis := <-diag:
+			blocked |= axis
+			if mode != ModeHoming || blocked == (XAxis|YAxis) {
+				break loop
+			}
+		case <-quit:
+			break loop
 		case <-d.stall:
 			stalled = true
 		case stallKnots <- knot:
@@ -242,5 +261,19 @@ func (d *Driver) Run() {
 				d.dev.Transfer(steps)
 			}
 		}
+	}
+	if mode == ModeHoming {
+		if blocked != (XAxis | YAxis) {
+			return errors.New("mjolnir2: homing timed out")
+		}
+		return nil
+	}
+	switch {
+	case blocked&XAxis != 0:
+		return errors.New("mjolnir2: x-axis blocked")
+	case blocked&YAxis != 0:
+		return errors.New("mjolnir2: y-axis blocked")
+	default:
+		return nil
 	}
 }

@@ -194,7 +194,7 @@ func Init() (*Platform, error) {
 		return nil, err
 	}
 	// Home and move needle to origin.
-	go e.engrave(modeHoming, nil, nil)
+	go e.engrave(stepper.ModeHoming, nil, nil)
 
 	stdin := make(chan gui.Event)
 	p := &Platform{
@@ -443,18 +443,10 @@ type engraver struct {
 	PD               *ap33772s.Device
 	Dev              *mjolnir2.Device
 	xstalls, ystalls atomic.Uint32
-	mode             engraverMode
-	diag             chan axis
+	mode             stepper.Mode
+	diag             chan stepper.Axis
 	ready            chan struct{}
 }
-
-type engraverMode uint32
-
-const (
-	modeEngrave engraverMode = iota
-	modeHoming
-	modeNostall
-)
 
 func (e *engraver) Close() {}
 
@@ -481,31 +473,24 @@ func (e *engraver) adjustVoltage(minmV, maxmV int) (int, error) {
 	return 0, errors.New("power negotiation timed out")
 }
 
-type axis uint8
-
-const (
-	xaxis axis = 0b1 << iota
-	yaxis
-)
-
 func (e *engraver) handleDiag(pin machine.Pin) {
 	var stepPin, otherPin machine.Pin
-	var a axis
+	var a stepper.Axis
 	switch pin {
 	case X_DIAG:
 		e.xstalls.Add(1)
 		stepPin = X_STEP
 		otherPin = Y_STEP
-		a = xaxis
+		a = stepper.XAxis
 	case Y_DIAG:
 		e.ystalls.Add(1)
 		stepPin = Y_STEP
 		otherPin = X_STEP
-		a = yaxis
+		a = stepper.YAxis
 	default:
 		return
 	}
-	if e.mode == modeNostall {
+	if e.mode == stepper.ModeNostall {
 		return
 	}
 	// Disconnect the step pin from the PIO program and set it low.
@@ -514,7 +499,7 @@ func (e *engraver) handleDiag(pin machine.Pin) {
 	// And the needle pin, in case of an active engraving.
 	NEEDLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	NEEDLE.Low()
-	if e.mode != modeHoming {
+	if e.mode != stepper.ModeHoming {
 		// Disable both axes in case of blockage.
 		otherPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
 		otherPin.Low()
@@ -525,7 +510,7 @@ func (e *engraver) handleDiag(pin machine.Pin) {
 	}
 }
 
-func (e *engraver) engrave(mode engraverMode, spline bspline.Curve, quit <-chan struct{}) error {
+func (e *engraver) engrave(mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}) error {
 	<-e.ready
 	defer func() {
 		e.ready <- struct{}{}
@@ -611,23 +596,23 @@ func (e *engraver) home(needleActivation time.Duration) error {
 	conf := engraverConf
 	conf.Speed = homingSpeed
 	spline := engrave.PlanEngraving(conf, home)
-	if err := e.execute(needleActivation, modeHoming, spline, nil); err != nil {
+	if err := e.execute(needleActivation, stepper.ModeHoming, spline, nil); err != nil {
 		return err
 	}
 	moveToOrigin := engrave.Engraving(slices.Values([]engrave.Command{
 		engrave.Move(bezier.Pt(originX, originY)),
 	}))
 	spline = engrave.PlanEngraving(conf, moveToOrigin)
-	return e.execute(needleActivation, modeEngrave, spline, nil)
+	return e.execute(needleActivation, stepper.ModeEngrave, spline, nil)
 }
 
-func (e *engraver) execute(needleActivation time.Duration, mode engraverMode, spline bspline.Curve, quit <-chan struct{}) error {
+func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}) error {
 	e.xstalls.Store(0)
 	e.ystalls.Store(0)
 	e.mode = mode
 	// Leave room for both axis diag pins without blocking the interrupt handler.
 	const naxes = 2
-	e.diag = make(chan axis, naxes)
+	e.diag = make(chan stepper.Axis, naxes)
 
 	for _, pin := range []machine.Pin{X_DIAG, Y_DIAG} {
 		if err := pin.SetInterrupt(machine.PinRising, e.handleDiag); err != nil {
@@ -635,7 +620,12 @@ func (e *engraver) execute(needleActivation time.Duration, mode engraverMode, sp
 		}
 		defer pin.SetInterrupt(0, nil)
 	}
-	if err := e.execute0(needleActivation, spline, quit); err != nil {
+	needleAct := uint(needleActivation * time.Duration(engraverConf.TicksPerSecond) / time.Second)
+	needlePeriod := uint(needlePeriod * time.Duration(engraverConf.TicksPerSecond) / time.Second)
+	d := stepper.Engrave(e.Dev)
+	e.Dev.Enable(d.HandleTransferCompleted, needleAct, needlePeriod)
+	defer e.Dev.Disable()
+	if err := d.Run(e.mode, quit, e.diag, spline); err != nil {
 		return err
 	}
 	e.axisLock.Lock()
@@ -647,52 +637,6 @@ func (e *engraver) execute(needleActivation time.Duration, mode engraverMode, sp
 		return fmt.Errorf("Y axis: %w", err)
 	}
 	return nil
-}
-
-func (e *engraver) execute0(needleActivation time.Duration, spline bspline.Curve, quit <-chan struct{}) error {
-	done := make(chan struct{})
-	quitStatus := make(chan struct{})
-	defer func() {
-		close(quitStatus)
-		<-done
-	}()
-	var blocked axis
-	go func() {
-		defer close(done)
-		for {
-			select {
-			case axis := <-e.diag:
-				blocked |= axis
-				if e.mode != modeHoming || blocked == (xaxis|yaxis) {
-					return
-				}
-			case <-quit:
-				return
-			case <-quitStatus:
-				return
-			}
-		}
-	}()
-	needleAct := uint(needleActivation * time.Duration(engraverConf.TicksPerSecond) / time.Second)
-	needlePeriod := uint(needlePeriod * time.Duration(engraverConf.TicksPerSecond) / time.Second)
-	d := stepper.Engrave(e.Dev, done, spline)
-	e.Dev.Enable(d.HandleTransferCompleted, needleAct, needlePeriod)
-	defer e.Dev.Disable()
-	d.Run()
-	if e.mode == modeHoming {
-		if blocked != (xaxis | yaxis) {
-			return errors.New("mjolnir2: homing timed out")
-		}
-		return nil
-	}
-	switch {
-	case blocked&xaxis != 0:
-		return errors.New("mjolnir2: x-axis blocked")
-	case blocked&yaxis != 0:
-		return errors.New("mjolnir2: y-axis blocked")
-	default:
-		return nil
-	}
 }
 
 func (p *Platform) LockBoot() error {
@@ -714,9 +658,9 @@ func (p *Platform) NFCReader() io.Reader {
 }
 
 func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error {
-	mode := modeEngrave
+	mode := stepper.ModeEngrave
 	if !stall {
-		mode = modeNostall
+		mode = stepper.ModeNostall
 	}
 	return p.engraver.engrave(mode, spline, quit)
 }
