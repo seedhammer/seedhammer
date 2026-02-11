@@ -24,7 +24,11 @@ func (p *Platform) EngraverParams() engrave.Params {
 	return engrave.Params{}
 }
 
-func (p *Platform) Engrave(stall bool, spline bspline.Curve, status chan<- gui.EngraverStatus, quit <-chan struct{}) error {
+func (p *Platform) EngraverStatus() gui.EngraverStatus {
+	return gui.EngraverStatus{}
+}
+
+func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error {
 	return errors.New("Engrave not implemented")
 }
 

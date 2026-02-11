@@ -14,40 +14,39 @@ import (
 func qaEngraveFlow(ctx *Context, ops op.Ctx) {
 	p := ctx.Platform
 	errs := make(chan error, 1)
-	statuses := make(chan EngraverStatus)
 	go func() {
 		const sz = SquarePlate
 		params := p.EngraverParams()
 		dims := sz.Dims(params.Millimeter)
 		plan := engrave.PlanEngraving(params.StepperConfig,
 			qaPlan(params.Millimeter, dims))
-		errs <- p.Engrave(false, plan, statuses, nil)
+		errs <- p.Engrave(false, plan, nil)
 	}()
-	var lastSt EngraverStatus
 	var eerr string
 	var xLoadVals, yLoadVals maxValue
 	var maxXLoad, maxYLoad int
 	for !ctx.Done {
+		lastSt := p.EngraverStatus()
+		xload := lastSt.XLoad
+		yload := lastSt.YLoad
+		if lastSt.XSpeed < lastSt.StallSpeed {
+			xload = 0
+		}
+		if lastSt.YSpeed < lastSt.StallSpeed {
+			yload = 0
+		}
+		maxXLoad = xLoadVals.Put(xload)
+		maxYLoad = yLoadVals.Put(yload)
+		if err := lastSt.Error; eerr == "" && err != nil {
+			eerr = err.Error()
+		}
 		drawQA(ctx, ops, lastSt, maxXLoad, maxYLoad, eerr)
 		p.Wakeup()
 		ctx.Frame()
 		select {
 		case err := <-errs:
 			eerr = err.Error()
-		case lastSt = <-statuses:
-			xload := lastSt.XLoad
-			yload := lastSt.YLoad
-			if lastSt.XSpeed < lastSt.StallSpeed {
-				xload = 0
-			}
-			if lastSt.YSpeed < lastSt.StallSpeed {
-				yload = 0
-			}
-			maxXLoad = xLoadVals.Put(xload)
-			maxYLoad = yLoadVals.Put(yload)
-			if err := lastSt.Error; eerr == "" && err != nil {
-				eerr = err.Error()
-			}
+		default:
 		}
 	}
 }
