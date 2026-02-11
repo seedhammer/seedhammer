@@ -26,6 +26,7 @@ type Device struct {
 	// Needle period tick.
 	tneedle   uint
 	channel   dma.ChannelID
+	irq       dma.IRQ
 	buf, buf2 []uint32
 }
 
@@ -54,11 +55,17 @@ const (
 )
 
 func (d *Device) Configure(dmaBufSize int) error {
-	ch, err := dma.Reserve()
+	irq, err := dma.ReserveIRQ()
 	if err != nil {
 		return fmt.Errorf("mjolnir2: %w", err)
 	}
+	ch, err := dma.ReserveChannel()
+	if err != nil {
+		irq.Free()
+		return fmt.Errorf("mjolnir2: %w", err)
+	}
 	d.channel = ch
+	d.irq = irq
 	dmaChan := dma.ChannelAt(ch)
 	// Set DMA destination to pio TX FIFO.
 	dmaChan.WRITE_ADDR.Set(uint32(uintptr(unsafe.Pointer(pio.Tx(d.Pio, pioSM)))))
@@ -92,10 +99,8 @@ func (d *Device) Configure(dmaBufSize int) error {
 	return nil
 }
 
-func (d *Device) Enable(transferCompleted func(), needleActivation, needlePeriod uint) error {
-	if err := dma.SetInterrupt(d.channel, transferCompleted); err != nil {
-		return fmt.Errorf("mjolnir2: %w", err)
-	}
+func (d *Device) Enable(transferCompleted func(), needleActivation, needlePeriod uint) {
+	d.irq.Set(d.channel, transferCompleted)
 	d.needleAct = needleActivation
 	d.needlePeriod = needlePeriod
 	pio.ConfigurePins(d.Pio, pioSM, d.BasePin, mjolnir2pinBits)
@@ -104,11 +109,10 @@ func (d *Device) Enable(transferCompleted func(), needleActivation, needlePeriod
 	pio.Restart(d.Pio, 0b1<<pioSM)
 	pio.Jump(d.Pio, pioSM, progOffset)
 	pio.Enable(d.Pio, 0b1<<pioSM)
-	return nil
 }
 
 func (d *Device) Disable() {
-	dma.SetInterrupt(d.channel, nil)
+	d.irq.Set(0, nil)
 	ch := dma.ChannelAt(d.channel)
 	// Abort any pending transfer.
 	ch.CTRL_TRIG.ClearBits(rp.DMA_CH0_CTRL_TRIG_EN)
