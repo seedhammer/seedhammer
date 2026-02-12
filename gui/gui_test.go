@@ -154,7 +154,16 @@ func TestEngraveScreenCancel(t *testing.T) {
 		ctx := NewContext(p)
 		ops := new(op.Ops)
 		frame, quit := runUI(ctx, ops, func() {
-			scr := newTestEngraveScreen(t, ctx)
+			scr := NewEngraveScreen(
+				ctx,
+				// A slow engrave job, to allow for cancelling to
+				// take effect.
+				Plate{
+					Spline: func(yield func(bspline.Knot) bool) {
+						time.Sleep(10 * time.Second)
+					},
+				},
+			)
 			if ok := scr.Engrave(ctx, ops.Context(), &engraveTheme); ok {
 				t.Error("EngraveScreen: succeeded unexpectedly")
 			}
@@ -172,23 +181,21 @@ func TestEngraveScreenCancel(t *testing.T) {
 		if _, ok := frame(); !ok {
 			t.Fatal("EngraveScreen: exited unexpectedly")
 		}
+		<-p.engrave.jobs
 
-		// Back and press confirm.
-		click(&ctx.Router, Button1)
-		press(&ctx.Router, Button3)
-		if _, ok := frame(); !ok {
-			t.Fatal("EngraveScreen: cancelled without confirmation")
-		}
-		// Hold confirm.
-		time.Sleep(confirmDelay)
+		// Go back.
+		click(&ctx.Router, Button1, Button1, Button1)
 		if _, ok := frame(); ok {
 			t.Fatal("engrave screen did not cancel")
 		}
+		synctest.Wait()
 		select {
 		case <-p.engrave.quit:
 		default:
 			t.Fatal("EngraveScreen: did not close quit channel")
 		}
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
 	})
 }
 
@@ -217,12 +224,6 @@ func TestEngraveScreenError(t *testing.T) {
 		content, ok := frame()
 		if !ok || !uiContains(content, ioErr.Error()) {
 			t.Fatalf("EngraveScreen: no error reported, expected %v", ioErr)
-		}
-		// Dismiss error and verify screen exits.
-		click(&ctx.Router, Button3)
-		content, ok = frame()
-		if ok && uiContains(content, "error") {
-			t.Fatal("EngraveScreen: didn't dismiss error")
 		}
 	})
 }
