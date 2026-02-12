@@ -10,9 +10,8 @@ type engraveJob struct {
 	progresses chan stepper.Progress
 	errs       chan error
 
-	progress stepper.Progress
-	done     bool
-	err      error
+	done bool
+	err  error
 }
 
 func newEngraverJob(p Platform, spline bspline.Curve) *engraveJob {
@@ -24,24 +23,9 @@ func newEngraverJob(p Platform, spline bspline.Curve) *engraveJob {
 		progresses: progress,
 		quit:       quit,
 	}
-	pspline := func(yield func(bspline.Knot) bool) {
-		// var ticks uint
-		for k := range spline {
-			if !yield(k) {
-				return
-			}
-			// ticks += k.T
-			// select {
-			// case <-progress:
-			// default:
-			// }
-			// progress <- ticks
-			// p.Wakeup()
-		}
-	}
 	go func() {
 		defer p.Wakeup()
-		errs <- p.Engrave(true, pspline, quit, progress)
+		errs <- p.Engrave(true, spline, quit, progress)
 	}()
 	return e
 }
@@ -49,10 +33,10 @@ func newEngraverJob(p Platform, spline bspline.Curve) *engraveJob {
 func (e *engraveJob) Progress() stepper.Progress {
 	select {
 	case p := <-e.progresses:
-		e.progress = p
+		return p
 	default:
+		return stepper.Progress{}
 	}
-	return e.progress
 }
 
 func (e *engraveJob) Status() (done bool, err error) {

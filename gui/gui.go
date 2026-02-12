@@ -2306,6 +2306,7 @@ type EngraveScreen struct {
 		job      *engraveJob
 		duration uint
 		err      error
+		progress stepper.Progress
 	}
 }
 
@@ -2336,9 +2337,21 @@ func (s *EngraveScreen) moveStep(p Platform) bool {
 			spline = engrave.DryRun(spline)
 		}
 		s.engrave.err = nil
-		ticks := s.plate.Attrs.Duration
-		s.engrave.duration = ticks
-		s.engrave.job = newEngraverJob(p, spline)
+		progress := s.engrave.progress
+		// Fast forward to last interruption, if any.
+		ffspline := func(yield func(bspline.Knot) bool) {
+			for k := range spline {
+				if progress.Knots > 0 {
+					progress.Knots--
+					continue
+				}
+				if !yield(k) {
+					return
+				}
+			}
+		}
+		s.engrave.duration = s.plate.Attrs.Duration
+		s.engrave.job = newEngraverJob(p, ffspline)
 	}
 	return false
 }
@@ -2363,8 +2376,9 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 frames:
 	for !ctx.Done {
 		if d := s.engrave.job; d != nil {
-			// Update progress twice a second.
-			ctx.WakeupAt(time.Now().Add(time.Second / 2))
+			p := s.engrave.job.Progress()
+			s.engrave.progress.Ticks += p.Ticks
+			s.engrave.progress.Knots += p.Knots
 			if done, err := d.Status(); done {
 				s.engrave.job = nil
 				s.engrave.err = err
@@ -2377,6 +2391,8 @@ frames:
 					s.step--
 				}
 			}
+			// Update progress twice a second.
+			ctx.WakeupAt(time.Now().Add(time.Second / 2))
 		}
 
 		if !s.dryRun.timeout.IsZero() {
@@ -2479,7 +2495,7 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 	case EngraveInstruction:
 		middle, _ := content.CutBottom(leadingSize)
 		// Remaining seconds, rounded up.
-		p := s.engrave.job.Progress()
+		p := s.engrave.progress
 		rem := s.engrave.duration - p.Ticks
 		tps := ctx.Platform.EngraverParams().TicksPerSecond
 		remSec := (rem + tps - 1) / tps
