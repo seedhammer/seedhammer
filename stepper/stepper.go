@@ -133,16 +133,20 @@ func (e *Driver) HandleTransferCompleted() {
 		return
 	}
 	p := e.progresses[:]
-	// Replace latest progress.
+	// Replace the accumulated progress.
+	var p0 Progress
 	select {
-	case <-e.progress:
+	case p0 = <-e.progress:
 	default:
 	}
+	p0.Knots += p[0].Knots
+	p0.Ticks += p[0].Ticks
 	select {
-	case e.progress <- p[0]:
+	case e.progress <- p0:
 	default:
 	}
 	copy(p, p[1:])
+	p[len(p)-1] = Progress{}
 	steps := e.swapBuffers()
 	e.dev.Transfer(steps)
 	// Fill buffer here in the interrupt handler to avoid stalling
