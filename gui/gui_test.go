@@ -23,6 +23,7 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/gui/op"
 	"seedhammer.com/image/rgb565"
+	"seedhammer.com/stepper"
 )
 
 func BenchmarkRedraw(b *testing.B) {
@@ -402,7 +403,7 @@ func (p *testPlatform) EngraverStatus() EngraverStatus {
 	return EngraverStatus{}
 }
 
-func (p *testPlatform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error {
+func (p *testPlatform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
 	defer close(p.engrave.done)
 	p.engrave.quit = quit
 	select {

@@ -1,61 +1,58 @@
 package gui
 
 import (
-	"time"
-
 	"seedhammer.com/bspline"
+	"seedhammer.com/stepper"
 )
 
 type engraveJob struct {
-	quit     chan<- struct{}
-	progress chan uint
-	errs     chan error
-	tps      uint
+	quit       chan<- struct{}
+	progresses chan stepper.Progress
+	errs       chan error
 
-	ticks uint
-	done  bool
-	err   error
+	progress stepper.Progress
+	done     bool
+	err      error
 }
 
 func newEngraverJob(p Platform, spline bspline.Curve) *engraveJob {
 	errs := make(chan error, 1)
-	progress := make(chan uint, 1)
+	progress := make(chan stepper.Progress, 1)
 	quit := make(chan struct{})
 	e := &engraveJob{
-		errs:     errs,
-		progress: progress,
-		quit:     quit,
-		tps:      p.EngraverParams().TicksPerSecond,
+		errs:       errs,
+		progresses: progress,
+		quit:       quit,
 	}
 	pspline := func(yield func(bspline.Knot) bool) {
-		var ticks uint
+		// var ticks uint
 		for k := range spline {
 			if !yield(k) {
 				return
 			}
-			ticks += k.T
-			select {
-			case <-progress:
-			default:
-			}
-			progress <- ticks
-			p.Wakeup()
+			// ticks += k.T
+			// select {
+			// case <-progress:
+			// default:
+			// }
+			// progress <- ticks
+			// p.Wakeup()
 		}
 	}
 	go func() {
 		defer p.Wakeup()
-		errs <- p.Engrave(true, pspline, quit)
+		errs <- p.Engrave(true, pspline, quit, progress)
 	}()
 	return e
 }
 
-func (e *engraveJob) Remaining() time.Duration {
+func (e *engraveJob) Progress() stepper.Progress {
 	select {
-	case t := <-e.progress:
-		e.ticks = t
+	case p := <-e.progresses:
+		e.progress = p
 	default:
 	}
-	return time.Duration(e.ticks+e.tps-1) * time.Second / time.Duration(e.tps)
+	return e.progress
 }
 
 func (e *engraveJob) Status() (done bool, err error) {

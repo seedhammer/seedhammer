@@ -42,6 +42,7 @@ import (
 	"seedhammer.com/nonstandard"
 	"seedhammer.com/seedqr"
 	slip39words "seedhammer.com/slip39"
+	"seedhammer.com/stepper"
 )
 
 var ErrTooLarge = errors.New("backup: data does not fit plate")
@@ -2303,7 +2304,7 @@ type EngraveScreen struct {
 	}
 	engrave struct {
 		job      *engraveJob
-		duration time.Duration
+		duration uint
 		err      error
 	}
 }
@@ -2336,8 +2337,7 @@ func (s *EngraveScreen) moveStep(p Platform) bool {
 		}
 		s.engrave.err = nil
 		ticks := s.plate.Attrs.Duration
-		tps := p.EngraverParams().TicksPerSecond
-		s.engrave.duration = time.Duration(ticks+tps-1) * time.Second / time.Duration(tps)
+		s.engrave.duration = ticks
 		s.engrave.job = newEngraverJob(p, spline)
 	}
 	return false
@@ -2363,6 +2363,8 @@ func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
 frames:
 	for !ctx.Done {
 		if d := s.engrave.job; d != nil {
+			// Update progress twice a second.
+			ctx.WakeupAt(time.Now().Add(time.Second / 2))
 			if done, err := d.Status(); done {
 				s.engrave.job = nil
 				s.engrave.err = err
@@ -2477,8 +2479,10 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 	case EngraveInstruction:
 		middle, _ := content.CutBottom(leadingSize)
 		// Remaining seconds, rounded up.
-		rem := s.engrave.duration - s.engrave.job.Remaining()
-		remSec := int((rem + time.Second - 1) / time.Second)
+		p := s.engrave.job.Progress()
+		rem := s.engrave.duration - p.Ticks
+		tps := ctx.Platform.EngraverParams().TicksPerSecond
+		remSec := (rem + tps - 1) / tps
 		min, sec := remSec/60, remSec%60
 		sz := widget.Labelf(ops.Begin(), ctx.Styles.progress, th.Text, "%d:%.2d", min, sec)
 		op.Position(ops, ops.End(), middle.Center(sz))
@@ -2547,7 +2551,7 @@ type Platform interface {
 	LockBoot() error
 	AppendEvents(deadline time.Time, evts []Event) []Event
 	Wakeup()
-	Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error
+	Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error
 	EngraverStatus() EngraverStatus
 	NFCReader() io.Reader
 	EngraverParams() engrave.Params
