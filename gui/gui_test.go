@@ -383,6 +383,10 @@ func (p *testPlatform) AppendEvents(deadline time.Time, evts []Event) []Event {
 	return evts
 }
 
+func (p *testPlatform) HardwareVersion() string {
+	return "v1.0.0-testing"
+}
+
 func (p *testPlatform) Features() Features {
 	return 0
 }

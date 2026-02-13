@@ -84,7 +84,6 @@ const (
 	otpModel        = "SeedHammer II"
 	otpBoardID      = "SHII"
 	otpVendor       = "SH"
-	otpVersion      = "4"
 
 	TOUCH_INT = machine.GPIO13
 	TOUCH_SDA = machine.GPIO14
@@ -740,6 +739,10 @@ func (p *Platform) LockBoot() error {
 	return nil
 }
 
+func (p *Platform) HardwareVersion() string {
+	return "v1." + boardVersion()
+}
+
 func (p *Platform) Features() gui.Features {
 	return p.feats
 }
@@ -892,7 +895,7 @@ func writeOTPValues() error {
 		{otp.INDEX_INFO_UF2_TXT_BOARD_ID_STRDEF, otpBoardID},
 		{otp.INDEX_SCSI_INQUIRY_PRODUCT_STRDEF, otpBoardID},
 		{otp.INDEX_SCSI_INQUIRY_VENDOR_STRDEF, otpVendor},
-		{otp.INDEX_SCSI_INQUIRY_VERSION_STRDEF, otpVersion},
+		{otp.INDEX_SCSI_INQUIRY_VERSION_STRDEF, boardVersion()},
 	}
 	for _, inf := range infos {
 		if err := otp.WriteWhiteLabelString(inf.Index, inf.Value); err != nil {
@@ -901,6 +904,20 @@ func writeOTPValues() error {
 	}
 	_, err = otp.AddBootKey(khash)
 	return err
+}
+
+func boardVersion() string {
+	rev, err := otp.ReadWhiteLabelString(otp.INDEX_SCSI_INQUIRY_VERSION_STRDEF)
+	if err == nil && rev != "" {
+		return rev
+	}
+	// Detect version from the package.
+	switch rp.SYSINFO.GetPACKAGE_SEL() {
+	case 1: // RP235xA
+		return "4"
+	default: // RP235xB
+		return "5"
+	}
 }
 
 // isSecureBootEnabled reports whether secure boot is enabled and that the
