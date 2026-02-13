@@ -52,6 +52,7 @@ type Platform struct {
 
 	feats    gui.Features
 	lcdDev   *ili9488.Device
+	voltage  int
 	engraver *engraver
 	nfc      *nfcDev
 	stdin    <-chan gui.Event
@@ -94,7 +95,6 @@ const (
 	LCD_TE  = machine.GPIO12
 	LCD_DC  = machine.GPIO16
 	LCD_WRX = machine.GPIO17
-	LCD_RDX = machine.GPIO11
 	LCD_DB0 = machine.GPIO18
 
 	DRV_ENABLE = machine.GPIO10
@@ -104,6 +104,10 @@ const (
 	Y_ADDR       = 0b01
 	X_DIAG       = machine.GPIO8
 	Y_DIAG       = machine.GPIO7
+	// Before PCB v1.5.0 GPIO11 served as LCD_RDX.
+	// To maintain compatibility with older PCBS, this
+	// pin must be pulled high.
+	S_DIAG = machine.GPIO11
 
 	engraverBasePin = machine.GPIO2
 	// Stepper and needle pins are assumed to
@@ -119,6 +123,23 @@ const (
 	DATA_SDA  = machine.GPIO28
 	DATA_SCL  = machine.GPIO29
 )
+
+// Debug pins. Valid on some boards only.
+const (
+	// Firmware controlled solenoid current limit.
+	// Disable it by setting it to 0 on production
+	// boards.
+	Ichop = 0
+	// The sense resistor in mΩ.
+	Rsense = 5
+	S_VREF = machine.GPIO30
+
+	// S_SENSE is the current sense output of the DRV8701
+	// driver.
+	S_SENSE = machine.GPIO40
+)
+
+var pwmS_VREF = machine.PWM7
 
 var (
 	touchI2C = machine.I2C1
@@ -136,7 +157,6 @@ const (
 	needleActivationMinVoltage = 5 * time.Millisecond
 	needleActivationMaxVoltage = 4 * time.Millisecond
 
-	idleVoltage = 5_000
 	// Voltage range for engraving.
 	minVoltage = 20_000
 	maxVoltage = 28_000
@@ -189,20 +209,28 @@ func Init() (*Platform, error) {
 		return nil, fmt.Errorf("data I2C: %w", err)
 	}
 	mi2c := newMultiplexI2C(dataI2C)
-	e, err := configEngraver(mi2c)
+	usbpd := ap33772s.New(mi2c)
+	if err := usbpd.Configure(); err != nil {
+		return nil, err
+	}
+	stdin := make(chan gui.Event)
+	p := &Platform{
+		wakeups: make(chan struct{}, 1),
+		timer:   time.NewTimer(0),
+		stdin:   stdin,
+	}
+	e, err := configEngraver()
 	if err != nil {
 		return nil, err
 	}
-	// Home and move needle to origin.
-	go e.engrave(stepper.ModeHoming, nil, nil, nil)
-
-	stdin := make(chan gui.Event)
-	p := &Platform{
-		wakeups:  make(chan struct{}, 1),
-		timer:    time.NewTimer(0),
-		engraver: e,
-		stdin:    stdin,
+	p.engraver = e
+	voltage, err := p.monitorPowerSupply(usbpd)
+	if err == nil {
+		p.voltage = voltage
+		// Home and move needle to origin.
+		go p.engrave(stepper.ModeHoming, nil, nil, nil)
 	}
+
 	for i := range p.display.buffers {
 		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
 	}
@@ -211,7 +239,7 @@ func Init() (*Platform, error) {
 		p.feats |= gui.FeatureSecureBoot
 	}
 
-	lcd, err := ili9488.New(LCD_DC, LCD_CS, LCD_RS, LCD_WRX, LCD_RDX, LCD_DB0, LCD_TE, lcdPIO)
+	lcd, err := ili9488.New(LCD_DC, LCD_CS, LCD_RS, LCD_WRX, machine.NoPin, LCD_DB0, LCD_TE, lcdPIO)
 	if err != nil {
 		return nil, err
 	}
@@ -286,13 +314,9 @@ func (d nfcDev) ReadCapacity() int {
 	return st25r3916.FIFOSize
 }
 
-func configEngraver(bus *multiplexI2C) (*engraver, error) {
+func configEngraver() (*engraver, error) {
 	DRV_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	DRV_ENABLE.Set(false)
-	usbpd := ap33772s.New(bus, USBPD_INT)
-	if err := usbpd.Configure(); err != nil {
-		return nil, err
-	}
 
 	uart, err := tmc2209.NewUART(stepperPIO, STEPPER_UART)
 	if err != nil {
@@ -310,26 +334,15 @@ func configEngraver(bus *multiplexI2C) (*engraver, error) {
 		Invert: invertY,
 		Sense:  senseResistance,
 	}
-	axes := []*tmc2209.Device{X, Y}
-	for i, axis := range axes {
-		if err := axis.SetupSharedUART(); err != nil {
-			return nil, fmt.Errorf("stepper %d: configuring UART: %w", i, err)
-		}
-	}
-	for i, axis := range axes {
-		if err := axis.Configure(); err != nil {
-			return nil, fmt.Errorf("stepper %d: configure: %w", i, err)
-		}
-		if err := axis.SetStallThreshold(stallThreshold); err != nil {
-			return nil, fmt.Errorf("stepper %d: stall threshold: %w", i, err)
-		}
-		if err := axis.SetMinimumStallVelocity(minimumStallVelocity); err != nil {
-			return nil, fmt.Errorf("stepper %d: stepper stall velocity: %w", i, err)
-		}
-	}
 
-	X_DIAG.Configure(machine.PinConfig{Mode: machine.PinInput})
-	Y_DIAG.Configure(machine.PinConfig{Mode: machine.PinInput})
+	// Configure diagnostics/fault pins to be pulled high, so that even
+	// disconnected pins signal faults.
+	X_DIAG.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
+	Y_DIAG.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
+	// In addition, S_DIAG used to serve as LCD_RDX and must be pulled up
+	// for compatibility with boards revisions before v1.5.0.
+	S_DIAG.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
+
 	d := &mjolnir2.Device{
 		Pio:            engraverPIO,
 		BasePin:        engraverBasePin,
@@ -342,15 +355,63 @@ func configEngraver(bus *multiplexI2C) (*engraver, error) {
 	if err := d.Configure(dmaSize); err != nil {
 		return nil, err
 	}
+	// Set engraver pulsed current limit through the S_VREF pin.
+	// Production boards fix the limit through on-board resistors.
+	if Ichop > 0 {
+		pwmS_VREF.Configure(machine.PWMConfig{})
+		ch, err := pwmS_VREF.Channel(S_VREF)
+		if err != nil {
+			return nil, err
+		}
+		// Compute reference voltage using formula (1) in the
+		// DRV8701 datasheeti[0].
+		//
+		// [0]: https://www.ti.com/lit/ds/symlink/drv8701.pdf
+
+		// Datasheet constants.
+		const (
+			// Voff in mV.
+			Voff = 50
+			// Av in V/V.
+			Av = 20
+		)
+
+		// Vref in mV.
+		const Vref = Ichop*Av*Rsense + Voff
+		// Vmax is the voltage at 100% PWM duty cycle.
+		const Vmax = 3300
+		duty := pwmS_VREF.Top() * Vref / Vmax
+		pwmS_VREF.Set(ch, duty)
+	}
 	ready := make(chan struct{}, 1)
 	ready <- struct{}{}
 	return &engraver{
 		Dev:   d,
-		PD:    usbpd,
 		XAxis: X,
 		YAxis: Y,
 		ready: ready,
 	}, nil
+}
+
+func (e *engraver) configureAxes() error {
+	axes := []*tmc2209.Device{e.XAxis, e.YAxis}
+	for i, axis := range axes {
+		if err := axis.SetupSharedUART(); err != nil {
+			return fmt.Errorf("axis %d: configuring UART: %w", i, err)
+		}
+	}
+	for i, axis := range axes {
+		if err := axis.Configure(); err != nil {
+			return fmt.Errorf("axis %d: configure: %w", i, err)
+		}
+		if err := axis.SetStallThreshold(stallThreshold); err != nil {
+			return fmt.Errorf("axis %d: stall threshold: %w", i, err)
+		}
+		if err := axis.SetMinimumStallVelocity(minimumStallVelocity); err != nil {
+			return fmt.Errorf("axis %d: stepper stall velocity: %w", i, err)
+		}
+	}
+	return nil
 }
 
 func (p *Platform) touchInterrupt(machine.Pin) {
@@ -440,26 +501,62 @@ func (p *Platform) EngraverParams() engrave.Params {
 type engraver struct {
 	axisLock         sync.Mutex
 	XAxis, YAxis     *tmc2209.Device
-	PD               *ap33772s.Device
 	Dev              *mjolnir2.Device
 	xstalls, ystalls atomic.Uint32
 	mode             stepper.Mode
 	diag             chan stepper.Axis
 	ready            chan struct{}
+	// S_DIAG high means a fault on boards >= v1.5.0.
+	// To detect whether S_DIAG is available, it is pulled
+	// high and sdiagAvailable tracks whether its been seen
+	// low.
+	sdiagAvailable bool
 }
 
 func (e *engraver) Close() {}
 
-func (e *engraver) adjustVoltage(minmV, maxmV int) (int, error) {
+func (p *Platform) monitorPowerSupply(d *ap33772s.Device) (int, error) {
+	voltage, err := adjustSupplyVoltage(d, minVoltage, maxVoltage)
+	if err != nil {
+		// Give up if the power supply doesn't initially offer higher voltages.
+		return 0, err
+	}
+
+	interrupts := make(chan struct{}, 1)
+	USBPD_INT.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
+	USBPD_INT.SetInterrupt(machine.PinFalling, func(machine.Pin) {
+		select {
+		case interrupts <- struct{}{}:
+		default:
+		}
+	})
+
+	// Monitor the supply and ask for higher voltage whenever a power cycle occurs.
+	go func() {
+		for {
+			<-interrupts
+			st, err := d.ReadStatus()
+			if err != nil || (st&ap33772s.NEWPDO) == 0 {
+				continue
+			}
+			if _, err := adjustSupplyVoltage(d, voltage, voltage); err != nil {
+				continue
+			}
+		}
+	}()
+	return voltage, nil
+}
+
+func adjustSupplyVoltage(d *ap33772s.Device, minmV, maxmV int) (int, error) {
 	const retries = 3
 	for range retries {
-		mV, err := e.PD.AdjustVoltage(minmV, maxmV)
+		mV, err := d.AdjustVoltage(minmV, maxmV)
 		if err != nil {
 			return 0, err
 		}
 		// Allow the new contract to settle.
 		time.Sleep(100 * time.Millisecond)
-		gotmV, err := e.PD.Voltage()
+		gotmV, err := d.Voltage()
 		if err != nil {
 			return 0, err
 		}
@@ -474,7 +571,7 @@ func (e *engraver) adjustVoltage(minmV, maxmV int) (int, error) {
 }
 
 func (e *engraver) handleDiag(pin machine.Pin) {
-	var stepPin, otherPin machine.Pin
+	stepPin, otherPin := machine.NoPin, machine.NoPin
 	var a stepper.Axis
 	switch pin {
 	case X_DIAG:
@@ -487,6 +584,8 @@ func (e *engraver) handleDiag(pin machine.Pin) {
 		stepPin = Y_STEP
 		otherPin = X_STEP
 		a = stepper.YAxis
+	case S_DIAG:
+		a = stepper.SAxis
 	default:
 		return
 	}
@@ -510,39 +609,25 @@ func (e *engraver) handleDiag(pin machine.Pin) {
 	}
 }
 
-func (e *engraver) engrave(mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
+func (e *engraver) engrave(voltage int, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
 	<-e.ready
 	defer func() {
 		e.ready <- struct{}{}
 	}()
-	// Return to idle voltage.
-	defer e.adjustVoltage(idleVoltage, idleVoltage)
 	defer func() {
 		// Disable the power circuitry.
 		DRV_ENABLE.Set(false)
 		// Wait a bit for the discharge circuit to empty the capacitors.
 		time.Sleep(500 * time.Millisecond)
 	}()
-	// Staggered power up: ramp up the voltage while charging the engraving capacitors.
-	var voltage int
-	voltageRamp := []int{ /* 5_000, 9_000, 15_000, 20_000, */ maxVoltage}
-	for i, maxV := range voltageRamp {
-		maxV = min(maxV, maxVoltage)
-		minV := idleVoltage
-		if maxV == maxVoltage {
-			minV = minVoltage
-		}
-		v, err := e.adjustVoltage(minV, maxV)
-		if err != nil {
-			return err
-		}
-		voltage = v
-		time.Sleep(500 * time.Millisecond)
-		if i == 0 {
-			// Enable the power circuitry, in particular charge the engraving capacitors.
-			DRV_ENABLE.Set(true)
-			time.Sleep(500 * time.Millisecond)
-		}
+	// Give the capcitor bank time to charge (boards >= v1.5.0).
+	time.Sleep(time.Second)
+	// Enable the power circuitry.
+	DRV_ENABLE.Set(true)
+	// Boards < v1.5.0 charge the capacitors here.
+	time.Sleep(500 * time.Millisecond)
+	if err := e.configureAxes(); err != nil {
+		return err
 	}
 
 	current := stepperPower * 1000 / voltage
@@ -556,14 +641,16 @@ func (e *engraver) engrave(mode stepper.Mode, spline bspline.Curve, quit <-chan 
 	}()
 	e.axisLock.Lock()
 	xerr := e.XAxis.Enable(current)
+	e.axisLock.Unlock()
+	if xerr != nil {
+		return xerr
+	}
 	time.Sleep(200 * time.Millisecond)
+	e.axisLock.Lock()
 	yerr := e.YAxis.Enable(current)
 	e.axisLock.Unlock()
 	if yerr != nil {
 		return yerr
-	}
-	if xerr != nil {
-		return xerr
 	}
 	// Wait for standstill tuning of the drivers.
 	time.Sleep(tmc2209.StandstillTuningPeriod)
@@ -610,15 +697,19 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 	e.xstalls.Store(0)
 	e.ystalls.Store(0)
 	e.mode = mode
-	// Leave room for both axis diag pins without blocking the interrupt handler.
-	const naxes = 2
+	// Leave room for all axis diag pins without blocking the interrupt handler.
+	const naxes = 3
 	e.diag = make(chan stepper.Axis, naxes)
 
-	for _, pin := range []machine.Pin{X_DIAG, Y_DIAG} {
+	for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
 		if err := pin.SetInterrupt(machine.PinRising, e.handleDiag); err != nil {
-			return fmt.Errorf("mjolnir2: engrave: %w", err)
+			return fmt.Errorf("engraver: %w", err)
 		}
 		defer pin.SetInterrupt(0, nil)
+	}
+	e.sdiagAvailable = e.sdiagAvailable || !S_DIAG.Get()
+	if e.sdiagAvailable && S_DIAG.Get() {
+		return errors.New("engraver: engraver is not ready")
 	}
 	needleAct := uint(needleActivation * time.Duration(engraverConf.TicksPerSecond) / time.Second)
 	needlePeriod := uint(needlePeriod * time.Duration(engraverConf.TicksPerSecond) / time.Second)
@@ -662,7 +753,11 @@ func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{
 	if !stall {
 		mode = stepper.ModeNostall
 	}
-	return p.engraver.engrave(mode, spline, quit, progress)
+	return p.engrave(mode, spline, quit, progress)
+}
+
+func (p *Platform) engrave(mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
+	return p.engraver.engrave(p.voltage, mode, spline, quit, progress)
 }
 
 func (p *Platform) EngraverStatus() gui.EngraverStatus {

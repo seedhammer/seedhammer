@@ -91,7 +91,7 @@
         }
         // (
           let
-            tinygo-flags = "-target pico2 -stack-size 16kb -gc precise -opt 2 -scheduler tasks";
+            tinygo-flags = "-target pico-plus2 -stack-size 16kb -gc precise -opt 2 -scheduler tasks";
           in
           {
             build-firmware = pkgs.writeShellScriptBin "build-firmware" ''

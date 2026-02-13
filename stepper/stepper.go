@@ -21,6 +21,7 @@ type Axis uint8
 const (
 	XAxis Axis = 0b1 << iota
 	YAxis
+	SAxis
 )
 
 const MaxSplineLength = 256
@@ -302,9 +303,11 @@ loop:
 	}
 	switch {
 	case blocked&XAxis != 0:
-		return errors.New("mjolnir2: x-axis blocked")
+		return errors.New("stepper: x-axis blocked")
 	case blocked&YAxis != 0:
-		return errors.New("mjolnir2: y-axis blocked")
+		return errors.New("stepper: y-axis blocked")
+	case blocked&SAxis != 0:
+		return errors.New("stepper: power loss or short circuit")
 	default:
 		return nil
 	}
