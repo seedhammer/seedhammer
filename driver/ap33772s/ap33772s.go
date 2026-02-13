@@ -1,5 +1,3 @@
-//go:build tinygo
-
 // package ap33772s implements a driver for the Diodes AP33772S
 // USB PD 3.1 sink controller.
 package ap33772s
@@ -8,43 +6,29 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"machine"
 )
 
 type Device struct {
-	bus        Bus
-	intr       machine.Pin
-	interrupts chan struct{}
-	scratch    [1 + (nSPRs+nEPRs)*2]byte
+	bus     Bus
+	scratch [1 + (nSPRs+nEPRs)*2]byte
 }
 
 type Bus interface {
 	Tx(addr uint16, w, r []byte) error
 }
 
-func New(bus Bus, intr machine.Pin) *Device {
+func New(bus Bus) *Device {
 	return &Device{
-		bus:  bus,
-		intr: intr,
+		bus: bus,
 	}
 }
 
 func (d *Device) Configure() error {
-	d.interrupts = make(chan struct{}, 1)
-	d.intr.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
-	d.intr.SetInterrupt(machine.PinFalling, d.handleInterrupt)
 	// Set interrupt mask.
-	if err := d.writeReg(regMASK, intREADY|intSTARTED|intNEWPDO); err != nil {
+	if err := d.writeReg(regMASK, READY|STARTED|NEWPDO); err != nil {
 		return fmt.Errorf("ap33772s: %w", err)
 	}
 	return nil
-}
-
-func (d *Device) handleInterrupt(machine.Pin) {
-	select {
-	case d.interrupts <- struct{}{}:
-	default:
-	}
 }
 
 // MeasureTemperature reads the temperature in degrees celcius (C)
@@ -246,7 +230,7 @@ const (
 
 	// Interrupt bits in the Mask and Status
 	// registers.
-	intSTARTED = 0b1 << 0
-	intREADY   = 0b1 << 1
-	intNEWPDO  = 0b1 << 2
+	STARTED = 0b1 << 0
+	READY   = 0b1 << 1
+	NEWPDO  = 0b1 << 2
 )
