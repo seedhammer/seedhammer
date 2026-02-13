@@ -50,8 +50,6 @@ type Driver struct {
 	// the oldest progress is a conservative minimum of the engraving
 	// progress.
 	progresses [3]Progress
-	// segTicks is duration of the current segment.
-	segTicks uint
 }
 
 type Progress struct {
@@ -184,19 +182,17 @@ fill:
 		}
 	}
 	for !e.full() {
+		prog := e.progresses[:]
 		for !e.stepper.Step() {
 			if e.safeKnots == 0 {
 				return
 			}
-			prog := e.progresses[:]
-			prog[len(prog)-1].Ticks += e.segTicks
 			prog[len(prog)-1].Knots += 1
 			k := e.knots.Pop()
 			e.safeKnots--
 			c, ticks, needle := e.seg.Knot(k)
 			e.needle = needle
 			e.stepper.Segment(c, ticks)
-			e.segTicks = ticks
 		}
 		var pins uint8
 		pos := e.stepper.Position()
@@ -229,6 +225,7 @@ fill:
 		w |= uint32(pins) << (stepIdx * pinBits)
 		e.buf[idx] = w
 		e.idx++
+		prog[len(prog)-1].Ticks++
 	}
 }
 
