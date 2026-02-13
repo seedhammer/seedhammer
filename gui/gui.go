@@ -2578,6 +2578,7 @@ type Platform interface {
 	// NextChunk returns the next chunk of the refresh.
 	NextChunk() (draw.RGBA64Image, bool)
 	Features() Features
+	HardwareVersion() string
 }
 
 type Features int
@@ -2603,10 +2604,9 @@ const idleTimeout = 3 * time.Minute
 func Run(pl Platform, version string) func(yield func() bool) {
 	return func(yield func() bool) {
 		ctx := NewContext(pl)
-		ctx.Version = version
-		secure := pl.Features().Has(FeatureSecureBoot)
-		if !secure {
-			ctx.Version += " FIRMWARE UNLOCKED"
+		ctx.Version = "Firmware: " + version + "\nHardware: " + pl.HardwareVersion()
+		if !pl.Features().Has(FeatureSecureBoot) {
+			ctx.Version += " (UNLOCKED)"
 		}
 		a := struct {
 			root op.Ops
