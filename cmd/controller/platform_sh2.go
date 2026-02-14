@@ -700,6 +700,13 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 	const naxes = 3
 	e.diag = make(chan stepper.Axis, naxes)
 
+	needleAct := uint(needleActivation * time.Duration(engraverConf.TicksPerSecond) / time.Second)
+	needlePeriod := uint(needlePeriod * time.Duration(engraverConf.TicksPerSecond) / time.Second)
+	d := stepper.Engrave(e.Dev, progress)
+	e.Dev.Enable(d.HandleTransferCompleted, needleAct, needlePeriod)
+	defer e.Dev.Disable()
+	// Set up interrupt handlers last, because they potentially undo pin configuration
+	// done in e.Dev.Enable above.
 	for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
 		if err := pin.SetInterrupt(machine.PinRising, e.handleDiag); err != nil {
 			return fmt.Errorf("engraver: %w", err)
@@ -710,11 +717,6 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 	if e.sdiagAvailable && S_DIAG.Get() {
 		return errors.New("engraver: engraver is not ready")
 	}
-	needleAct := uint(needleActivation * time.Duration(engraverConf.TicksPerSecond) / time.Second)
-	needlePeriod := uint(needlePeriod * time.Duration(engraverConf.TicksPerSecond) / time.Second)
-	d := stepper.Engrave(e.Dev, progress)
-	e.Dev.Enable(d.HandleTransferCompleted, needleAct, needlePeriod)
-	defer e.Dev.Disable()
 	if err := d.Run(e.mode, quit, e.diag, spline); err != nil {
 		return err
 	}
