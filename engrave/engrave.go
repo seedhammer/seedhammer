@@ -1,4 +1,4 @@
-// package engrave transforms shapes such as text and QR codes into
+// Package engrave transforms shapes such as text and QR codes into
 // line and move commands for use with an engraver.
 package engrave
 
@@ -1000,7 +1000,7 @@ func planEngraving(knotBuf []bspline.Knot, conf StepperConfig, e Engraving) bspl
 					// time minimal traversal.
 					if len(spline) == 5 {
 						s, e := spline[1].Ctrl, spline[3].Ctrl
-						spline = appendLineBSpline(spline[:0], conf, engrave, s, e)
+						spline = appendLine(spline[:0], conf, engrave, s, e)
 					} else {
 						for i := range spline[2 : len(spline)-2] {
 							spline[i+2].T = 1
@@ -1086,7 +1086,7 @@ func (s *timeScaler) Done() bool {
 	return s.rem == 0
 }
 
-func appendLineBSpline(spline []bspline.Knot, conf StepperConfig, engrave bool, s, e bezier.Point) []bspline.Knot {
+func appendLine(spline []bspline.Knot, conf StepperConfig, engrave bool, s, e bezier.Point) []bspline.Knot {
 	tps := conf.TicksPerSecond
 	vlim := conf.Speed
 	if engrave {
@@ -1437,4 +1437,55 @@ func strlen(s string) int {
 		n++
 	}
 	return n
+}
+
+// SafePointer tracks the most recent safe point of a B-Spline.
+// A safe point is where velocity and acceleration are zero.
+type SafePointer struct {
+	safePoint bezier.Point
+	// history contains the knots after SafePoint.
+	history   []bspline.Knot
+	progress  uint
+	completed int
+}
+
+func (s *SafePointer) Resume(conf StepperConfig) []bspline.Knot {
+	move := make([]bspline.Knot, 0, len(s.history)+10)
+	// Move to the safe point.
+	move = appendLine(move, conf, false, bezier.Point{}, s.safePoint)
+	move = append(move, s.history...)
+	return move
+}
+
+func (s *SafePointer) Progress(p uint) {
+	s.progress += p
+	// Advance s.completed.
+	for len(s.history) > s.completed {
+		k := s.history[s.completed]
+		// Stop when an engraving knot later than progress
+		// is reached.
+		if k.Engrave && s.progress < k.T {
+			break
+		}
+		s.progress -= k.T
+		s.completed++
+		// Advance safe point.
+		his := s.history[:s.completed]
+		n := len(his)
+		if n < 3 {
+			continue
+		}
+		k0, k1, k2 := his[n-3], his[n-2], his[n-1]
+		if clamped := k0.Ctrl == k1.Ctrl && k1 == k2; !clamped {
+			continue
+		}
+		rem := copy(s.history, s.history[n:])
+		s.history = s.history[:rem]
+		s.completed = 0
+		s.safePoint = k0.Ctrl
+	}
+}
+
+func (s *SafePointer) Knot(k bspline.Knot) {
+	s.history = append(s.history, k)
 }

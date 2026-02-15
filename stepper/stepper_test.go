@@ -4,7 +4,6 @@ import (
 	"iter"
 	"slices"
 	"testing"
-	"time"
 
 	qr "github.com/seedhammer/kortschak-qr"
 	"seedhammer.com/bezier"
@@ -37,8 +36,6 @@ func TestPath(t *testing.T) {
 			if !yield(c) {
 				return
 			}
-			// Increase chances of stalls.
-			time.Sleep(20 * time.Millisecond)
 		}
 	}
 	pen := bezier.Point{}
@@ -49,7 +46,7 @@ func TestPath(t *testing.T) {
 		cmds = cmds[1:]
 	}
 	spline := engrave.PlanEngraving(params.StepperConfig, plan)
-	for s := range runEngraving(nil, spline) {
+	for s := range runEngraving(t, spline) {
 		dx, dy := (s>>pinDirX)&0b1, (s>>pinDirY)&0b1
 		sx, sy := (s>>pinStepX)&0b1, (s>>pinStepY)&0b1
 		needle := s>>pinNeedle&0b1 == 0b1
@@ -67,74 +64,48 @@ func TestPath(t *testing.T) {
 	}
 }
 
-func TestQuit(t *testing.T) {
-	planDone := make(chan struct{})
-	plan := func(yield func(engrave.Command) bool) {
-		x := 0
-		for yield(engrave.Move(bezier.Pt(x, 0))) {
-			x = 80*mm - x
+type device struct {
+	steps     []uint32
+	progress  int
+	reportErr error
+}
+
+func (d *device) Read(steps []uint32) int {
+	n := copy(steps, d.steps)
+	d.progress += n
+	rem := copy(d.steps, d.steps[n:])
+	d.steps = d.steps[:rem]
+	return n
+}
+
+func (d *device) Write(steps []uint32) (int, error) {
+	p := d.progress
+	d.progress = 0
+	if err := d.reportErr; err != nil {
+		return p, err
+	}
+	d.steps = append(d.steps, steps...)
+	return p, nil
+}
+
+func runEngraving(t *testing.T, spline bspline.Curve) iter.Seq[uint8] {
+	dev := new(device)
+	drv := NewDriver(dev)
+	for k := range spline {
+		if _, err := drv.Knot(k); err != nil {
+			t.Fatal(err)
 		}
-		close(planDone)
 	}
-	count := 0
-	quit := make(chan struct{})
-	spline := engrave.PlanEngraving(params.StepperConfig, plan)
-	for range runEngraving(quit, spline) {
-		count++
-		if count > 1e6 && quit != nil {
-			close(quit)
-			quit = nil
-		}
+	if err := drv.Flush(); err != nil {
+		t.Fatal(err)
 	}
-	<-planDone
-}
-
-type buffer struct {
-	buf   []uint32
-	steps int
-}
-
-type dev struct {
-	transfers  chan buffer
-	buf1, buf2 []uint32
-}
-
-func (d *dev) NextBuffer() []uint32 {
-	return d.buf2
-}
-
-func (d *dev) Transfer(steps int) {
-	d.transfers <- buffer{d.buf1, steps}
-	d.buf1, d.buf2 = d.buf2, d.buf1
-}
-
-func runEngraving(quit <-chan struct{}, spline bspline.Curve) iter.Seq[uint8] {
-	const bufSize = 128
-	d := &dev{
-		buf1:      make([]uint32, bufSize),
-		buf2:      make([]uint32, bufSize),
-		transfers: make(chan buffer, 1),
-	}
-	result := make(chan struct{}, 1)
-	driver := Engrave(d, nil)
-	go func() {
-		driver.Run(ModeEngrave, quit, nil, spline)
-		close(result)
-	}()
-	yieldOk := true
 	return func(yield func(step uint8) bool) {
-		for {
-			select {
-			case <-result:
-				return
-			case t := <-d.transfers:
-				for i := range t.steps {
-					w := t.buf[i/stepsPerWord]
-					w >>= (i % stepsPerWord) * pinBits
-					s := uint8(w & (0b1<<pinBits - 1))
-					yieldOk = yieldOk && yield(s)
+		for _, w := range dev.steps {
+			for j := range stepsPerWord {
+				s := uint8((w >> (j * pinBits)) & (0b1<<pinBits - 1))
+				if s == 0 || !yield(s) {
+					return
 				}
-				driver.HandleTransferCompleted()
 			}
 		}
 	}
@@ -208,7 +179,7 @@ func TestTiming(t *testing.T) {
 
 			spline := engrave.PlanEngraving(params.StepperConfig, test.plan)
 			want := engrave.ProfileSpline(spline).Pattern
-			got := profileSpline(spline)
+			got := profileSpline(t, spline)
 			if !slices.Equal(got, want) {
 				t.Errorf("got profile\n%+v\nwant\n%+v", got, want)
 			}
@@ -218,12 +189,13 @@ func TestTiming(t *testing.T) {
 
 // profileSpline is like [engrave.ProfileSpline] using a stepper to
 // produce the pattern.
-func profileSpline(spline bspline.Curve) []uint {
+func profileSpline(t *testing.T, spline bspline.Curve) []uint {
+	t.Helper()
 	var time uint
 	wasNeedle := false
 	var pattern []uint
 	var lastt uint
-	for s := range runEngraving(nil, spline) {
+	for s := range runEngraving(t, spline) {
 		needle := (s>>pinNeedle)&0b1 != 0
 		if wasNeedle != needle {
 			wasNeedle = needle

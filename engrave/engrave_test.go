@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -79,7 +80,8 @@ func TestConstantQR(t *testing.T) {
 				if err != nil {
 					t.Fatalf("entropy: %x: %v", entropy, err)
 				}
-				prof := ProfileSpline(verifiedEngraving(t, conf, cmd.Engrave(conf, strokeWidth, 3)))
+				spline := verifiedEngraving(t, conf, PlanEngraving(conf, cmd.Engrave(conf, strokeWidth, 3)))
+				prof := ProfileSpline(spline)
 				if !prof.Equal(refProf) {
 					t.Errorf("entropy: %x: engraving is not constant compared to %x", entropy, templateEntropy)
 				}
@@ -160,7 +162,7 @@ func TestFonts(t *testing.T) {
 				String(f.face, em, string(alphabet)).Engrave(yield)
 			}
 			p := filepath.Join("testdata", "font-"+f.name+".bin")
-			spline := verifiedEngraving(t, conf, plan)
+			spline := verifiedEngraving(t, conf, PlanEngraving(conf, plan))
 			m := f.face.Metrics()
 			bounds := bspline.Bounds{Max: bezier.Pt(width*em/m.Height, em)}
 			if err := golden.CompareBSpline(p, *update, *dump, strokeWidth, bounds, spline); err != nil {
@@ -178,7 +180,7 @@ func TestConstantFont(t *testing.T) {
 		s.String(yield, constantAlphabet)
 	}
 	p := filepath.Join("testdata", "font-constant.bin")
-	spline := verifiedEngraving(t, conf, plan)
+	spline := verifiedEngraving(t, conf, PlanEngraving(conf, plan))
 	width, height := String(f, em, constantAlphabet).Measure()
 	bounds := bspline.Bounds{
 		Max: bezier.Pt(width, height),
@@ -317,6 +319,58 @@ func testSCurve(t *testing.T, vlim, alim, jlim uint, dist int) int {
 	return nphases
 }
 
+func TestSafePointer(t *testing.T) {
+	spline := PlanEngraving(conf, slices.Values([]Command{
+		Move(bezier.Pt(100, 100)),
+		Line(bezier.Pt(150, 200)),
+		Line(bezier.Pt(150, 250)),
+		Move(bezier.Pt(0, 0)),
+		ControlPoint(true, bezier.Pt(150, 250)),
+		ControlPoint(true, bezier.Pt(150, 350)),
+		ControlPoint(true, bezier.Pt(150, 150)),
+		ControlPoint(true, bezier.Pt(150, 150)),
+		Line(bezier.Pt(150, 250)),
+	}))
+	knots := slices.Collect(spline)
+	totDur := 0
+	completed := 0
+	sp := new(SafePointer)
+	rng := rand.New(rand.NewSource(42))
+	ki := 0
+	for ki < len(knots) || completed < totDur {
+		if ki < len(knots) {
+			k := knots[ki]
+			ki++
+			totDur += int(k.T)
+			sp.Knot(k)
+		}
+		if totDur > 0 {
+			d := 1 + rng.Intn(totDur-completed)
+			completed += d
+			sp.Progress(uint(d))
+		}
+		rs := slices.Values(sp.Resume(conf))
+		resume := slices.Collect(verifiedEngraving(t, conf, rs))
+		// Find longest common postfix.
+		postfix := 0
+		for postfix < len(resume) && postfix < ki {
+			if resume[len(resume)-1-postfix] != knots[ki-1-postfix] {
+				break
+			}
+			postfix++
+		}
+		// Check that the latest skipped engrave knot is earlier
+		// than the completed time.
+		dur := 0
+		for _, k := range knots[:ki-postfix] {
+			dur += int(k.T)
+			if k.Engrave && dur > completed {
+				t.Fatalf("completed %d, but skipped engraving knots at %d", completed, dur)
+			}
+		}
+	}
+}
+
 func FuzzConstantQR(f *testing.F) {
 	f.Fuzz(func(t *testing.T, entropy []byte) {
 		if len(entropy) < 16 {
@@ -435,13 +489,13 @@ func BenchmarkEngraving(b *testing.B) {
 	}
 }
 
-func verifiedEngraving(t *testing.T, conf StepperConfig, e Engraving) bspline.Curve {
+func verifiedEngraving(t *testing.T, conf StepperConfig, e bspline.Curve) bspline.Curve {
 	return func(yield func(bspline.Knot) bool) {
 		var kin bspline.Kinematics
 		// Engrave mode is shifted one knot.
 		lastEngrave := false
 		remaining := 10
-		for k := range PlanEngraving(conf, e) {
+		for k := range e {
 			kin.Knot(k.T, k.Ctrl, uint(conf.TicksPerSecond))
 			limv := conf.Speed
 			if lastEngrave {

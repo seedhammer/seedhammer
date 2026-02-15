@@ -42,7 +42,6 @@ import (
 	"seedhammer.com/nonstandard"
 	"seedhammer.com/seedqr"
 	slip39words "seedhammer.com/slip39"
-	"seedhammer.com/stepper"
 )
 
 var ErrTooLarge = errors.New("backup: data does not fit plate")
@@ -671,8 +670,8 @@ func validateDescriptor(params engrave.Params, desc *bip380.Descriptor) ([]strin
 }
 
 type Plate struct {
-	Attrs  bspline.Attributes
-	Spline bspline.Curve
+	Duration uint
+	Spline   bspline.Curve
 }
 
 func engraveSeed(params engrave.Params, m bip39.Mnemonic) (Plate, error) {
@@ -715,15 +714,6 @@ func masterFingerprintFor(m bip39.Mnemonic, network *chaincfg.Params) (uint32, e
 	return bip32.Fingerprint(pkey), nil
 }
 
-func plateImage(p PlateSize) image.RGBA64Image {
-	switch p {
-	case SquarePlate:
-		return assets.Sh02
-	default:
-		panic("unsupported plate")
-	}
-}
-
 func plateName(p PlateSize) string {
 	switch p {
 	case SquarePlate:
@@ -732,42 +722,6 @@ func plateName(p PlateSize) string {
 		panic("unsupported plate")
 	}
 }
-
-type InstructionType int
-
-const (
-	PrepareInstruction InstructionType = iota
-	ConnectInstruction
-	EngraveInstruction
-)
-
-type Instruction struct {
-	Body  string
-	Lead  string
-	Type  InstructionType
-	Image image.RGBA64Image
-
-	resolvedBody string
-}
-
-var (
-	EngraveSideASimple = []Instruction{
-		{
-			Body: "Insert a blank plate and close the lock.",
-		},
-		{
-			Body: "Hold button to start the engraving process. The process is loud, use hearing protection.",
-			Type: ConnectInstruction,
-		},
-		{
-			Lead: "Engraving plate",
-			Type: EngraveInstruction,
-		},
-		{
-			Body: "Engraving completed successfully.",
-		},
-	}
-)
 
 func isEmptyMnemonic(m bip39.Mnemonic) bool {
 	for _, w := range m {
@@ -2275,39 +2229,15 @@ func (s *DescriptorScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image
 }
 
 func NewEngraveScreen(ctx *Context, plate Plate) *EngraveScreen {
-	ins := append([]Instruction{}, EngraveSideASimple...)
-	s := &EngraveScreen{
-		plate:        plate,
-		instructions: ins,
+	return &EngraveScreen{
+		duration: plate.Duration,
+		job:      newEngraverJob(ctx.Platform, plate.Spline, 0),
 	}
-	for i, ins := range s.instructions {
-		repl := strings.NewReplacer(
-			"{{.Name}}", plateName(SquarePlate),
-		)
-		s.instructions[i].resolvedBody = repl.Replace(ins.Body)
-		// As a special case, the Sh02 image is a placeholder for the plate-specific image.
-		if ins.Image == assets.Sh02 {
-			s.instructions[i].Image = plateImage(SquarePlate)
-		}
-	}
-	return s
 }
 
 type EngraveScreen struct {
-	instructions []Instruction
-	plate        Plate
-
-	step   int
-	dryRun struct {
-		timeout time.Time
-		enabled bool
-	}
-	engrave struct {
-		job      *engraveJob
-		duration uint
-		err      error
-		progress stepper.Progress
-	}
+	duration uint
+	job      *engraveJob
 }
 
 func (s *EngraveScreen) showError(ctx *Context, ops op.Ctx, th *Colors, errScr *ErrorScreen) {
@@ -2324,153 +2254,61 @@ func (s *EngraveScreen) showError(ctx *Context, ops op.Ctx, th *Colors, errScr *
 	}
 }
 
-func (s *EngraveScreen) moveStep(p Platform) bool {
-	ins := s.instructions[s.step]
-	s.step++
-	if s.step == len(s.instructions) {
-		return true
-	}
-	ins = s.instructions[s.step]
-	if ins.Type == EngraveInstruction {
-		spline := s.plate.Spline
-		if s.dryRun.enabled {
-			spline = engrave.DryRun(spline)
-		}
-		s.engrave.err = nil
-		progress := s.engrave.progress
-		// Fast forward to last interruption, if any.
-		ffspline := func(yield func(bspline.Knot) bool) {
-			for k := range spline {
-				if progress.Knots > 0 {
-					progress.Knots--
-					continue
-				}
-				if !yield(k) {
-					return
-				}
-			}
-		}
-		s.engrave.duration = s.plate.Attrs.Duration
-		s.engrave.job = newEngraverJob(p, ffspline)
-	}
-	return false
-}
-
-var errEngravingCancelled = errors.New("engraving cancelled")
-
-func (s *EngraveScreen) cancelEngraving() {
-	d := s.engrave.job
-	if d == nil {
-		return
-	}
-	d.Cancel()
-	s.engrave.job = nil
-	s.engrave.err = errEngravingCancelled
-}
-
 func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
-	defer s.cancelEngraving()
+	defer s.job.Stop()
 	inp := new(InputTracker)
 	backBtn := &Clickable{Button: Button1}
 	selectBtn := &Clickable{Button: Button3, AltButton: Center}
 frames:
 	for !ctx.Done {
-		if d := s.engrave.job; d != nil {
-			p := s.engrave.job.Progress()
-			s.engrave.progress.Ticks += p.Ticks
-			s.engrave.progress.Knots += p.Knots
-			if done, err := d.Status(); done {
-				s.engrave.job = nil
-				s.engrave.err = err
-				if err == nil {
-					s.step++
-					if s.step == len(s.instructions) {
-						return true
-					}
-				} else {
-					s.step--
-				}
-			}
-			// Update progress twice a second.
-			ctx.WakeupAt(time.Now().Add(time.Second / 2))
-		}
-
-		if !s.dryRun.timeout.IsZero() {
-			now := time.Now()
-			d := s.dryRun.timeout.Sub(now)
-			if d <= 0 {
-				s.dryRun.timeout = time.Time{}
-				s.dryRun.enabled = !s.dryRun.enabled
-			}
-		}
-		for s.step < len(s.instructions)-1 && backBtn.Clicked(ctx) {
-			if s.step == 0 {
+		for backBtn.Clicked(ctx) {
+			st := s.job.Status()
+			if st.State != engraveRunning {
 				break frames
 			}
-			s.cancelEngraving()
-			s.step--
+			s.job.Stop()
 		}
-		for {
-			e, ok := selectBtn.Next(ctx)
-			if !ok {
-				break
-			}
-			switch s.instructions[s.step].Type {
-			case ConnectInstruction:
-				if !selectBtn.Pressed {
-					continue
-				}
-				confirm := new(ConfirmDelay)
-				confirm.Start(ctx, confirmDelay)
-				inp.Pressed[selectBtn.Button] = false
-				selectBtn.Pressed = false
-				for !ctx.Done {
-					p := confirm.Progress(ctx)
-					if p == 1. {
-						break
-					}
-					for {
-						_, ok := selectBtn.Next(ctx)
-						if !ok {
-							break
-						}
-						if !selectBtn.Pressed {
-							continue frames
-						}
-					}
-					dims := ctx.Platform.DisplaySize()
-					s.draw(ctx, ops, th, dims)
-					s.drawNav(ops, th, dims, p, backBtn, selectBtn)
-					ctx.Frame()
-				}
-			case EngraveInstruction:
-				continue
-			default:
-				if !e.Clicked {
-					continue
-				}
-			}
-			if s.moveStep(ctx.Platform) {
+		switch s.job.Status().State {
+		case engraveDone:
+			if selectBtn.Clicked(ctx) {
 				return true
 			}
-		}
-		for {
-			e, ok := inp.Next(ctx, ButtonFilter(Button2))
-			if !ok {
+		default:
+			if _, ok := selectBtn.Next(ctx); !ok {
 				break
 			}
-			if e, ok := e.AsButton(); ok {
-				switch e.Button {
-				case Button2:
-					if e.Pressed {
-						t := time.Now().Add(confirmDelay)
-						s.dryRun.timeout = t
-						ctx.WakeupAt(t)
-					} else {
-						s.dryRun.timeout = time.Time{}
+			if !selectBtn.Pressed {
+				break
+			}
+			confirm := new(ConfirmDelay)
+			confirm.Start(ctx, confirmDelay)
+			inp.Pressed[selectBtn.Button] = false
+			selectBtn.Pressed = false
+			for !ctx.Done {
+				p := confirm.Progress(ctx)
+				if p == 1. {
+					s.job.Start()
+					break
+				}
+				for {
+					_, ok := selectBtn.Next(ctx)
+					if !ok {
+						break
+					}
+					if !selectBtn.Pressed {
+						continue frames
 					}
 				}
+				dims := ctx.Platform.DisplaySize()
+				s.draw(ctx, ops, th, dims)
+				s.drawNav(ops, th, dims, p, backBtn, selectBtn)
+				ctx.Frame()
 			}
+		}
+
+		if s.job.Status().State == engraveRunning {
+			// Update progress twice a second.
+			ctx.WakeupAt(time.Now().Add(time.Second / 2))
 		}
 
 		dims := ctx.Platform.DisplaySize()
@@ -2490,76 +2328,62 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 
 	const margin = 8
 	_, content := r.CutTop(leadingSize)
-	ins := s.instructions[s.step]
-	switch ins.Type {
-	case EngraveInstruction:
-		middle, _ := content.CutBottom(leadingSize)
+
+	st := s.job.Status()
+	switch st.State {
+	default:
+		content := content.Shrink(0, margin, 0, margin)
+		content, _ = content.CutBottom(leadingSize)
+		var bodysz image.Point
+		switch st.State {
+		case engraveIdle:
+			const body = "Insert a blank plate and close the lock.\n\nHold button to start the engraving process. The process is loud, use hearing protection."
+			bodysz = widget.Labelw(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text, body)
+		case engraveDone:
+			const body = "Engraving completed successfully."
+			bodysz = widget.Labelw(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text, body)
+		case engraveStopped:
+			const body = "Engraving paused.\nHold button to resume."
+			bodysz = widget.Labelw(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text, body)
+		case engraveStopping:
+			const body = "Engraving stopping..."
+			bodysz = widget.Labelw(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text, body)
+		case engraveFailed:
+			bodysz = widget.Labelwf(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text,
+				"Engraving failed.\nHold button to retry.\n\nError: %s", st.Error)
+		}
+		op.Position(ops, ops.End(), content.Center(bodysz))
+	case engraveRunning:
+		middle, lead := content.CutBottom(leadingSize)
 		// Remaining seconds, rounded up.
-		p := s.engrave.progress
-		rem := s.engrave.duration - p.Ticks
+		rem := s.duration - st.Completed
 		tps := ctx.Platform.EngraverParams().TicksPerSecond
 		remSec := (rem + tps - 1) / tps
 		min, sec := remSec/60, remSec%60
 		sz := widget.Labelf(ops.Begin(), ctx.Styles.progress, th.Text, "%d:%.2d", min, sec)
 		op.Position(ops, ops.End(), middle.Center(sz))
-	default:
-		content = content.Shrink(0, margin, 0, margin)
-		content, lead := content.CutBottom(leadingSize)
-		var bodysz image.Point
-		if err := s.engrave.err; err != nil && ins.Type == ConnectInstruction {
-			if errors.Is(err, errEngravingCancelled) {
-				bodysz = widget.Labelw(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text,
-					"Engraving paused.\nHold button to resume.")
-			} else {
-				bodysz = widget.Labelwf(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text,
-					"Engraving failed.\nHold button to retry.\n\nError: %s", err.Error())
-			}
-		} else {
-			bodysz = widget.Labelw(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text, ins.resolvedBody)
-		}
-		if img := ins.Image; img != nil {
-			sz := img.Bounds().Size()
-			op.Offset(ops, image.Pt((bodysz.X-sz.X)/2, bodysz.Y))
-			op.ImageOp(ops, img, false)
-			if sz.X > bodysz.X {
-				bodysz.X = sz.X
-			}
-			bodysz.Y += sz.Y
-		}
-		op.Position(ops, ops.End(), content.Center(bodysz))
-		leadsz := widget.Labelw(ops.Begin(), ctx.Styles.lead, dims.X-2*margin, th.Text, ins.Lead)
+		const leadTxt = "Engraving plate"
+		leadsz := widget.Labelw(ops.Begin(), ctx.Styles.lead, dims.X-2*margin, th.Text, leadTxt)
 		op.Position(ops, ops.End(), lead.Center(leadsz))
-	}
-
-	progressw := dims.X * (s.step + 1) / len(s.instructions)
-	op.ClipOp(image.Rectangle{Max: image.Pt(progressw, 2)}).Add(ops)
-	op.ColorOp(ops, th.Text)
-
-	if s.dryRun.enabled {
-		sz := widget.Labelf(ops.Begin(), ctx.Styles.debug, th.Text, "dry-run")
-		op.Position(ops, ops.End(), r.SE(sz).Sub(image.Pt(4, 0)))
 	}
 }
 
 func (s *EngraveScreen) drawNav(ops op.Ctx, th *Colors, dims image.Point, progress float32, backBtn, selectBtn *Clickable) {
-	switch {
-	case s.step == 0:
-		layoutNavigation(ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack})
-	case s.step < len(s.instructions)-1:
+	st := s.job.Status()
+	switch st.State {
+	case engraveRunning:
 		layoutNavigation(ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconLeft})
-	}
-	ins := s.instructions[s.step]
-	switch ins.Type {
-	case EngraveInstruction:
-	case ConnectInstruction:
-		layoutNavigation(ops, th, dims, NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconHammer, Progress: progress})
-	default:
+	case engraveDone:
 		layoutNavigation(ops, th, dims, NavButton{
 			Clickable: selectBtn,
 			Style:     StylePrimary,
 			Icon:      assets.IconRight,
-			Progress:  progress,
 		})
+	case engraveStopping:
+		layoutNavigation(ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack})
+	default:
+		layoutNavigation(ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack})
+		layoutNavigation(ops, th, dims, NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconHammer, Progress: progress})
 	}
 }
 
@@ -2567,8 +2391,7 @@ type Platform interface {
 	LockBoot() error
 	AppendEvents(deadline time.Time, evts []Event) []Event
 	Wakeup()
-	Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error
-	EngraverStatus() EngraverStatus
+	Engraver(stall bool) (Engraver, error)
 	NFCReader() io.Reader
 	EngraverParams() engrave.Params
 	DisplaySize() image.Point
@@ -2591,7 +2414,7 @@ func (f Features) Has(feat Features) bool {
 	return f&feat != 0
 }
 
-type EngraverStatus struct {
+type EngraverStats struct {
 	StallSpeed       int
 	XSpeed, YSpeed   int
 	XLoad, YLoad     int
@@ -2782,8 +2605,8 @@ func toPlate(plan engrave.Engraving, params engrave.Params) (Plate, error) {
 		return Plate{}, ErrTooLarge
 	}
 	return Plate{
-		Attrs:  attrs,
-		Spline: spline,
+		Duration: attrs.Duration,
+		Spline:   spline,
 	}, nil
 }
 

@@ -1,14 +1,16 @@
-//go:build tinygo && rp
+//go:build tinygo && rp2350
 
 // Package pio implements a driver for the Raspberry Pi
-// rp2xxx series of microcontrollers
+// rp2350 microcontroller.
 package pio
 
 import (
 	"device/rp"
 	"machine"
 	"runtime"
+	"runtime/interrupt"
 	"runtime/volatile"
+	"slices"
 	"unsafe"
 )
 
@@ -20,6 +22,13 @@ type ConfigRegs struct {
 	execctrl  uint32
 	shiftctrl uint32
 	pinctrl   uint32
+}
+
+// RxFIFO accesses the Rx FIFO of a
+// state machine configured with
+// FIFOJoinRxGet or FIFOJoinTxPut.
+type RxFIFO struct {
+	PUTGET [4]volatile.Register32
 }
 
 type confMemType struct {
@@ -36,13 +45,35 @@ type ioType struct {
 	ctrl   volatile.Register32
 }
 
-const numStateMachines = 4
-const maxMachineMask = 1<<numStateMachines - 1
+const (
+	numPIOs          = 3
+	numStateMachines = 4
+	maxMachineMask   = 1<<numStateMachines - 1
+	nirq             = 2
+)
 
 const bank0Pins = 32
 
 const JMP = 0b000 << 13
 const SET = 0b111 << 13
+
+type irqHandler struct {
+	intr     interrupt.Interrupt
+	callback func()
+}
+
+var (
+	handlers [numPIOs][nirq]irqHandler
+)
+
+func init() {
+	handlers[0][0].intr = interrupt.New(rp.IRQ_PIO0_IRQ_0, handlers[0][0].handleInterrupt)
+	handlers[0][1].intr = interrupt.New(rp.IRQ_PIO0_IRQ_1, handlers[0][1].handleInterrupt)
+	handlers[1][0].intr = interrupt.New(rp.IRQ_PIO1_IRQ_0, handlers[1][0].handleInterrupt)
+	handlers[1][1].intr = interrupt.New(rp.IRQ_PIO1_IRQ_1, handlers[1][1].handleInterrupt)
+	handlers[2][0].intr = interrupt.New(rp.IRQ_PIO2_IRQ_0, handlers[2][0].handleInterrupt)
+	handlers[2][1].intr = interrupt.New(rp.IRQ_PIO2_IRQ_1, handlers[2][1].handleInterrupt)
+}
 
 func Program(pio *rp.PIO0_Type, off uint8, prog []uint16) {
 	insts := unsafe.Slice(&pio.INSTR_MEM0, 32)
@@ -87,14 +118,20 @@ func (c *StateMachineConfig) Build() ConfigRegs {
 	clkDiv := uint32(clkDiv64) & 0xffffff
 	fjoinRX := uint32(0b0)
 	fjoinTX := uint32(0b0)
+	fjoinRxGet := uint32(0b0)
 	switch c.FIFOMode {
 	case FIFOJoinNone:
 	case FIFOJoinRX:
 		fjoinRX = 0b1
 	case FIFOJoinTX:
 		fjoinTX = 0b1
+	case FIFOJoinRxGet:
+		fjoinRxGet = 0b1
 	default:
 		panic("invalid FIFO mode")
+	}
+	if c.InlineOutBit > 31 {
+		panic("invalid input out bit")
 	}
 	return ConfigRegs{
 		clkdiv: clkDiv << rp.PIO0_SM0_CLKDIV_FRAC_Pos,
@@ -113,13 +150,17 @@ func (c *StateMachineConfig) Build() ConfigRegs {
 			0b1<<rp.PIO0_SM0_SHIFTCTRL_IN_SHIFTDIR_Pos | // Shift right.
 			uint32(inCount)<<rp.PIO0_SM0_SHIFTCTRL_IN_COUNT_Pos |
 			boolToUint32(c.Autopush)<<rp.PIO0_SM0_SHIFTCTRL_AUTOPUSH_Pos |
-			boolToUint32(c.Autopull)<<rp.PIO0_SM0_SHIFTCTRL_AUTOPULL_Pos,
+			boolToUint32(c.Autopull)<<rp.PIO0_SM0_SHIFTCTRL_AUTOPULL_Pos |
+			fjoinRxGet<<rp.PIO0_SM0_SHIFTCTRL_FJOIN_RX_GET_Pos,
 
 		execctrl: uint32(c.WrapTarget)<<rp.PIO0_SM0_EXECCTRL_WRAP_BOTTOM_Pos |
 			uint32(c.Wrap)<<rp.PIO0_SM0_EXECCTRL_WRAP_TOP_Pos |
 			uint32(c.JumpPin)<<rp.PIO0_SM0_EXECCTRL_JMP_PIN_Pos |
 			boolToUint32(c.SidesetOptional)<<rp.PIO0_SM0_EXECCTRL_SIDE_EN_Pos |
-			boolToUint32(c.SidesetDirs)<<rp.PIO0_SM0_EXECCTRL_SIDE_PINDIR_Pos,
+			boolToUint32(c.SidesetDirs)<<rp.PIO0_SM0_EXECCTRL_SIDE_PINDIR_Pos |
+			boolToUint32(c.OutSticky)<<rp.PIO0_SM0_EXECCTRL_OUT_STICKY_Pos |
+			boolToUint32(c.InlineOut)<<rp.PIO0_SM0_EXECCTRL_INLINE_OUT_EN_Pos |
+			uint32(c.InlineOutBit)<<rp.PIO0_SM0_EXECCTRL_OUT_EN_SEL_Pos,
 	}
 }
 
@@ -277,7 +318,7 @@ func Instr(p *rp.PIO0_Type, sm uint8) *volatile.Register32 {
 	return &conf.INSTR
 }
 
-func WaitTxStall(p *rp.PIO0_Type, machinesMask int) {
+func WaitTxStall(p *rp.PIO0_Type, machinesMask uint8) {
 	m := uint32(machinesMask)
 	// Clear stall flag(s).
 	p.SetFDEBUG_TXSTALL(m)
@@ -287,16 +328,45 @@ func WaitTxStall(p *rp.PIO0_Type, machinesMask int) {
 	}
 }
 
-func WaitTxNotFull(p *rp.PIO0_Type, machinesMask int) {
+func WaitTxFull(p *rp.PIO0_Type, machinesMask uint8) {
+	for p.GetFSTAT_TXFULL()&uint32(machinesMask) == 0 {
+		runtime.Gosched()
+	}
+}
+
+func WaitTxNotFull(p *rp.PIO0_Type, machinesMask uint8) {
 	for p.GetFSTAT_TXFULL()&uint32(machinesMask) != 0 {
 		runtime.Gosched()
 	}
 }
 
-func WaitTxEmpty(p *rp.PIO0_Type, machinesMask int) {
+func WaitTxEmpty(p *rp.PIO0_Type, machinesMask uint8) {
 	for p.GetFSTAT_TXEMPTY()&uint32(machinesMask) == 0 {
 		runtime.Gosched()
 	}
+}
+
+func SetInterrupt(pio *rp.PIO0_Type, intr, mask uint8, callback func()) {
+	pios := []*rp.PIO0_Type{rp.PIO0, rp.PIO1, rp.PIO2}
+	idx := slices.Index(pios, pio)
+	if idx == -1 {
+		panic("invalid PIO device")
+	}
+	h := &handlers[idx][intr]
+	h.intr.Disable()
+	h.callback = callback
+	if callback != nil {
+		irq := [...]*volatile.Register32{&pio.IRQ0_INTE, &pio.IRQ1_INTE}[intr]
+		bits := uint32(mask) << rp.PIO0_IRQ1_INTF_SM0_Pos
+		irq.SetBits(bits)
+		h.intr.Enable()
+	}
+	return
+}
+
+func RxFIFOFor(pio *rp.PIO0_Type, sm uint8) *RxFIFO {
+	fifos := unsafe.Slice((*RxFIFO)(unsafe.Pointer(&pio.RXF0_PUTGET0)), numStateMachines)
+	return &fifos[sm]
 }
 
 func validatePushPullThreshold(t int) uint32 {
@@ -312,4 +382,10 @@ func boolToUint32(b bool) uint32 {
 		return 1
 	}
 	return 0
+}
+
+func (h *irqHandler) handleInterrupt(interrupt.Interrupt) {
+	if h.callback != nil {
+		h.callback()
+	}
 }

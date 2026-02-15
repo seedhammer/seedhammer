@@ -217,14 +217,6 @@ var (
 	//go:embed progress-circle.bin
 	ProgressCircleData string
 
-	Sh02 = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(Sh02Data[:5720]), len(Sh02Data[:5720])),
-		Rect:    paletted.Rectangle{MinX: 1, MinY: 0, MaxX: 89, MaxY: 65},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(Sh02Data[5720:]), len(Sh02Data[5720:]))),
-	}
-	//go:embed sh02.bin
-	Sh02Data string
-
 	WarningBoxBg = ninepatch.New(&alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(WarningBoxBgData), len(WarningBoxBgData)),
 		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 27, MaxY: 15},

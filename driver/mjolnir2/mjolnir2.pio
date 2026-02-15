@@ -2,10 +2,7 @@
 ; and a solenoid.
 ;
 ; Input format is 5 bit pin settings (including the step pins).
-;
-; On stalls, the x register is output on the pins. Clear
-; it to ensure the needle in particular is stopped if
-; the FIFO empties.
+; StallIRQ is raised if all pins are zero.
 ;
 ; Out pins mapping:
 ;
@@ -22,24 +19,67 @@
 ;
 ; Note that the side set pins overlap the out pins.
 ;
-.program mjolnir2
+.program engraver
 
 .side_set 2 opt
 
-.define PUBLIC pinBits 5
+.define PUBLIC PinBits 5
+.define PUBLIC StallIRQ 0
 
-	pull ifempty noblock  ; Fill the OSR with x on stalls.
-	out y, pinBits        ; Fetch the pins.
-	mov pins, y side 0b00 ; Set pins.
+	set x, 0              ; Halt on FIFO underrun.
+.wrap_target
+loop:
+	out y, PinBits        ; Fetch pins.
+	mov pins, y side 0b00 ; Output pins.
+	jmp !y, stall         ; Stall if all zeros.
 	mov pins, y           ; Step.
+	pull ifempty noblock  ; Clear OSR (with x) on FIFO underrun.
 	mov pins, y side 0b00 ; Reset pins.
+.wrap
+stall:
+	irq wait StallIRQ
+	jmp loop
 
-; Utility instructions.
-.program mjolnir2_util
 
-.side_set 2 opt ; must match main program
+; Program solenoid controls the cycle of the solenoid in conjunction
+; with another PIO program that outputs a 1 to the solenoid pin when
+; it should activate.
+;
+; Operation:
+;   During the off period, a 0 is SET to the solenoid pin, overriding
+;   the engraver program. During the on period, a bit of rxfifo[2] is
+;   OUT'ed to deassert the override.
+;
+; Configuration:
+;  - Enable FIFO txget and set rxfifo[0] to the period and rxfifo[1] to
+;    the activation duration. Set rxfifo[2] to 0.
+;  - Run on the same PIO device as the engraver program, with a
+;    higher SM number.
+;  - Map the SET pin to the solenoid driving pin.
+;  - Set OUT_EN_SEL to 0 and enable OUT_STICKY and INLINE_OUT_EN.
+.program solenoid
 
-set x, 0b00000
+.define PUBLIC PeriodIndex 0
+.define PUBLIC ActIndex 1
+.define PUBLIC ZeroIndex 2
+
+.pio_version 1
+.set 1
+.fifo txget
+
+	set pins, 0                    ; Sticky override solenoid to off.
+	mov osr, rxfifo[PeriodIndex]   ; Set y to the period.
+	mov y, osr
+	mov osr, rxfifo[ActIndex]      ; Set x to the activation duration.
+	mov x, osr
+countloop:
+	jmp x!=y nodeassert            ; Deassert the override at the start of the activation period.
+	out pins, 1                    ; Output a zero to deassert (using INLINE_OUT_EN).
+	jmp skip
+nodeassert:
+	mov osr, rxfifo[ZeroIndex] [1] ; Keep the two paths the same length, while clearing OSR.
+skip:
+	jmp y-- countloop              ; Loop until Y hits 0, then pull a fresh PWM value from FIFO
 
 % go {
 package mjolnir2
@@ -47,8 +87,8 @@ package mjolnir2
 import "seedhammer.com/driver/pio"
 
 const (
-	pioCyclesPerStep = 5
-)
+	engraverCyclesPerStep = 6
 
-var clearXInst = uint32(mjolnir2_utilInstructions[0])
+	solenoidCycles = 4
+)
 %}

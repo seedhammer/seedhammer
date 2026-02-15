@@ -35,8 +35,9 @@ type Channel struct {
 }
 
 type (
-	ChannelID uint8
-	IRQ       uint8
+	ChannelSet uint16
+	ChannelID  uint8
+	IRQ        uint8
 )
 
 const (
@@ -60,7 +61,7 @@ type irq struct {
 }
 
 type irqHandler struct {
-	num      uint8
+	ints     *volatile.Register32
 	intr     interrupt.Interrupt
 	callback func()
 }
@@ -73,29 +74,29 @@ var (
 
 func init() {
 	for i := range handlers {
-		handlers[i].num = uint8(i)
+		handlers[i].ints = &irqs[i].INTS
 	}
 	handlers[0].intr = interrupt.New(rp.IRQ_DMA_IRQ_0, handlers[0].handleInterrupt)
 	handlers[1].intr = interrupt.New(rp.IRQ_DMA_IRQ_1, handlers[1].handleInterrupt)
 	handlers[2].intr = interrupt.New(rp.IRQ_DMA_IRQ_2, handlers[2].handleInterrupt)
 	handlers[3].intr = interrupt.New(rp.IRQ_DMA_IRQ_3, handlers[3].handleInterrupt)
-	// Lower priority assuming that DMA completion interrupts
-	// are both heavier and less time-critical than other kinds
-	// of interrupts.
-	for i := range handlers {
-		handlers[i].intr.SetPriority(0xff)
-	}
 }
 
-func ReserveChannel() (ChannelID, error) {
+func ReserveChannels(n int) (ChannelSet, error) {
 	mu.Lock()
 	defer mu.Unlock()
-	channel := 16 - bits.LeadingZeros16(reservedChans)
-	if channel == nchannels {
-		return 0, errors.New("no available DMA channel")
+	res := reservedChans
+	var chans ChannelSet
+	for range n {
+		ch := 16 - bits.LeadingZeros16(res)
+		if ch == nchannels {
+			return 0, errors.New("dma: no channel available")
+		}
+		res |= 0b1 << ch
+		chans |= 0b1 << ch
 	}
-	reservedChans |= 0b1 << channel
-	return ChannelID(channel), nil
+	reservedChans = res
+	return chans, nil
 }
 
 func ReserveIRQ() (IRQ, error) {
@@ -115,26 +116,40 @@ func (irq IRQ) Free() {
 	reservedIRQs &^= 0b1 << irq
 }
 
-func ChannelAt(ch ChannelID) *Channel {
-	return &channels[ch]
+func (c ChannelSet) At(idx int) ChannelID {
+	var ch int
+	for idx >= 0 {
+		ch = bits.TrailingZeros16(uint16(c))
+		idx--
+		c &^= 0b1 << ch
+	}
+	return ChannelID(ch)
+}
+
+func ChannelFor(id ChannelID) *Channel {
+	return &channels[id]
 }
 
 func (h *irqHandler) handleInterrupt(interrupt.Interrupt) {
 	// Acknowledge interrupt.
-	irq := &irqs[h.num]
-	irq.INTS.Set(irq.INTS.Get())
+	h.ints.Set(h.ints.Get())
 	if h.callback != nil {
 		h.callback()
 	}
 }
 
-func (irq IRQ) Set(ch ChannelID, callback func()) {
+func (irq IRQ) SetPriority(pri uint8) {
+	h := &handlers[irq]
+	h.intr.SetPriority(pri)
+}
+
+func (irq IRQ) SetInterrupt(chans ChannelSet, callback func()) {
 	h := &handlers[irq]
 	h.intr.Disable()
 	h.callback = callback
 	if callback != nil {
 		irq := &irqs[irq]
-		irq.INTE.Set(0b1 << ch)
+		irq.INTE.Set(uint32(chans))
 		h.intr.Enable()
 	}
 }

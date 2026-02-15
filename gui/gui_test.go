@@ -23,7 +23,6 @@ import (
 	"seedhammer.com/engrave"
 	"seedhammer.com/gui/op"
 	"seedhammer.com/image/rgb565"
-	"seedhammer.com/stepper"
 )
 
 func BenchmarkRedraw(b *testing.B) {
@@ -151,7 +150,9 @@ func newTestEngraveScreen(t *testing.T, ctx *Context) *EngraveScreen {
 
 func TestEngraveScreenCancel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		e := newEngraver()
 		p := newPlatform()
+		p.engraver = e
 		ctx := NewContext(p)
 		ops := new(op.Ops)
 		frame, quit := runUI(ctx, ops, func() {
@@ -182,27 +183,23 @@ func TestEngraveScreenCancel(t *testing.T) {
 		if _, ok := frame(); !ok {
 			t.Fatal("EngraveScreen: exited unexpectedly")
 		}
-		<-p.engrave.jobs
+		<-e.opens
 
 		// Go back.
 		click(&ctx.Router, Button1, Button1, Button1)
 		if _, ok := frame(); ok {
 			t.Fatal("engrave screen did not cancel")
 		}
-		synctest.Wait()
-		select {
-		case <-p.engrave.quit:
-		default:
-			t.Fatal("EngraveScreen: did not close quit channel")
-		}
+		// Let the engrave job complete.
 		time.Sleep(10 * time.Second)
-		synctest.Wait()
 	})
 }
 
 func TestEngraveScreenError(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		e := newEngraver()
 		p := newPlatform()
+		p.engraver = e
 		ctx := NewContext(p)
 		ops := new(op.Ops)
 		scr := newTestEngraveScreen(t, ctx)
@@ -213,7 +210,7 @@ func TestEngraveScreenError(t *testing.T) {
 
 		// Fail during engraving.
 		ioErr := errors.New("error during engraving")
-		p.engrave.ioErr = ioErr
+		e.ioErr = ioErr
 		// Press next until connect is reached.
 		click(&ctx.Router, Button3, Button3, Button3)
 		// Hold connect.
@@ -221,7 +218,7 @@ func TestEngraveScreenError(t *testing.T) {
 		frame()
 		time.Sleep(confirmDelay)
 		frame()
-		<-p.engrave.done
+		<-e.closes
 		content, ok := frame()
 		if !ok || !uiContains(content, ioErr.Error()) {
 			t.Fatalf("EngraveScreen: no error reported, expected %v", ioErr)
@@ -231,7 +228,9 @@ func TestEngraveScreenError(t *testing.T) {
 
 func TestEngraveScreen(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		e := newEngraver()
 		p := newPlatform()
+		p.engraver = e
 		ctx := NewContext(p)
 		ops := new(op.Ops)
 		scr := newTestEngraveScreen(t, ctx)
@@ -251,7 +250,7 @@ func TestEngraveScreen(t *testing.T) {
 		for {
 			frame()
 			select {
-			case <-p.engrave.done:
+			case <-e.closes:
 				break loop
 			case <-p.wakeups:
 			}
@@ -321,14 +320,9 @@ func fillDescriptor(t testing.TB, desc *bip380.Descriptor, path bip32.Path, seed
 }
 
 type testPlatform struct {
-	events  []Event
-	wakeups chan struct{}
-	engrave struct {
-		ioErr error
-		quit  <-chan struct{}
-		done  chan struct{}
-		jobs  chan bspline.Curve
-	}
+	events   []Event
+	wakeups  chan struct{}
+	engraver *testEngraver
 }
 
 const (
@@ -403,31 +397,58 @@ func (p *testPlatform) NFCReader() io.Reader {
 	return nil
 }
 
-func (p *testPlatform) EngraverStatus() EngraverStatus {
-	return EngraverStatus{}
-}
-
-func (p *testPlatform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
-	defer close(p.engrave.done)
-	p.engrave.quit = quit
+func (p *testPlatform) Engraver(stall bool) (Engraver, error) {
+	if p.engraver == nil {
+		return nil, errors.New("engraver unavailable")
+	}
 	select {
-	case p.engrave.jobs <- spline:
+	case p.engraver.opens <- struct{}{}:
 	default:
 	}
-	if err := p.engrave.ioErr; err != nil {
-		return err
+	return p.engraver, nil
+}
+
+type testEngraver struct {
+	ioErr  error
+	closes chan struct{}
+	opens  chan struct{}
+}
+
+func (p *testEngraver) Stats() EngraverStats {
+	return EngraverStats{}
+}
+
+func (p *testEngraver) Write(steps []uint32) (int, error) {
+	err := p.ioErr
+	p.ioErr = nil
+	if err != nil {
+		return 0, err
 	}
-	for range spline {
+	return len(steps), nil
+}
+
+func (p *testEngraver) Close() error {
+	select {
+	case p.closes <- struct{}{}:
+	default:
 	}
-	return nil
+	err := p.ioErr
+	p.ioErr = nil
+	return err
 }
 
 func newPlatform() *testPlatform {
 	t := &testPlatform{
 		wakeups: make(chan struct{}, 1),
 	}
-	t.engrave.done = make(chan struct{})
-	t.engrave.jobs = make(chan bspline.Curve, 1)
+	return t
+}
+
+func newEngraver() *testEngraver {
+	t := &testEngraver{
+		closes: make(chan struct{}),
+		opens:  make(chan struct{}, 1),
+	}
 	return t
 }
 

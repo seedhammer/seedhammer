@@ -5,53 +5,69 @@ package mjolnir2
 import "seedhammer.com/driver/pio"
 
 const (
-	pioCyclesPerStep = 5
+	engraverCyclesPerStep = 6
+	solenoidCycles        = 4
 )
 
-var clearXInst = uint32(mjolnir2_utilInstructions[0])
+// engraver
 
-// mjolnir2
+const engraverWrapTarget = 1
+const engraverWrap = 6
 
-const mjolnir2WrapTarget = 0
-const mjolnir2Wrap = 4
+const engraverPinBits = 5
+const engraverStallIRQ = 0
 
-const mjolnir2pinBits = 5
-
-var mjolnir2Instructions = []uint16{
+var engraverInstructions = []uint16{
+	0xe020, //  0: set    x, 0
 	//     .wrap_target
-	0x80c0, //  0: pull   ifempty noblock
 	0x6045, //  1: out    y, 5
 	0xb002, //  2: mov    pins, y         side 0
-	0xa002, //  3: mov    pins, y
-	0xb002, //  4: mov    pins, y         side 0
+	0x0067, //  3: jmp    !y, 7
+	0xa002, //  4: mov    pins, y
+	0x80c0, //  5: pull   ifempty noblock
+	0xb002, //  6: mov    pins, y         side 0
 	//     .wrap
+	0xc020, //  7: irq    wait 0
+	0x0001, //  8: jmp    1
 }
 
-const mjolnir2Origin = -1
+const engraverOrigin = -1
 
-func mjolnir2ProgramDefaultConfig(offset uint8) pio.StateMachineConfig {
+func engraverProgramDefaultConfig(offset uint8) pio.StateMachineConfig {
 	cfg := pio.DefaultStateMachineConfig()
-	cfg.SetWrap(offset+mjolnir2WrapTarget, offset+mjolnir2Wrap)
+	cfg.SetWrap(offset+engraverWrapTarget, offset+engraverWrap)
 	cfg.SetSidesetParams(3, true, false)
 	return cfg
 }
 
-// mjolnir2_util
+// solenoid
 
-const mjolnir2_utilWrapTarget = 0
-const mjolnir2_utilWrap = 0
+const solenoidWrapTarget = 0
+const solenoidWrap = 9
 
-var mjolnir2_utilInstructions = []uint16{
+const solenoidPeriodIndex = 0
+const solenoidActIndex = 1
+const solenoidZeroIndex = 2
+
+var solenoidInstructions = []uint16{
 	//     .wrap_target
-	0xe020, //  0: set    x, 0
+	0xe000, //  0: set    pins, 0
+	0x8098, //  1: mov    osr, rxfifo[0]
+	0xa047, //  2: mov    y, osr
+	0x8099, //  3: mov    osr, rxfifo[1]
+	0xa027, //  4: mov    x, osr
+	0x00a8, //  5: jmp    x != y, 8
+	0x6001, //  6: out    pins, 1
+	0x0009, //  7: jmp    9
+	0x819a, //  8: mov    osr, rxfifo[2]         [1]
+	0x0085, //  9: jmp    y--, 5
 	//     .wrap
 }
 
-const mjolnir2_utilOrigin = -1
+const solenoidOrigin = -1
 
-func mjolnir2_utilProgramDefaultConfig(offset uint8) pio.StateMachineConfig {
+func solenoidProgramDefaultConfig(offset uint8) pio.StateMachineConfig {
 	cfg := pio.DefaultStateMachineConfig()
-	cfg.SetWrap(offset+mjolnir2_utilWrapTarget, offset+mjolnir2_utilWrap)
-	cfg.SetSidesetParams(3, true, false)
+	cfg.SetWrap(offset+solenoidWrapTarget, offset+solenoidWrap)
 	return cfg
 }

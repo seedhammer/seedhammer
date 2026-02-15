@@ -13,18 +13,12 @@ import (
 	"io"
 	"machine"
 	"runtime"
-	"slices"
-	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"seedhammer.com/bezier"
-	"seedhammer.com/bspline"
 	"seedhammer.com/driver/ap33772s"
 	"seedhammer.com/driver/ft6x36"
 	"seedhammer.com/driver/ili9488"
-	"seedhammer.com/driver/mjolnir2"
 	"seedhammer.com/driver/otp"
 	"seedhammer.com/driver/st25r3916"
 	"seedhammer.com/driver/tmc2209"
@@ -33,7 +27,6 @@ import (
 	"seedhammer.com/image/rgb565"
 	"seedhammer.com/nfc/poller"
 	"seedhammer.com/nfc/type5"
-	"seedhammer.com/stepper"
 )
 
 const (
@@ -52,7 +45,6 @@ type Platform struct {
 
 	feats    gui.Features
 	lcdDev   *ili9488.Device
-	voltage  int
 	engraver *engraver
 	nfc      *nfcDev
 	stdin    <-chan gui.Event
@@ -125,7 +117,8 @@ const (
 
 // Debug pins. Valid on some boards only.
 const (
-	// Firmware controlled solenoid current limit.
+	// Firmware controlled solenoid current limit in
+	// amperes (A).
 	// Disable it by setting it to 0 on production
 	// boards.
 	Ichop = 0
@@ -135,10 +128,17 @@ const (
 
 	// S_SENSE is the current sense output of the DRV8701
 	// driver.
-	S_SENSE = machine.GPIO40
+	S_SENSE = machine.NoPin
+
+	// Pulse length ADC input pin.
+	P_ADC = machine.NoPin
 )
 
-var pwmS_VREF = machine.PWM7
+// Debug variables.
+var (
+	// The PWM corresponding to S_VREF.
+	pwmS_VREF = machine.PWM7
+)
 
 var (
 	touchI2C = machine.I2C1
@@ -218,16 +218,24 @@ func Init() (*Platform, error) {
 		timer:   time.NewTimer(0),
 		stdin:   stdin,
 	}
-	e, err := configEngraver()
-	if err != nil {
-		return nil, err
-	}
-	p.engraver = e
-	voltage, err := p.monitorPowerSupply(usbpd)
-	if err == nil {
-		p.voltage = voltage
+	// Set up engraver pins regardless of whether the
+	// voltage is sufficient.
+	configEngraverPins()
+	if voltage, err := p.monitorPowerSupply(usbpd); err == nil {
+		e, err := configEngraver(voltage)
+		if err != nil {
+			return nil, err
+		}
+		p.engraver = e
 		// Home and move needle to origin.
-		go p.engrave(stepper.ModeHoming, nil, nil, nil)
+		home := func() error {
+			e, err := p.Engraver(true)
+			if err != nil {
+				return err
+			}
+			return e.Close()
+		}
+		go home()
 	}
 
 	for i := range p.display.buffers {
@@ -313,106 +321,6 @@ func (d nfcDev) ReadCapacity() int {
 	return st25r3916.FIFOSize
 }
 
-func configEngraver() (*engraver, error) {
-	DRV_ENABLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	DRV_ENABLE.Set(false)
-
-	uart, err := tmc2209.NewUART(stepperPIO, STEPPER_UART)
-	if err != nil {
-		return nil, err
-	}
-	X := &tmc2209.Device{
-		Bus:    uart,
-		Addr:   X_ADDR,
-		Invert: invertX,
-		Sense:  senseResistance,
-	}
-	Y := &tmc2209.Device{
-		Bus:    uart,
-		Addr:   Y_ADDR,
-		Invert: invertY,
-		Sense:  senseResistance,
-	}
-
-	// Configure diagnostics/fault pins to be pulled high, so that even
-	// disconnected pins signal faults.
-	X_DIAG.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
-	Y_DIAG.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
-	// In addition, S_DIAG used to serve as LCD_RDX and must be pulled up
-	// for compatibility with boards revisions before v1.5.0.
-	S_DIAG.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
-
-	d := &mjolnir2.Device{
-		Pio:            engraverPIO,
-		BasePin:        engraverBasePin,
-		TicksPerSecond: engraverConf.TicksPerSecond,
-	}
-	// dmaSize is a compromise: larger buffers decrease interrupt
-	// frequency at the cost of longer interrupt pauses because
-	// buffers are filled in the interrupt handler.
-	const dmaSize = 128
-	if err := d.Configure(dmaSize); err != nil {
-		return nil, err
-	}
-	// Set engraver pulsed current limit through the S_VREF pin.
-	// Production boards fix the limit through on-board resistors.
-	if Ichop > 0 {
-		pwmS_VREF.Configure(machine.PWMConfig{})
-		ch, err := pwmS_VREF.Channel(S_VREF)
-		if err != nil {
-			return nil, err
-		}
-		// Compute reference voltage using formula (1) in the
-		// DRV8701 datasheeti[0].
-		//
-		// [0]: https://www.ti.com/lit/ds/symlink/drv8701.pdf
-
-		// Datasheet constants.
-		const (
-			// Voff in mV.
-			Voff = 50
-			// Av in V/V.
-			Av = 20
-		)
-
-		// Vref in mV.
-		const Vref = Ichop*Av*Rsense + Voff
-		// Vmax is the voltage at 100% PWM duty cycle.
-		const Vmax = 3300
-		duty := pwmS_VREF.Top() * Vref / Vmax
-		pwmS_VREF.Set(ch, duty)
-	}
-	ready := make(chan struct{}, 1)
-	ready <- struct{}{}
-	return &engraver{
-		Dev:   d,
-		XAxis: X,
-		YAxis: Y,
-		ready: ready,
-	}, nil
-}
-
-func (e *engraver) configureAxes() error {
-	axes := []*tmc2209.Device{e.XAxis, e.YAxis}
-	for i, axis := range axes {
-		if err := axis.SetupSharedUART(); err != nil {
-			return fmt.Errorf("axis %d: configuring UART: %w", i, err)
-		}
-	}
-	for i, axis := range axes {
-		if err := axis.Configure(); err != nil {
-			return fmt.Errorf("axis %d: configure: %w", i, err)
-		}
-		if err := axis.SetStallThreshold(stallThreshold); err != nil {
-			return fmt.Errorf("axis %d: stall threshold: %w", i, err)
-		}
-		if err := axis.SetMinimumStallVelocity(minimumStallVelocity); err != nil {
-			return fmt.Errorf("axis %d: stepper stall velocity: %w", i, err)
-		}
-	}
-	return nil
-}
-
 func (p *Platform) touchInterrupt(machine.Pin) {
 	select {
 	case p.touch.ints <- struct{}{}:
@@ -472,6 +380,9 @@ func (p *Platform) processTouch() (gui.PointerEvent, bool) {
 }
 
 func (p *Platform) Wakeup() {
+	// Immediately wake up, but allow waiting goroutines
+	// to run first.
+	runtime.Gosched()
 	select {
 	case p.wakeups <- struct{}{}:
 	default:
@@ -497,24 +408,9 @@ func (p *Platform) EngraverParams() engrave.Params {
 	return engraverParams
 }
 
-type engraver struct {
-	axisLock         sync.Mutex
-	XAxis, YAxis     *tmc2209.Device
-	Dev              *mjolnir2.Device
-	xstalls, ystalls atomic.Uint32
-	mode             stepper.Mode
-	diag             chan stepper.Axis
-	ready            chan struct{}
-	// S_DIAG high means a fault on boards >= v1.5.0.
-	// To detect whether S_DIAG is available, it is pulled
-	// high and sdiagAvailable tracks whether its been seen
-	// low.
-	sdiagAvailable bool
-}
-
-func (e *engraver) Close() {}
-
 func (p *Platform) monitorPowerSupply(d *ap33772s.Device) (int, error) {
+	USBPD_INT.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
+
 	voltage, err := adjustSupplyVoltage(d, minVoltage, maxVoltage)
 	if err != nil {
 		// Give up if the power supply doesn't initially offer higher voltages.
@@ -522,7 +418,6 @@ func (p *Platform) monitorPowerSupply(d *ap33772s.Device) (int, error) {
 	}
 
 	interrupts := make(chan struct{}, 1)
-	USBPD_INT.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
 	USBPD_INT.SetInterrupt(machine.PinFalling, func(machine.Pin) {
 		select {
 		case interrupts <- struct{}{}:
@@ -569,166 +464,24 @@ func adjustSupplyVoltage(d *ap33772s.Device, minmV, maxmV int) (int, error) {
 	return 0, errors.New("power negotiation timed out")
 }
 
-func (e *engraver) handleDiag(pin machine.Pin) {
-	stepPin, otherPin := machine.NoPin, machine.NoPin
-	var a stepper.Axis
-	switch pin {
-	case X_DIAG:
-		e.xstalls.Add(1)
-		stepPin = X_STEP
-		otherPin = Y_STEP
-		a = stepper.XAxis
-	case Y_DIAG:
-		e.ystalls.Add(1)
-		stepPin = Y_STEP
-		otherPin = X_STEP
-		a = stepper.YAxis
-	case S_DIAG:
-		a = stepper.SAxis
-	default:
-		return
-	}
-	if e.mode == stepper.ModeNostall {
-		return
-	}
-	// Disconnect the step pin from the PIO program and set it low.
-	stepPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	stepPin.Low()
-	// And the needle pin, in case of an active engraving.
-	NEEDLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	NEEDLE.Low()
-	if e.mode != stepper.ModeHoming {
-		// Disable both axes in case of blockage.
-		otherPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
-		otherPin.Low()
-	}
-	select {
-	case e.diag <- a:
-	default:
-	}
+type defers struct {
+	funcs []func() error
 }
 
-func (e *engraver) engrave(voltage int, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
-	<-e.ready
-	defer func() {
-		e.ready <- struct{}{}
-	}()
-	defer func() {
-		// Disable the power circuitry.
-		DRV_ENABLE.Set(false)
-		// Wait a bit for the discharge circuit to empty the capacitors.
-		time.Sleep(500 * time.Millisecond)
-	}()
-	// Give the capcitor bank time to charge (boards >= v1.5.0).
-	time.Sleep(time.Second)
-	// Enable the power circuitry.
-	DRV_ENABLE.Set(true)
-	// Boards < v1.5.0 charge the capacitors here.
-	time.Sleep(500 * time.Millisecond)
-	if err := e.configureAxes(); err != nil {
-		return err
-	}
-
-	current := stepperPower * 1000 / voltage
-	// Wait a bit before enabling each stepper.
-	time.Sleep(200 * time.Millisecond)
-	defer func() {
-		e.axisLock.Lock()
-		defer e.axisLock.Unlock()
-		e.XAxis.Enable(0)
-		e.YAxis.Enable(0)
-	}()
-	e.axisLock.Lock()
-	xerr := e.XAxis.Enable(current)
-	e.axisLock.Unlock()
-	if xerr != nil {
-		return xerr
-	}
-	time.Sleep(200 * time.Millisecond)
-	e.axisLock.Lock()
-	yerr := e.YAxis.Enable(current)
-	e.axisLock.Unlock()
-	if yerr != nil {
-		return yerr
-	}
-	// Wait for standstill tuning of the drivers.
-	time.Sleep(tmc2209.StandstillTuningPeriod)
-
-	// Perform a linear interpolation of the voltage into the range of needle
-	// activation durations.
-	act := (needleActivationMinVoltage*time.Duration(maxVoltage-voltage) +
-		needleActivationMaxVoltage*time.Duration(voltage-minVoltage)) / (maxVoltage - minVoltage)
-	if err := e.home(act); err != nil {
-		return err
-	}
-	if spline == nil {
-		return nil
-	}
-	defer e.home(act)
-	if err := e.execute(act, mode, spline, quit, progress); err != nil {
-		return err
-	}
-	return nil
+func (d *defers) Add(f func() error) {
+	d.funcs = append(d.funcs, f)
 }
 
-func (e *engraver) home(needleActivation time.Duration) error {
-	home := func(yield func(engrave.Command) bool) {
-		home := bezier.Point{
-			X: -homingDist,
-			Y: -homingDist,
+func (d *defers) Call() error {
+	var derr error
+	for i := range d.funcs {
+		f := d.funcs[len(d.funcs)-1-i]
+		if err := f(); derr == nil {
+			derr = err
 		}
-		yield(engrave.Move(home))
 	}
-	conf := engraverConf
-	conf.Speed = homingSpeed
-	spline := engrave.PlanEngraving(conf, home)
-	if err := e.execute(needleActivation, stepper.ModeHoming, spline, nil, nil); err != nil {
-		return err
-	}
-	moveToOrigin := engrave.Engraving(slices.Values([]engrave.Command{
-		engrave.Move(bezier.Pt(originX, originY)),
-	}))
-	spline = engrave.PlanEngraving(conf, moveToOrigin)
-	return e.execute(needleActivation, stepper.ModeEngrave, spline, nil, nil)
-}
-
-func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
-	e.xstalls.Store(0)
-	e.ystalls.Store(0)
-	e.mode = mode
-	// Leave room for all axis diag pins without blocking the interrupt handler.
-	const naxes = 3
-	e.diag = make(chan stepper.Axis, naxes)
-
-	needleAct := uint(needleActivation * time.Duration(engraverConf.TicksPerSecond) / time.Second)
-	needlePeriod := uint(needlePeriod * time.Duration(engraverConf.TicksPerSecond) / time.Second)
-	d := stepper.Engrave(e.Dev, progress)
-	e.Dev.Enable(d.HandleTransferCompleted, needleAct, needlePeriod)
-	defer e.Dev.Disable()
-	// Set up interrupt handlers last, because they potentially undo pin configuration
-	// done in e.Dev.Enable above.
-	for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
-		if err := pin.SetInterrupt(machine.PinRising, e.handleDiag); err != nil {
-			return fmt.Errorf("engraver: %w", err)
-		}
-		defer pin.SetInterrupt(0, nil)
-	}
-	e.sdiagAvailable = e.sdiagAvailable || !S_DIAG.Get()
-	if e.sdiagAvailable && S_DIAG.Get() {
-		return errors.New("engraver: engraver is not ready")
-	}
-	if err := d.Run(e.mode, quit, e.diag, spline); err != nil {
-		return err
-	}
-	e.axisLock.Lock()
-	defer e.axisLock.Unlock()
-	if err := e.XAxis.Error(); err != nil {
-		return fmt.Errorf("X axis: %w", err)
-	}
-	if err := e.YAxis.Error(); err != nil {
-		return fmt.Errorf("Y axis: %w", err)
-	}
-	return nil
+	d.funcs = nil
+	return derr
 }
 
 func (p *Platform) LockBoot() error {
@@ -753,53 +506,61 @@ func (p *Platform) NFCReader() io.Reader {
 	return poller.New(p.nfc)
 }
 
-func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
-	mode := stepper.ModeEngrave
-	if !stall {
-		mode = stepper.ModeNostall
-	}
-	return p.engrave(mode, spline, quit, progress)
-}
-
-func (p *Platform) engrave(mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
-	return p.engraver.engrave(p.voltage, mode, spline, quit, progress)
-}
-
-func (p *Platform) EngraverStatus() gui.EngraverStatus {
+func (p *Platform) Engraver(stall bool) (gui.Engraver, error) {
 	e := p.engraver
-	e.axisLock.Lock()
-	defer e.axisLock.Unlock()
-	xload, err1 := e.XAxis.Load()
-	yload, err2 := e.YAxis.Load()
-	xstep, err3 := e.XAxis.StepDuration()
-	ystep, err4 := e.YAxis.StepDuration()
-	err := err1
-	switch {
-	case err2 != nil:
-		err = err2
-	case err3 != nil:
-		err = err3
-	case err4 != nil:
-		err = err4
+	if e == nil {
+		return nil, errors.New("engraver unavailable")
 	}
-	xspeed, yspeed := 0, 0
-	if xstep > 0 {
-		xspeed = int(time.Second / (mm * xstep))
+	if err := e.Open(); err != nil {
+		return nil, err
 	}
-	if ystep > 0 {
-		yspeed = int(time.Second / (mm * ystep))
+	mode := modeEngrave
+	if !stall {
+		mode = modeNostall
 	}
-	xstalls, ystalls := int(e.xstalls.Load()), int(e.ystalls.Load())
-	return gui.EngraverStatus{
-		StallSpeed: minimumStallVelocity / mm,
-		XSpeed:     xspeed,
-		YSpeed:     yspeed,
-		XLoad:      xload,
-		YLoad:      yload,
-		XStalls:    xstalls,
-		YStalls:    ystalls,
-		Error:      err,
+	return &homingEngraver{mode: mode, e: e}, nil
+}
+
+type homingEngraver struct {
+	e        *engraver
+	mode     engraveMode
+	homed    bool
+	writeErr bool
+}
+
+func (e *homingEngraver) Write(steps []uint32) (int, error) {
+	if !e.homed {
+		if err := e.e.home(); err != nil {
+			return 0, err
+		}
+		e.homed = true
+		e.e.SwitchMode(e.mode)
 	}
+	completed, err := e.e.Write(steps)
+	e.writeErr = e.writeErr || err != nil
+	return completed, err
+}
+
+func (e *homingEngraver) Close() (cerr error) {
+	d := e.e
+	e.e = nil
+	defer func() {
+		d.Dev.Reset()
+		if err := d.Close(); cerr == nil {
+			cerr = err
+		}
+	}()
+	if e.writeErr {
+		return nil
+	}
+	if err := d.Dev.Flush(); err != nil {
+		return err
+	}
+	return d.home()
+}
+
+func (e *homingEngraver) Stats() gui.EngraverStats {
+	return e.e.EngraverStats()
 }
 
 func (p *Platform) DisplaySize() image.Point {

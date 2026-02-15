@@ -29,12 +29,12 @@ type Config struct {
 }
 
 func New(dc, cs, rst, wrx, rdx, db0, te machine.Pin, pio *rp.PIO0_Type) (*Device, error) {
-	ch, err := dma.ReserveChannel()
+	ch, err := dma.ReserveChannels(1)
 	if err != nil {
 		return nil, err
 	}
 	return &Device{
-		channel: ch,
+		channel: ch.At(0),
 		pio:     pio,
 		dc:      dc,
 		cs:      cs,
@@ -254,7 +254,7 @@ func (d *Device) Draw(buf [][2]byte) {
 		d.waitDMA()
 	}
 
-	ch := dma.ChannelAt(d.channel)
+	ch := dma.ChannelFor(d.channel)
 	ch.READ_ADDR.Set(uint32(uintptr(unsafe.Pointer(unsafe.SliceData(buf)))))
 	ch.WRITE_ADDR.Set(uint32(uintptr(unsafe.Pointer(pio.Tx(d.pio, pioStateMachine)))))
 	ch.TRANS_COUNT.Set(uint32(len(buf)))
@@ -274,7 +274,7 @@ func (d *Device) Draw(buf [][2]byte) {
 
 func (d *Device) waitDMA() {
 	// Wait for DMA completion.
-	ch := dma.ChannelAt(d.channel)
+	ch := dma.ChannelFor(d.channel)
 	for ch.CTRL_TRIG.Get()&rp.DMA_CH0_CTRL_TRIG_BUSY_Msk != 0 {
 		runtime.Gosched()
 	}

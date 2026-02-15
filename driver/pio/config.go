@@ -26,6 +26,9 @@ type StateMachineConfig struct {
 	Freq            uint32
 	Wrap            uint8
 	WrapTarget      uint8
+	OutSticky       bool
+	InlineOut       bool
+	InlineOutBit    uint8
 }
 
 type FIFOMode uint8
@@ -34,6 +37,7 @@ const (
 	FIFOJoinNone FIFOMode = iota
 	FIFOJoinTX
 	FIFOJoinRX
+	FIFOJoinRxGet
 )
 
 func DefaultStateMachineConfig() StateMachineConfig {

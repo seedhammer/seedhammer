@@ -13,45 +13,43 @@ import (
 
 func qaEngraveFlow(ctx *Context, ops op.Ctx) {
 	p := ctx.Platform
-	errs := make(chan error, 1)
-	go func() {
-		const sz = SquarePlate
-		params := p.EngraverParams()
-		dims := sz.Dims(params.Millimeter)
-		plan := engrave.PlanEngraving(params.StepperConfig,
-			qaPlan(params.Millimeter, dims))
-		errs <- p.Engrave(false, plan, nil, nil)
-	}()
+	const sz = SquarePlate
+	params := p.EngraverParams()
+	dims := sz.Dims(params.Millimeter)
+	plan := engrave.PlanEngraving(params.StepperConfig,
+		qaPlan(params.Millimeter, dims))
+	e := newEngraverJob(p, plan, suppressStalls)
+	e.Start()
+	defer e.Stop()
 	var eerr string
 	var xLoadVals, yLoadVals maxValue
 	var maxXLoad, maxYLoad int
 	for !ctx.Done {
-		lastSt := p.EngraverStatus()
-		xload := lastSt.XLoad
-		yload := lastSt.YLoad
-		if lastSt.XSpeed < lastSt.StallSpeed {
+		lastSt := e.Status()
+		stats := e.Stats()
+		xload := stats.XLoad
+		yload := stats.YLoad
+		if stats.XSpeed < stats.StallSpeed {
 			xload = 0
 		}
-		if lastSt.YSpeed < lastSt.StallSpeed {
+		if stats.YSpeed < stats.StallSpeed {
 			yload = 0
 		}
 		maxXLoad = xLoadVals.Put(xload)
 		maxYLoad = yLoadVals.Put(yload)
-		if err := lastSt.Error; eerr == "" && err != nil {
+		if err := stats.Error; eerr == "" && err != nil {
 			eerr = err.Error()
 		}
-		drawQA(ctx, ops, lastSt, maxXLoad, maxYLoad, eerr)
+		if eerr == "" {
+			eerr = lastSt.Error
+		}
+		drawQA(ctx, ops, stats, maxXLoad, maxYLoad, eerr)
 		p.Wakeup()
 		ctx.Frame()
-		select {
-		case err := <-errs:
-			eerr = err.Error()
-		default:
-		}
 	}
 }
 
-func drawQA(ctx *Context, ops op.Ctx, st EngraverStatus, maxXLoad, maxYLoad int, eerr string) {
+func drawQA(ctx *Context, ops op.Ctx, st EngraverStats, maxXLoad, maxYLoad int, eerr string) {
 	dims := ctx.Platform.DisplaySize()
 	th := &descriptorTheme
 	op.ColorOp(ops, th.Background)
@@ -152,19 +150,25 @@ func qaPlan(mm int, dims bezier.Point) engrave.Engraving {
 		for {
 			for range repeats {
 				for _, c := range rect {
-					cont = cont && yield(engrave.Move(c))
+					if !yield(engrave.Move(c)) {
+						return
+					}
 				}
 			}
 			for range repeats {
 				for _, c := range diag {
-					cont = cont && yield(engrave.Move(c))
+					if !yield(engrave.Move(c)) {
+						return
+					}
 				}
 			}
 			for range repeats {
 				cont = cont && yield(engrave.Move(circle[0].Add(center)))
 				for _, c := range circle {
 					c = c.Add(center)
-					cont = cont && yield(engrave.ControlPoint(false, c))
+					if !yield(engrave.ControlPoint(false, c)) {
+						return
+					}
 				}
 			}
 		}
