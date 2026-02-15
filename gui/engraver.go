@@ -2,12 +2,11 @@ package gui
 
 import (
 	"seedhammer.com/bspline"
-	"seedhammer.com/stepper"
 )
 
 type engraveJob struct {
 	quit       chan<- struct{}
-	progresses chan stepper.Progress
+	progresses chan uint
 	errs       chan error
 
 	done bool
@@ -16,7 +15,7 @@ type engraveJob struct {
 
 func newEngraverJob(p Platform, spline bspline.Curve) *engraveJob {
 	errs := make(chan error, 1)
-	progress := make(chan stepper.Progress, 1)
+	progress := make(chan uint, 1)
 	quit := make(chan struct{})
 	e := &engraveJob{
 		errs:       errs,
@@ -30,12 +29,12 @@ func newEngraverJob(p Platform, spline bspline.Curve) *engraveJob {
 	return e
 }
 
-func (e *engraveJob) Progress() stepper.Progress {
+func (e *engraveJob) Progress() uint {
 	select {
 	case p := <-e.progresses:
 		return p
 	default:
-		return stepper.Progress{}
+		return 0
 	}
 }
 

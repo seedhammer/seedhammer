@@ -42,7 +42,6 @@ import (
 	"seedhammer.com/nonstandard"
 	"seedhammer.com/seedqr"
 	slip39words "seedhammer.com/slip39"
-	"seedhammer.com/stepper"
 )
 
 var ErrTooLarge = errors.New("backup: data does not fit plate")
@@ -2304,9 +2303,8 @@ type EngraveScreen struct {
 	}
 	engrave struct {
 		job      *engraveJob
-		duration uint
 		err      error
-		progress stepper.Progress
+		progress uint
 	}
 }
 
@@ -2338,20 +2336,9 @@ func (s *EngraveScreen) moveStep(p Platform) bool {
 		}
 		s.engrave.err = nil
 		progress := s.engrave.progress
-		// Fast forward to last interruption, if any.
-		ffspline := func(yield func(bspline.Knot) bool) {
-			for k := range spline {
-				if progress.Knots > 0 {
-					progress.Knots--
-					continue
-				}
-				if !yield(k) {
-					return
-				}
-			}
-		}
-		s.engrave.duration = s.plate.Attrs.Duration
-		s.engrave.job = newEngraverJob(p, ffspline)
+		progress, spline = engrave.SkipEngraving(spline, p.EngraverParams().StepperConfig, progress)
+		s.engrave.progress = progress
+		s.engrave.job = newEngraverJob(p, spline)
 	}
 	return false
 }
@@ -2377,8 +2364,7 @@ frames:
 	for !ctx.Done {
 		if d := s.engrave.job; d != nil {
 			p := s.engrave.job.Progress()
-			s.engrave.progress.Ticks += p.Ticks
-			s.engrave.progress.Knots += p.Knots
+			s.engrave.progress += p
 			if done, err := d.Status(); done {
 				s.engrave.job = nil
 				s.engrave.err = err
@@ -2495,8 +2481,7 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 	case EngraveInstruction:
 		middle, _ := content.CutBottom(leadingSize)
 		// Remaining seconds, rounded up.
-		p := s.engrave.progress
-		rem := s.engrave.duration - p.Ticks
+		rem := s.plate.Attrs.Duration - s.engrave.progress
 		tps := ctx.Platform.EngraverParams().TicksPerSecond
 		remSec := (rem + tps - 1) / tps
 		min, sec := remSec/60, remSec%60
@@ -2567,7 +2552,7 @@ type Platform interface {
 	LockBoot() error
 	AppendEvents(deadline time.Time, evts []Event) []Event
 	Wakeup()
-	Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error
+	Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan uint) error
 	EngraverStatus() EngraverStatus
 	NFCReader() io.Reader
 	EngraverParams() engrave.Params

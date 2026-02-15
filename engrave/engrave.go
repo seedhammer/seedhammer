@@ -1000,7 +1000,7 @@ func planEngraving(knotBuf []bspline.Knot, conf StepperConfig, e Engraving) bspl
 					// time minimal traversal.
 					if len(spline) == 5 {
 						s, e := spline[1].Ctrl, spline[3].Ctrl
-						spline = appendLineBSpline(spline[:0], conf, engrave, s, e)
+						spline = appendLine(spline[:0], conf, engrave, s, e)
 					} else {
 						for i := range spline[2 : len(spline)-2] {
 							spline[i+2].T = 1
@@ -1086,7 +1086,7 @@ func (s *timeScaler) Done() bool {
 	return s.rem == 0
 }
 
-func appendLineBSpline(spline []bspline.Knot, conf StepperConfig, engrave bool, s, e bezier.Point) []bspline.Knot {
+func appendLine(spline []bspline.Knot, conf StepperConfig, engrave bool, s, e bezier.Point) []bspline.Knot {
 	tps := conf.TicksPerSecond
 	vlim := conf.Speed
 	if engrave {
@@ -1437,4 +1437,59 @@ func strlen(s string) int {
 		n++
 	}
 	return n
+}
+
+// SkipEngraving skips up to t ticks from spline while preserving the shape of the
+// remaining knots. It returns the modifed spline and the skipped time.
+func SkipEngraving(spline bspline.Curve, conf StepperConfig, t uint) (uint, bspline.Curve) {
+	var knotHist [3]bspline.Knot
+	safePoint := bezier.Point{}
+	skipKnots := 0
+	totDur := uint(0)
+	nknots := 0
+	skipTime := uint(0)
+	// Find the latest safe point before t where velocity an
+	// acceleration are zero. Curve segment before a safe points
+	// can be replaced with a single move from home position,
+	// without changing the shape of the remaining spline.
+	for k := range spline {
+		if totDur+k.T > t {
+			break
+		}
+		totDur += k.T
+		copy(knotHist[:], knotHist[1:])
+		knotHist[2] = k
+		nknots++
+		if nknots >= 3 {
+			k0, k1, k2 := knotHist[0], knotHist[1], knotHist[2]
+			if clamped := k0.Ctrl == k1.Ctrl && k1 == k2; clamped {
+				skipTime = totDur
+				skipKnots = nknots
+				safePoint = k0.Ctrl
+			}
+		}
+	}
+	// Perform a single move to the most recent safe point.
+	move := appendLine(nil, conf, false, bezier.Point{}, safePoint)
+	// Subtract the move duration from the adjusted progress duration.
+	for _, k := range move {
+		skipTime -= k.T
+	}
+	return skipTime, func(yield func(bspline.Knot) bool) {
+		skipKnots := skipKnots
+		for _, k := range move {
+			if !yield(k) {
+				return
+			}
+		}
+		for k := range spline {
+			if skipKnots > 0 {
+				skipKnots--
+				continue
+			}
+			if !yield(k) {
+				return
+			}
+		}
+	}
 }

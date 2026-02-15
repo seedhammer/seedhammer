@@ -608,7 +608,7 @@ func (e *engraver) handleDiag(pin machine.Pin) {
 	}
 }
 
-func (e *engraver) engrave(voltage int, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
+func (e *engraver) engrave(voltage int, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan uint) error {
 	<-e.ready
 	defer func() {
 		e.ready <- struct{}{}
@@ -692,7 +692,7 @@ func (e *engraver) home(needleActivation time.Duration) error {
 	return e.execute(needleActivation, stepper.ModeEngrave, spline, nil, nil)
 }
 
-func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
+func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan uint) error {
 	e.xstalls.Store(0)
 	e.ystalls.Store(0)
 	e.mode = mode
@@ -753,7 +753,7 @@ func (p *Platform) NFCReader() io.Reader {
 	return poller.New(p.nfc)
 }
 
-func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
+func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan uint) error {
 	mode := stepper.ModeEngrave
 	if !stall {
 		mode = stepper.ModeNostall
@@ -761,7 +761,7 @@ func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{
 	return p.engrave(mode, spline, quit, progress)
 }
 
-func (p *Platform) engrave(mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan stepper.Progress) error {
+func (p *Platform) engrave(mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan uint) error {
 	return p.engraver.engrave(p.voltage, mode, spline, quit, progress)
 }
 

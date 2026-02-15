@@ -34,7 +34,7 @@ type Driver struct {
 	stepper  bezier.Interpolator
 	knotCh   chan bspline.Knot
 	stall    chan struct{}
-	progress chan Progress
+	progress chan uint
 	knots    knotBuffer
 	// safeKnots track the number of knots that
 	// are safe to traverse, because they end in
@@ -44,18 +44,14 @@ type Driver struct {
 	idx       int
 	needle    bool
 	pos       bezier.Point
-	// progresses holds the history of accumulated progress for the last 3
+	// progressHist holds the progress for the last 3
 	// DMA buffers: the most recently completed buffer, the buffer
 	// that's in progress and the buffer being filled.
+	//
 	// Assuming buffers are larger than the hardware FIFO size,
-	// the oldest progress is a conservative minimum of the engraving
-	// progress.
-	progresses [3]Progress
-}
-
-type Progress struct {
-	Ticks uint
-	Knots uint
+	// the oldest progress is guaranteed to have been engraved by
+	// hardware.
+	progressHist [3]uint
 }
 
 type Device interface {
@@ -131,21 +127,20 @@ func (e *Driver) HandleTransferCompleted() {
 		}
 		return
 	}
-	p := e.progresses[:]
+	p := e.progressHist[:]
 	// Replace the accumulated progress.
-	var p0 Progress
+	var p0 uint
 	select {
 	case p0 = <-e.progress:
 	default:
 	}
-	p0.Knots += p[0].Knots
-	p0.Ticks += p[0].Ticks
+	p0 += p[0]
 	select {
 	case e.progress <- p0:
 	default:
 	}
 	copy(p, p[1:])
-	p[len(p)-1] = Progress{}
+	p[len(p)-1] = 0
 	steps := e.swapBuffers()
 	e.dev.Transfer(steps)
 	// Fill buffer here in the interrupt handler to avoid stalling
@@ -183,12 +178,11 @@ fill:
 		}
 	}
 	for !e.full() {
-		prog := e.progresses[:]
+		prog := e.progressHist[:]
 		for !e.stepper.Step() {
 			if e.safeKnots == 0 {
 				return
 			}
-			prog[len(prog)-1].Knots += 1
 			k := e.knots.Pop()
 			e.safeKnots--
 			c, ticks, needle := e.seg.Knot(k)
@@ -226,7 +220,7 @@ fill:
 		w |= uint32(pins) << (stepIdx * pinBits)
 		e.buf[idx] = w
 		e.idx++
-		prog[len(prog)-1].Ticks++
+		prog[len(prog)-1]++
 	}
 }
 
@@ -238,7 +232,7 @@ func (e *Driver) empty() bool {
 	return e.idx == 0
 }
 
-func Engrave(d Device, progress chan Progress) *Driver {
+func Engrave(d Device, progress chan uint) *Driver {
 	const bufSize = 64
 
 	return &Driver{
