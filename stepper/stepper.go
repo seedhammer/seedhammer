@@ -34,16 +34,12 @@ type Driver struct {
 	stepper  bezier.Interpolator
 	knotCh   chan bspline.Knot
 	stall    chan struct{}
+	done     bool
 	progress chan uint
-	knots    knotBuffer
-	// safeKnots track the number of knots that
-	// are safe to traverse, because they end in
-	// standstill.
-	safeKnots int
-	buf       []uint32
-	idx       int
-	needle    bool
-	pos       bezier.Point
+	buf      []uint32
+	idx      int
+	needle   bool
+	pos      bezier.Point
 	// progressHist holds the progress for the last 3
 	// DMA buffers: the most recently completed buffer, the buffer
 	// that's in progress and the buffer being filled.
@@ -75,48 +71,10 @@ const (
 	pinStepX
 )
 
-// knotBuffer is a circular buffer of knots.
-type knotBuffer struct {
-	knots      [MaxSplineLength]bspline.Knot
-	start, len int
-}
-
-func (b *knotBuffer) Capacity() int {
-	return len(b.knots) - b.Length()
-}
-
-func (b *knotBuffer) Length() int {
-	return b.len
-}
-
-func (b *knotBuffer) At(i int) bspline.Knot {
-	if i < 0 || b.len <= i {
-		panic("index out of range")
-	}
-	idx := (b.start + i) % len(b.knots)
-	return b.knots[idx]
-}
-
-func (b *knotBuffer) Push(k bspline.Knot) {
-	if b.Capacity() == 0 {
-		panic("buffer overflow")
-	}
-	idx := (b.start + b.len) % len(b.knots)
-	b.knots[idx] = k
-	b.len++
-}
-
-func (b *knotBuffer) Pop() bspline.Knot {
-	if b.len == 0 {
-		panic("knot buffer underflow")
-	}
-	k := b.knots[b.start]
-	b.start = (b.start + 1) % len(b.knots)
-	b.len--
-	return k
-}
-
 func (e *Driver) HandleTransferCompleted() {
+	if e.done {
+		return
+	}
 	if e.empty() {
 		// If there's nothing to flush, we're stalled. Stalling
 		// is acceptable because the engraver is at standstill
@@ -156,35 +114,14 @@ func (e *Driver) swapBuffers() int {
 }
 
 func (e *Driver) fillBuffer() {
-	// Fill knot buffer.
-fill:
-	for e.knots.Capacity() > 0 {
-		select {
-		case k := <-e.knotCh:
-			e.knots.Push(k)
-			// Wait for the spline to be capped, so any stalls are
-			// guaranteed to happen at standstill.
-			n := e.knots.Length()
-			if n < 3 {
-				break
-			}
-			p1, p2, p3 := e.knots.At(n-3).Ctrl, e.knots.At(n-2).Ctrl, e.knots.At(n-1).Ctrl
-			if p1 != p2 || p2 != p3 {
-				break
-			}
-			e.safeKnots = n
-		default:
-			break fill
-		}
-	}
-	for !e.full() {
-		prog := e.progressHist[:]
+	for !e.full() && !e.done {
 		for !e.stepper.Step() {
-			if e.safeKnots == 0 {
+			k, ok := <-e.knotCh
+			if !ok {
+				e.done = true
+				close(e.stall)
 				return
 			}
-			k := e.knots.Pop()
-			e.safeKnots--
 			c, ticks, needle := e.seg.Knot(k)
 			e.needle = needle
 			e.stepper.Segment(c, ticks)
@@ -220,6 +157,7 @@ fill:
 		w |= uint32(pins) << (stepIdx * pinBits)
 		e.buf[idx] = w
 		e.idx++
+		prog := e.progressHist[:]
 		prog[len(prog)-1]++
 	}
 }
@@ -251,12 +189,22 @@ func (d *Driver) Run(mode Mode, quit <-chan struct{}, diag <-chan Axis, spline b
 	if !moreCommands {
 		return nil
 	}
-	stalled := true
 	var blocked Axis
+	started := false
+	stallKnots := d.knotCh
 loop:
 	for {
-		stallKnots := d.knotCh
-		if !moreCommands {
+		// Start engraving when the channel is full.
+		if !started && (!moreCommands || cap(d.knotCh) == len(d.knotCh)) {
+			started = true
+			d.fillBuffer()
+			steps := d.swapBuffers()
+			// The interrupt handler assumes a filled buffer.
+			d.fillBuffer()
+			d.dev.Transfer(steps)
+		}
+		if !moreCommands && stallKnots != nil {
+			close(stallKnots)
 			stallKnots = nil
 		}
 		select {
@@ -267,31 +215,19 @@ loop:
 			}
 		case <-quit:
 			break loop
-		case <-d.stall:
-			stalled = true
+		case _, ok := <-d.stall:
+			if !ok {
+				// Done.
+				break loop
+			}
+			return errors.New("stepper: command buffer underrun caused stall")
 		case stallKnots <- knot:
 			knot, moreCommands = knots()
-		}
-		// During stalls, we're responsible for filling the buffer
-		// and restarting the interrupt handler.
-		if stalled {
-			d.fillBuffer()
-			if !moreCommands && d.empty() {
-				// We're done.
-				break
-			}
-			if d.full() || !moreCommands {
-				stalled = false
-				steps := d.swapBuffers()
-				// The interrupt handler assumes a filled buffer.
-				d.fillBuffer()
-				d.dev.Transfer(steps)
-			}
 		}
 	}
 	if mode == ModeHoming {
 		if blocked != (XAxis | YAxis) {
-			return errors.New("mjolnir2: homing timed out")
+			return errors.New("stepper: homing timed out")
 		}
 		return nil
 	}
