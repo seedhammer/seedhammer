@@ -29,31 +29,18 @@ const MaxSplineLength = 256
 // Driver is an engraving driver suitable for
 // driving through interrupts and DMA.
 type Driver struct {
-	dev      Device
+	startDev func(Device)
 	seg      bspline.Segment
 	stepper  bezier.Interpolator
 	knotCh   chan bspline.Knot
 	stall    chan struct{}
 	done     bool
 	progress chan uint
-	buf      []uint32
-	idx      int
 	needle   bool
 	pos      bezier.Point
-	// progressHist holds the progress for the last 3
-	// DMA buffers: the most recently completed buffer, the buffer
-	// that's in progress and the buffer being filled.
-	//
-	// Assuming buffers are larger than the hardware FIFO size,
-	// the oldest progress is guaranteed to have been engraved by
-	// hardware.
-	progressHist [3]uint
 }
 
-type Device interface {
-	NextBuffer() []uint32
-	Transfer(steps int)
-}
+type Device func(int, []uint32) int
 
 const (
 	pinBits = 5
@@ -71,60 +58,43 @@ const (
 	pinStepX
 )
 
-func (e *Driver) HandleTransferCompleted() {
-	if e.done {
-		return
-	}
-	if e.empty() {
-		// If there's nothing to flush, we're stalled. Stalling
-		// is acceptable because the engraver is at standstill
-		// between commands.
-		select {
-		case e.stall <- struct{}{}:
-		default:
-		}
-		return
-	}
-	p := e.progressHist[:]
+func (e *Driver) fillBufferCallback(steps int, buf []uint32) int {
 	// Replace the accumulated progress.
 	var p0 uint
 	select {
 	case p0 = <-e.progress:
 	default:
 	}
-	p0 += p[0]
+	p0 += uint(steps)
 	select {
 	case e.progress <- p0:
 	default:
 	}
-	copy(p, p[1:])
-	p[len(p)-1] = 0
-	steps := e.swapBuffers()
-	e.dev.Transfer(steps)
-	// Fill buffer here in the interrupt handler to avoid stalling
-	// the engraver because of unfortunate goroutine scheduling.
-	e.fillBuffer()
+	return e.fillBuffer(buf)
 }
 
-func (e *Driver) swapBuffers() int {
-	steps := e.idx
-	e.idx = 0
-	e.buf = e.dev.NextBuffer()
-	return steps
-}
-
-func (e *Driver) fillBuffer() {
-	for !e.full() && !e.done {
+func (e *Driver) fillBuffer(buf []uint32) int {
+	if e.done {
+		return 0
+	}
+	idx := 0
+	n := len(buf) * stepsPerWord
+loop:
+	for idx < n && !e.done {
 		for !e.stepper.Step() {
-			k, ok := <-e.knotCh
-			if !ok {
-				e.done = true
-				close(e.stall)
-				return
+			select {
+			case k, ok := <-e.knotCh:
+				if !ok {
+					e.done = true
+					close(e.stall)
+					return idx
+				}
+				c, ticks, needle := e.seg.Knot(k)
+				e.needle = needle
+				e.stepper.Segment(c, ticks)
+			default:
+				break loop
 			}
-			c, ticks, needle := e.seg.Knot(k)
-			e.needle = needle
-			e.stepper.Segment(c, ticks)
 		}
 		var pins uint8
 		pos := e.stepper.Position()
@@ -148,34 +118,31 @@ func (e *Driver) fillBuffer() {
 		if e.needle {
 			pins |= 0b1 << pinNeedle
 		}
-		idx := e.idx / stepsPerWord
-		stepIdx := e.idx % stepsPerWord
-		w := e.buf[idx]
-		if stepIdx == 0 {
-			w = 0
+		word := idx / stepsPerWord
+		stepIdx := idx % stepsPerWord
+		w := uint32(0)
+		if stepIdx != 0 {
+			w = buf[word]
 		}
 		w |= uint32(pins) << (stepIdx * pinBits)
-		e.buf[idx] = w
-		e.idx++
-		prog := e.progressHist[:]
-		prog[len(prog)-1]++
+		buf[word] = w
+		idx++
 	}
+	if idx == 0 {
+		e.done = true
+		select {
+		case e.stall <- struct{}{}:
+		default:
+		}
+	}
+	return idx
 }
 
-func (e *Driver) full() bool {
-	return e.idx == len(e.buf)*stepsPerWord
-}
-
-func (e *Driver) empty() bool {
-	return e.idx == 0
-}
-
-func Engrave(d Device, progress chan uint) *Driver {
+func Engrave(startDev func(Device), progress chan uint) *Driver {
 	const bufSize = 64
 
 	return &Driver{
-		buf:      d.NextBuffer(),
-		dev:      d,
+		startDev: startDev,
 		knotCh:   make(chan bspline.Knot, bufSize),
 		stall:    make(chan struct{}, 1),
 		progress: progress,
@@ -196,12 +163,8 @@ loop:
 	for {
 		// Start engraving when the channel is full.
 		if !started && (!moreCommands || cap(d.knotCh) == len(d.knotCh)) {
+			d.startDev(d.fillBufferCallback)
 			started = true
-			d.fillBuffer()
-			steps := d.swapBuffers()
-			// The interrupt handler assumes a filled buffer.
-			d.fillBuffer()
-			d.dev.Transfer(steps)
 		}
 		if !moreCommands && stallKnots != nil {
 			close(stallKnots)

@@ -13,6 +13,7 @@ import (
 
 	"seedhammer.com/driver/dma"
 	"seedhammer.com/driver/pio"
+	"seedhammer.com/stepper"
 )
 
 type Device struct {
@@ -20,6 +21,8 @@ type Device struct {
 	BasePin        machine.Pin
 	TicksPerSecond uint
 
+	fillBuf stepper.Device
+	steps   int
 	// Needle period and activation in ticks.
 	needlePeriod uint
 	needleAct    uint
@@ -99,8 +102,9 @@ func (d *Device) Configure(dmaBufSize int) error {
 	return nil
 }
 
-func (d *Device) Enable(transferCompleted func(), needleActivation, needlePeriod uint) {
-	d.irq.Set(d.channel, transferCompleted)
+func (d *Device) Enable(fillBuf stepper.Device, needleActivation, needlePeriod uint) {
+	d.fillBuf = fillBuf
+	d.irq.Set(d.channel, d.transfer)
 	d.needleAct = needleActivation
 	d.needlePeriod = needlePeriod
 	pio.ConfigurePins(d.Pio, pioSM, d.BasePin, mjolnir2pinBits)
@@ -109,6 +113,10 @@ func (d *Device) Enable(transferCompleted func(), needleActivation, needlePeriod
 	pio.Restart(d.Pio, 0b1<<pioSM)
 	pio.Jump(d.Pio, pioSM, progOffset)
 	pio.Enable(d.Pio, 0b1<<pioSM)
+	// Interrupt handler assumes a filled buffer.
+	d.steps = d.fillBuf(0, d.buf)
+	// Kick off DMA transfers.
+	d.transfer()
 }
 
 func (d *Device) Disable() {
@@ -134,16 +142,12 @@ func (d *Device) Disable() {
 	pio.Disable(d.Pio, 0b1<<pioSM)
 }
 
-func (d *Device) NextBuffer() []uint32 {
-	return d.buf2
-}
-
-func (d *Device) Transfer(steps int) {
-	if steps == 0 {
+func (d *Device) transfer() {
+	if d.steps == 0 {
 		return
 	}
 	// Compute number of words.
-	n := (steps + stepsPerWord - 1) / stepsPerWord
+	n := (d.steps + stepsPerWord - 1) / stepsPerWord
 	buf := d.buf[:n]
 	// Modulate the needle enable bit with the
 	// needle waveform.
@@ -162,6 +166,7 @@ func (d *Device) Transfer(steps int) {
 	ch.READ_ADDR.Set(uint32(uintptr(unsafe.Pointer(unsafe.SliceData(buf)))))
 	ch.TRANS_COUNT.Set(uint32(len(buf)))
 	ch.CTRL_TRIG.SetBits(rp.DMA_CH0_CTRL_TRIG_EN)
-	// Swap buffers.
+	// Swap buffers and fill in preparation for the next DMA.
 	d.buf, d.buf2 = d.buf2, d.buf
+	d.steps = d.fillBuf(d.steps, d.buf)
 }

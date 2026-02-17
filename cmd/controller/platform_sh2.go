@@ -702,9 +702,11 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 
 	needleAct := uint(needleActivation * time.Duration(engraverConf.TicksPerSecond) / time.Second)
 	needlePeriod := uint(needlePeriod * time.Duration(engraverConf.TicksPerSecond) / time.Second)
-	d := stepper.Engrave(e.Dev, progress)
-	e.Dev.Enable(d.HandleTransferCompleted, needleAct, needlePeriod)
+	start := func(fillBuf stepper.Device) {
+		e.Dev.Enable(fillBuf, needleAct, needlePeriod)
+	}
 	defer e.Dev.Disable()
+	d := stepper.Engrave(start, progress)
 	// Set up interrupt handlers last, because they potentially undo pin configuration
 	// done in e.Dev.Enable above.
 	for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
