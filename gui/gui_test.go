@@ -406,7 +406,7 @@ func (p *testPlatform) EngraverStatus() EngraverStatus {
 	return EngraverStatus{}
 }
 
-func (p *testPlatform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan uint) error {
+func (p *testPlatform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error {
 	defer close(p.engrave.done)
 	p.engrave.quit = quit
 	select {

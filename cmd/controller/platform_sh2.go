@@ -706,7 +706,6 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 		e.Dev.Enable(fillBuf, needleAct, needlePeriod)
 	}
 	defer e.Dev.Disable()
-	d := stepper.Engrave(start)
 	// Set up interrupt handlers last, because they potentially undo pin configuration
 	// done in e.Dev.Enable above.
 	for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
@@ -719,7 +718,7 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 	if e.sdiagAvailable && S_DIAG.Get() {
 		return errors.New("engraver: engraver is not ready")
 	}
-	if err := d.Run(e.mode, quit, e.diag, spline); err != nil {
+	if err := stepper.Step(e.mode, start, quit, e.diag, spline); err != nil {
 		return err
 	}
 	e.axisLock.Lock()

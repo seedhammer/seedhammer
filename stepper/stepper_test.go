@@ -89,52 +89,40 @@ func TestQuit(t *testing.T) {
 	<-planDone
 }
 
-type buffer struct {
-	buf   []uint32
-	steps int
-}
-
-type dev struct {
-	transfers  chan buffer
-	buf1, buf2 []uint32
-}
-
-func (d *dev) NextBuffer() []uint32 {
-	return d.buf2
-}
-
-func (d *dev) Transfer(steps int) {
-	d.transfers <- buffer{d.buf1, steps}
-	d.buf1, d.buf2 = d.buf2, d.buf1
-}
-
 func runEngraving(quit <-chan struct{}, spline bspline.Curve) iter.Seq[uint8] {
-	const bufSize = 128
-	d := &dev{
-		buf1:      make([]uint32, bufSize),
-		buf2:      make([]uint32, bufSize),
-		transfers: make(chan buffer, 1),
-	}
-	result := make(chan struct{}, 1)
-	driver := Engrave(d, nil)
+	done := make(chan struct{})
+	dev := make(chan Device)
 	go func() {
-		driver.Run(ModeEngrave, quit, nil, spline)
-		close(result)
+		driver := func(d Device) {
+			dev <- d
+		}
+		Step(ModeEngrave, driver, quit, nil, spline)
+		close(done)
 	}()
 	yieldOk := true
 	return func(yield func(step uint8) bool) {
+		const bufSize = 128
+		buf := make([]uint32, bufSize)
+		var steps int
+		var d Device
 		for {
 			select {
-			case <-result:
+			case <-done:
 				return
-			case t := <-d.transfers:
-				for i := range t.steps {
-					w := t.buf[i/stepsPerWord]
+			case fill, open := <-dev:
+				if open {
+					d = fill
+					close(dev)
+				}
+			}
+			if d != nil {
+				steps = d(steps, buf)
+				for i := range steps {
+					w := buf[i/stepsPerWord]
 					w >>= (i % stepsPerWord) * pinBits
 					s := uint8(w & (0b1<<pinBits - 1))
 					yieldOk = yieldOk && yield(s)
 				}
-				driver.HandleTransferCompleted()
 			}
 		}
 	}

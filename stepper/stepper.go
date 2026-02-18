@@ -24,16 +24,20 @@ const (
 )
 
 // Driver is an engraving driver suitable for
-// driving through interrupts and DMA.
+// stepping through a [bspline.Curve] using DMA.
 type Driver struct {
-	startDev func(Device)
 	seg      bspline.Segment
 	stepper  bezier.Interpolator
 	knotCh   chan bspline.Knot
 	stall    chan struct{}
+	quit     <-chan struct{}
+	diag     <-chan Axis
 	progress chan uint
 	needle   bool
 	pos      bezier.Point
+	start    func(Device)
+	blocked  Axis
+	mode     Mode
 }
 
 type Device func(int, []uint32) int
@@ -125,109 +129,110 @@ loop:
 	return idx
 }
 
-func Engrave(startDev func(Device)) *Driver {
-	const bufSize = 64
+var (
+	errDone = errors.New("homing complete")
+)
 
-	return &Driver{
-		startDev: startDev,
-		knotCh:   make(chan bspline.Knot, bufSize),
+func Step(mode Mode, startDev func(Device), quit <-chan struct{}, diag <-chan Axis, spline bspline.Curve) error {
+	d := &Driver{
+		knotCh:   make(chan bspline.Knot, 64),
 		stall:    make(chan struct{}, 1),
 		progress: make(chan uint, 1),
+		start:    startDev,
+		quit:     quit,
+		diag:     diag,
+		mode:     mode,
 	}
-}
-
-var errHomed = errors.New("homing complete")
-
-func (d *Driver) Run(mode Mode, quit <-chan struct{}, diag <-chan Axis, spline bspline.Curve) error {
-	progress := uint(0)
-	started := false
-	var blocked Axis
-	Write := func(knots []bspline.Knot) (uint, error) {
-		var k bspline.Knot
-		knotsCh := d.knotCh
-		if len(knots) > 0 {
-			k = knots[0]
-			knots = knots[1:]
-		} else {
-			knotsCh = nil
-		}
-		for {
-			select {
-			case axis := <-diag:
-				blocked |= axis
-				if blocked&SAxis != 0 {
-					return progress, errors.New("stepper: power loss or short circuit")
-				}
-				switch mode {
-				case ModeHoming:
-					if blocked == (XAxis | YAxis) {
-						return progress, errHomed
-					}
-				default:
-					switch {
-					case blocked&XAxis != 0:
-						return progress, errors.New("stepper: x-axis blocked")
-					case blocked&YAxis != 0:
-						return progress, errors.New("stepper: y-axis blocked")
-					}
-				}
-			case <-quit:
-			case <-d.stall:
-				if knotsCh == nil {
-					// Done engraving.
-					return progress, nil
-				}
-				return progress, errors.New("stepper: command buffer underrun caused stall")
-			case progress = <-d.progress:
-				return progress, nil
-			case knotsCh <- k:
-				// Return when the channel buffer is full or there
-				// are no more knots available.
-				if len(knotsCh) == cap(knotsCh) || len(knots) == 0 {
-					if !started {
-						started = true
-						d.startDev(d.fillBufferCallback)
-					}
-					return progress, nil
-				}
-				k = knots[0]
-				knots = knots[1:]
-			}
-		}
-	}
-	{
-		const bufSize = 64
-		buf := make([]bspline.Knot, bufSize)
-		n := 0
-		dur := uint(0)
-		for k := range spline {
-			buf[n] = k
-			n++
-			dur += k.T
-			if n == len(buf) {
-				progress, err := Write(buf[:n])
-				dur -= progress
-				n = 0
-				if err != nil {
-					return err
-				}
-			}
-		}
-		// Write remaining and wait for completion.
-		for dur > 0 {
-			progress, err := Write(buf[:n])
-			n = 0
+	const bufSize = 5
+	buf := make([]bspline.Knot, bufSize)
+	n := 0
+	dur := uint(0)
+	for k := range spline {
+		buf[n] = k
+		n++
+		dur += k.T
+		for n == len(buf) {
+			buf := buf[:n]
+			progress, wrote, err := d.Write(buf)
+			n = copy(buf, buf[wrote:])
 			dur -= progress
 			if err != nil {
-				if err == errHomed {
+				if err == errDone {
 					return nil
 				}
 				return err
 			}
 		}
-		if mode == ModeHoming {
-			return errors.New("stepper: homing timed out")
+	}
+	// Write remaining and wait for completion.
+	for dur > 0 {
+		buf := buf[:n]
+		progress, wrote, err := d.Write(buf)
+		n = copy(buf, buf[wrote:])
+		dur -= progress
+		if err != nil {
+			if err == errDone {
+				return nil
+			}
+			return err
 		}
-		return nil
+	}
+	if mode == ModeHoming {
+		return errors.New("stepper: homing timed out")
+	}
+	return nil
+}
+
+func (d *Driver) Write(knots []bspline.Knot) (uint, int, error) {
+	var k bspline.Knot
+	knotsCh := d.knotCh
+	stall := d.stall
+	if len(knots) > 0 {
+		k = knots[0]
+		knots = knots[1:]
+	} else {
+		stall = nil
+		knotsCh = nil
+	}
+	if d.start != nil && (len(knotsCh) == cap(knotsCh) || len(knots) == 0) {
+		d.start(d.fillBufferCallback)
+		d.start = nil
+	}
+	wrote := 0
+	for {
+		select {
+		case axis := <-d.diag:
+			d.blocked |= axis
+			if d.blocked&SAxis != 0 {
+				return 0, wrote, errors.New("stepper: power loss or short circuit")
+			}
+			switch d.mode {
+			case ModeHoming:
+				if d.blocked == (XAxis | YAxis) {
+					return 0, wrote, errDone
+				}
+			default:
+				switch {
+				case d.blocked&XAxis != 0:
+					return 0, wrote, errors.New("stepper: x-axis blocked")
+				case d.blocked&YAxis != 0:
+					return 0, wrote, errors.New("stepper: y-axis blocked")
+				}
+			}
+		case <-d.quit:
+			return 0, wrote, errDone
+		case <-stall:
+			return 0, wrote, errors.New("stepper: command buffer underrun caused stall")
+		case progress := <-d.progress:
+			return progress, wrote, nil
+		case knotsCh <- k:
+			wrote++
+			// Return when the channel buffer is full.
+			if len(knotsCh) == cap(knotsCh) || len(knots) == 0 {
+				return 0, wrote, nil
+			}
+			k = knots[0]
+			knots = knots[1:]
+		}
 	}
 }
