@@ -35,7 +35,7 @@ type Driver struct {
 	progress chan uint
 	needle   bool
 	pos      bezier.Point
-	start    func(Device)
+	start    func(Device) error
 	blocked  Axis
 	mode     Mode
 }
@@ -133,7 +133,7 @@ var (
 	errDone = errors.New("homing complete")
 )
 
-func Step(mode Mode, startDev func(Device), quit <-chan struct{}, diag <-chan Axis, spline bspline.Curve) error {
+func Step(mode Mode, startDev func(Device) error, quit <-chan struct{}, diag <-chan Axis, spline bspline.Curve) error {
 	d := &Driver{
 		knotCh:   make(chan bspline.Knot, 64),
 		stall:    make(chan struct{}, 1),
@@ -195,7 +195,9 @@ func (d *Driver) Write(knots []bspline.Knot) (uint, int, error) {
 		knotsCh = nil
 	}
 	if d.start != nil && (len(knotsCh) == cap(knotsCh) || len(knots) == 0) {
-		d.start(d.fillBufferCallback)
+		if err := d.start(d.fillBufferCallback); err != nil {
+			return 0, 0, err
+		}
 		d.start = nil
 	}
 	wrote := 0

@@ -93,8 +93,9 @@ func runEngraving(quit <-chan struct{}, spline bspline.Curve) iter.Seq[uint8] {
 	done := make(chan struct{})
 	dev := make(chan Device)
 	go func() {
-		driver := func(d Device) {
+		driver := func(d Device) error {
 			dev <- d
+			return nil
 		}
 		Step(ModeEngrave, driver, quit, nil, spline)
 		close(done)

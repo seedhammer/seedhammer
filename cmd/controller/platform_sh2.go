@@ -702,21 +702,24 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 
 	needleAct := uint(needleActivation * time.Duration(engraverConf.TicksPerSecond) / time.Second)
 	needlePeriod := uint(needlePeriod * time.Duration(engraverConf.TicksPerSecond) / time.Second)
-	start := func(fillBuf stepper.Device) {
+	start := func(fillBuf stepper.Device) error {
 		e.Dev.Enable(fillBuf, needleAct, needlePeriod)
+		// Set up interrupt handlers last, because they potentially undo pin configuration
+		// done in e.Dev.Enable above.
+		for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
+			if err := pin.SetInterrupt(machine.PinRising, e.handleDiag); err != nil {
+				return fmt.Errorf("engraver: %w", err)
+			}
+		}
+		e.sdiagAvailable = e.sdiagAvailable || !S_DIAG.Get()
+		if e.sdiagAvailable && S_DIAG.Get() {
+			return errors.New("engraver: engraver is not ready")
+		}
+		return nil
 	}
 	defer e.Dev.Disable()
-	// Set up interrupt handlers last, because they potentially undo pin configuration
-	// done in e.Dev.Enable above.
 	for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
-		if err := pin.SetInterrupt(machine.PinRising, e.handleDiag); err != nil {
-			return fmt.Errorf("engraver: %w", err)
-		}
 		defer pin.SetInterrupt(0, nil)
-	}
-	e.sdiagAvailable = e.sdiagAvailable || !S_DIAG.Get()
-	if e.sdiagAvailable && S_DIAG.Get() {
-		return errors.New("engraver: engraver is not ready")
 	}
 	if err := stepper.Step(e.mode, start, quit, e.diag, spline); err != nil {
 		return err
