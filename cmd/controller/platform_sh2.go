@@ -721,14 +721,6 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 	if err := stepper.Step(e.mode, start, quit, e.diag, spline); err != nil {
 		return err
 	}
-	e.axisLock.Lock()
-	defer e.axisLock.Unlock()
-	if err := e.XAxis.Error(); err != nil {
-		return fmt.Errorf("X axis: %w", err)
-	}
-	if err := e.YAxis.Error(); err != nil {
-		return fmt.Errorf("Y axis: %w", err)
-	}
 	return nil
 }
 
