@@ -97,7 +97,7 @@ func runEngraving(quit <-chan struct{}, spline bspline.Curve) iter.Seq[uint8] {
 			dev <- d
 			return nil
 		}
-		d := NewDriver(ModeEngrave, start, quit, nil)
+		d := NewDriver(false, start, quit, nil)
 		d.Step(spline)
 		close(done)
 	}()

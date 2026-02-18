@@ -198,6 +198,14 @@ const (
 	invertY = false
 )
 
+type engraveMode uint32
+
+const (
+	modeEngrave engraveMode = iota
+	modeHoming
+	modeNostall
+)
+
 // Debug hooks.
 var (
 	initHook func(events chan<- gui.Event)
@@ -227,7 +235,7 @@ func Init() (*Platform, error) {
 	if err == nil {
 		p.voltage = voltage
 		// Home and move needle to origin.
-		go p.engrave(stepper.ModeHoming, nil, nil)
+		go p.engrave(modeHoming, nil, nil)
 	}
 
 	for i := range p.display.buffers {
@@ -502,7 +510,7 @@ type engraver struct {
 	XAxis, YAxis     *tmc2209.Device
 	Dev              *mjolnir2.Device
 	xstalls, ystalls atomic.Uint32
-	mode             stepper.Mode
+	mode             engraveMode
 	diag             chan stepper.Axis
 	ready            chan struct{}
 	// S_DIAG high means a fault on boards >= v1.5.0.
@@ -588,7 +596,7 @@ func (e *engraver) handleDiag(pin machine.Pin) {
 	default:
 		return
 	}
-	if e.mode == stepper.ModeNostall {
+	if e.mode == modeNostall {
 		return
 	}
 	// Disconnect the step pin from the PIO program and set it low.
@@ -597,7 +605,7 @@ func (e *engraver) handleDiag(pin machine.Pin) {
 	// And the needle pin, in case of an active engraving.
 	NEEDLE.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	NEEDLE.Low()
-	if e.mode != stepper.ModeHoming {
+	if e.mode != modeHoming {
 		// Disable both axes in case of blockage.
 		otherPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
 		otherPin.Low()
@@ -608,7 +616,7 @@ func (e *engraver) handleDiag(pin machine.Pin) {
 	}
 }
 
-func (e *engraver) engrave(voltage int, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}) error {
+func (e *engraver) engrave(voltage int, mode engraveMode, spline bspline.Curve, quit <-chan struct{}) error {
 	<-e.ready
 	defer func() {
 		e.ready <- struct{}{}
@@ -653,22 +661,30 @@ func (e *engraver) engrave(voltage int, mode stepper.Mode, spline bspline.Curve,
 	}
 	// Wait for standstill tuning of the drivers.
 	time.Sleep(tmc2209.StandstillTuningPeriod)
-
 	// Perform a linear interpolation of the voltage into the range of needle
 	// activation durations.
 	act := (needleActivationMinVoltage*time.Duration(maxVoltage-voltage) +
 		needleActivationMaxVoltage*time.Duration(voltage-minVoltage)) / (maxVoltage - minVoltage)
+	close := func() {
+		for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
+			pin.SetInterrupt(0, nil)
+		}
+		e.Dev.Disable()
+	}
+	defer close()
+
 	if err := e.home(act); err != nil {
+		return err
+	}
+	d, err := e.newDriver(act, mode, quit)
+	if err != nil {
 		return err
 	}
 	if spline == nil {
 		return nil
 	}
 	defer e.home(act)
-	if err := e.execute(act, mode, spline, quit); err != nil {
-		return err
-	}
-	return nil
+	return d.Step(spline)
 }
 
 func (e *engraver) home(needleActivation time.Duration) error {
@@ -682,17 +698,25 @@ func (e *engraver) home(needleActivation time.Duration) error {
 	conf := engraverConf
 	conf.Speed = homingSpeed
 	spline := engrave.PlanEngraving(conf, home)
-	if err := e.execute(needleActivation, stepper.ModeHoming, spline, nil); err != nil {
+	d, err := e.newDriver(needleActivation, modeHoming, nil)
+	if err != nil {
+		return err
+	}
+	if err := d.Step(spline); err != nil {
+		return err
+	}
+	d, err = e.newDriver(needleActivation, modeEngrave, nil)
+	if err != nil {
 		return err
 	}
 	moveToOrigin := engrave.Engraving(slices.Values([]engrave.Command{
 		engrave.Move(bezier.Pt(originX, originY)),
 	}))
 	spline = engrave.PlanEngraving(conf, moveToOrigin)
-	return e.execute(needleActivation, stepper.ModeEngrave, spline, nil)
+	return d.Step(spline)
 }
 
-func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}) error {
+func (e *engraver) newDriver(needleActivation time.Duration, mode engraveMode, quit <-chan struct{}) (*stepper.Driver, error) {
 	e.xstalls.Store(0)
 	e.ystalls.Store(0)
 	e.mode = mode
@@ -703,10 +727,16 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 	needleAct := uint(needleActivation * time.Duration(engraverConf.TicksPerSecond) / time.Second)
 	needlePeriod := uint(needlePeriod * time.Duration(engraverConf.TicksPerSecond) / time.Second)
 	start := func(fillBuf stepper.Device) error {
+		for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
+			// Reset interrupts.
+			pin.SetInterrupt(machine.PinRising, nil)
+		}
 		e.Dev.Enable(fillBuf, needleAct, needlePeriod)
 		// Set up interrupt handlers last, because they potentially undo pin configuration
 		// done in e.Dev.Enable above.
 		for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
+			// Toggle pins
+			pin.SetInterrupt(machine.PinRising, nil)
 			if err := pin.SetInterrupt(machine.PinRising, e.handleDiag); err != nil {
 				return fmt.Errorf("engraver: %w", err)
 			}
@@ -717,18 +747,7 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 		}
 		return nil
 	}
-	close := func() {
-		for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
-			pin.SetInterrupt(0, nil)
-		}
-		e.Dev.Disable()
-	}
-	defer close()
-	d := stepper.NewDriver(e.mode, start, quit, e.diag)
-	if err := d.Step(spline); err != nil {
-		return err
-	}
-	return nil
+	return stepper.NewDriver(mode == modeHoming, start, quit, e.diag), nil
 }
 
 func (p *Platform) LockBoot() error {
@@ -754,14 +773,14 @@ func (p *Platform) NFCReader() io.Reader {
 }
 
 func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error {
-	mode := stepper.ModeEngrave
+	mode := modeEngrave
 	if !stall {
-		mode = stepper.ModeNostall
+		mode = modeNostall
 	}
 	return p.engrave(mode, spline, quit)
 }
 
-func (p *Platform) engrave(mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}) error {
+func (p *Platform) engrave(mode engraveMode, spline bspline.Curve, quit <-chan struct{}) error {
 	return p.engraver.engrave(p.voltage, mode, spline, quit)
 }
 

@@ -7,14 +7,6 @@ import (
 	"seedhammer.com/bspline"
 )
 
-type Mode uint32
-
-const (
-	ModeEngrave Mode = iota
-	ModeHoming
-	ModeNostall
-)
-
 type Axis uint8
 
 const (
@@ -37,7 +29,7 @@ type Driver struct {
 	pos      bezier.Point
 	start    func(Device) error
 	blocked  Axis
-	mode     Mode
+	homing   bool
 }
 
 type Device func(int, []uint32) int
@@ -133,7 +125,7 @@ var (
 	errDone = errors.New("homing complete")
 )
 
-func NewDriver(mode Mode, startDev func(Device) error, quit <-chan struct{}, diag <-chan Axis) *Driver {
+func NewDriver(homing bool, startDev func(Device) error, quit <-chan struct{}, diag <-chan Axis) *Driver {
 	return &Driver{
 		knotCh:   make(chan bspline.Knot, 64),
 		stall:    make(chan struct{}, 1),
@@ -141,7 +133,7 @@ func NewDriver(mode Mode, startDev func(Device) error, quit <-chan struct{}, dia
 		start:    startDev,
 		quit:     quit,
 		diag:     diag,
-		mode:     mode,
+		homing:   homing,
 	}
 }
 
@@ -180,7 +172,7 @@ func (d *Driver) Step(spline bspline.Curve) error {
 			return err
 		}
 	}
-	if d.mode == ModeHoming {
+	if d.homing {
 		return errors.New("stepper: homing timed out")
 	}
 	return nil
@@ -211,12 +203,11 @@ func (d *Driver) Write(knots []bspline.Knot) (uint, int, error) {
 			if d.blocked&SAxis != 0 {
 				return 0, wrote, errors.New("stepper: power loss or short circuit")
 			}
-			switch d.mode {
-			case ModeHoming:
+			if d.homing {
 				if d.blocked == (XAxis | YAxis) {
 					return 0, wrote, errDone
 				}
-			default:
+			} else {
 				switch {
 				case d.blocked&XAxis != 0:
 					return 0, wrote, errors.New("stepper: x-axis blocked")
