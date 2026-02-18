@@ -2,7 +2,7 @@ package stepper
 
 import (
 	"errors"
-	"iter"
+	"io"
 
 	"seedhammer.com/bezier"
 	"seedhammer.com/bspline"
@@ -23,8 +23,6 @@ const (
 	YAxis
 	SAxis
 )
-
-const MaxSplineLength = 256
 
 // Driver is an engraving driver suitable for
 // driving through interrupts and DMA.
@@ -150,58 +148,142 @@ func Engrave(startDev func(Device), progress chan uint) *Driver {
 }
 
 func (d *Driver) Run(mode Mode, quit <-chan struct{}, diag <-chan Axis, spline bspline.Curve) error {
-	knots, c := iter.Pull(iter.Seq[bspline.Knot](spline))
-	defer c()
-	knot, moreCommands := knots()
-	if !moreCommands {
-		return nil
-	}
-	var blocked Axis
+	buf := new(knotBuffer)
+	progress := uint(0)
 	started := false
-	stallKnots := d.knotCh
-loop:
-	for {
-		// Start engraving when the channel is full.
-		if !started && (!moreCommands || cap(d.knotCh) == len(d.knotCh)) {
+	var blocked Axis
+	Write := func(knots []bspline.Knot) (uint, int, error) {
+		wrote := 0
+		for _, k := range knots {
+			if buf.Capacity() == 0 {
+				break
+			}
+			buf.Push(k)
+			wrote++
+		}
+		if !started {
+			// Don't start transfer until there is nothing more to
+			// buffer.
+			if wrote > 0 {
+				return progress, wrote, nil
+			}
 			d.startDev(d.fillBufferCallback)
 			started = true
 		}
-		if !moreCommands && stallKnots != nil {
-			close(stallKnots)
-			stallKnots = nil
+		var k bspline.Knot
+		knotsCh := d.knotCh
+		if buf.Capacity() > 0 {
+			k = buf.Pop()
+		} else {
+			knotsCh = nil
 		}
-		select {
-		case axis := <-diag:
-			blocked |= axis
-			if mode != ModeHoming || blocked == (XAxis|YAxis) {
+		var err error
+	loop:
+		for {
+			select {
+			case axis := <-diag:
+				blocked |= axis
+				if mode != ModeHoming || blocked == (XAxis|YAxis) {
+					break loop
+				}
+			case <-quit:
 				break loop
-			}
-		case <-quit:
-			break loop
-		case _, ok := <-d.stall:
-			if !ok {
-				// Done.
+			case _, running := <-d.stall:
+				if running {
+					// Stall.
+					err = errors.New("stepper: command buffer underrun caused stall")
+					break
+				}
+				err = io.EOF
+				switch mode {
+				case ModeHoming:
+					if blocked != (XAxis | YAxis) {
+						err = errors.New("stepper: homing timed out")
+					}
+				default:
+					switch {
+					case blocked&XAxis != 0:
+						err = errors.New("stepper: x-axis blocked")
+					case blocked&YAxis != 0:
+						err = errors.New("stepper: y-axis blocked")
+					case blocked&SAxis != 0:
+						err = errors.New("stepper: power loss or short circuit")
+					}
+				}
 				break loop
+			case knotsCh <- k:
+				if buf.Capacity() > 0 {
+					k = buf.Pop()
+				} else {
+					break loop
+				}
 			}
-			return errors.New("stepper: command buffer underrun caused stall")
-		case stallKnots <- knot:
-			knot, moreCommands = knots()
 		}
+		return progress, wrote, err
 	}
-	if mode == ModeHoming {
-		if blocked != (XAxis | YAxis) {
-			return errors.New("stepper: homing timed out")
+	{
+		const bufSize = 64
+		buf := make([]bspline.Knot, bufSize)
+		n := 0
+		for k := range spline {
+			if n == len(buf) {
+				_, wrote, err := Write(buf)
+				copy(buf, buf[wrote:])
+				n -= wrote
+				if err != nil {
+					if err == io.EOF {
+						err = io.ErrUnexpectedEOF
+					}
+					return err
+				}
+			}
+			buf[n] = k
+			n++
+		}
+		rem := 0
+		for len(buf) > 0 {
+			_, wrote, err := Write(buf[rem:])
+			rem += wrote
+			if err != nil {
+				if err == io.EOF {
+					err = io.ErrUnexpectedEOF
+				}
+				return err
+			}
 		}
 		return nil
 	}
-	switch {
-	case blocked&XAxis != 0:
-		return errors.New("stepper: x-axis blocked")
-	case blocked&YAxis != 0:
-		return errors.New("stepper: y-axis blocked")
-	case blocked&SAxis != 0:
-		return errors.New("stepper: power loss or short circuit")
-	default:
-		return nil
+}
+
+// knotBuffer is a circular buffer of knots.
+type knotBuffer struct {
+	knots      [64]bspline.Knot
+	start, len int
+}
+
+func (b *knotBuffer) Capacity() int {
+	return len(b.knots) - b.Length()
+}
+
+func (b *knotBuffer) Length() int {
+	return b.len
+}
+
+func (b *knotBuffer) Push(k bspline.Knot) {
+	if b.Capacity() == 0 {
+		panic("buffer overflow")
 	}
+	idx := (b.start + b.len) % len(b.knots)
+	b.knots[idx] = k
+	b.len++
+}
+
+func (b *knotBuffer) Pop() bspline.Knot {
+	if b.len == 0 {
+		panic("knot buffer underflow")
+	}
+	k := b.knots[b.start]
+	b.start = (b.start + 1) % len(b.knots)
+	b.len--
+	return k
 }
