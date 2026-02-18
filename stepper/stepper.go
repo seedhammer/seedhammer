@@ -2,7 +2,6 @@ package stepper
 
 import (
 	"errors"
-	"io"
 
 	"seedhammer.com/bezier"
 	"seedhammer.com/bspline"
@@ -81,12 +80,7 @@ loop:
 	for idx < n && !e.done {
 		for !e.stepper.Step() {
 			select {
-			case k, ok := <-e.knotCh:
-				if !ok {
-					e.done = true
-					close(e.stall)
-					return idx
-				}
+			case k := <-e.knotCh:
 				c, ticks, needle := e.seg.Knot(k)
 				e.needle = needle
 				e.stepper.Segment(c, ticks)
@@ -188,28 +182,9 @@ func (d *Driver) Run(mode Mode, quit <-chan struct{}, diag <-chan Axis, spline b
 				}
 			case <-quit:
 				break loop
-			case _, running := <-d.stall:
-				if running {
-					// Stall.
-					err = errors.New("stepper: command buffer underrun caused stall")
-					break
-				}
-				err = io.EOF
-				switch mode {
-				case ModeHoming:
-					if blocked != (XAxis | YAxis) {
-						err = errors.New("stepper: homing timed out")
-					}
-				default:
-					switch {
-					case blocked&XAxis != 0:
-						err = errors.New("stepper: x-axis blocked")
-					case blocked&YAxis != 0:
-						err = errors.New("stepper: y-axis blocked")
-					case blocked&SAxis != 0:
-						err = errors.New("stepper: power loss or short circuit")
-					}
-				}
+			case <-d.stall:
+				// Stall.
+				err = errors.New("stepper: command buffer underrun caused stall")
 				break loop
 			case knotsCh <- k:
 				if buf.Capacity() > 0 {
@@ -231,9 +206,6 @@ func (d *Driver) Run(mode Mode, quit <-chan struct{}, diag <-chan Axis, spline b
 				copy(buf, buf[wrote:])
 				n -= wrote
 				if err != nil {
-					if err == io.EOF {
-						err = io.ErrUnexpectedEOF
-					}
 					return err
 				}
 			}
@@ -245,10 +217,22 @@ func (d *Driver) Run(mode Mode, quit <-chan struct{}, diag <-chan Axis, spline b
 			_, wrote, err := Write(buf[rem:])
 			rem += wrote
 			if err != nil {
-				if err == io.EOF {
-					err = io.ErrUnexpectedEOF
-				}
 				return err
+			}
+		}
+		switch mode {
+		case ModeHoming:
+			if blocked != (XAxis | YAxis) {
+				return errors.New("stepper: homing timed out")
+			}
+		default:
+			switch {
+			case blocked&XAxis != 0:
+				return errors.New("stepper: x-axis blocked")
+			case blocked&YAxis != 0:
+				return errors.New("stepper: y-axis blocked")
+			case blocked&SAxis != 0:
+				return errors.New("stepper: power loss or short circuit")
 			}
 		}
 		return nil
