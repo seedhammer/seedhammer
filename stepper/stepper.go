@@ -133,8 +133,8 @@ var (
 	errDone = errors.New("homing complete")
 )
 
-func Step(mode Mode, startDev func(Device) error, quit <-chan struct{}, diag <-chan Axis, spline bspline.Curve) error {
-	d := &Driver{
+func NewDriver(mode Mode, startDev func(Device) error, quit <-chan struct{}, diag <-chan Axis) *Driver {
+	return &Driver{
 		knotCh:   make(chan bspline.Knot, 64),
 		stall:    make(chan struct{}, 1),
 		progress: make(chan uint, 1),
@@ -143,6 +143,9 @@ func Step(mode Mode, startDev func(Device) error, quit <-chan struct{}, diag <-c
 		diag:     diag,
 		mode:     mode,
 	}
+}
+
+func (d *Driver) Step(spline bspline.Curve) error {
 	const bufSize = 5
 	buf := make([]bspline.Knot, bufSize)
 	n := 0
@@ -177,7 +180,7 @@ func Step(mode Mode, startDev func(Device) error, quit <-chan struct{}, diag <-c
 			return err
 		}
 	}
-	if mode == ModeHoming {
+	if d.mode == ModeHoming {
 		return errors.New("stepper: homing timed out")
 	}
 	return nil

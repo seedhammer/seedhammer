@@ -717,11 +717,15 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 		}
 		return nil
 	}
-	defer e.Dev.Disable()
-	for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
-		defer pin.SetInterrupt(0, nil)
+	close := func() {
+		for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
+			pin.SetInterrupt(0, nil)
+		}
+		e.Dev.Disable()
 	}
-	if err := stepper.Step(e.mode, start, quit, e.diag, spline); err != nil {
+	defer close()
+	d := stepper.NewDriver(e.mode, start, quit, e.diag)
+	if err := d.Step(spline); err != nil {
 		return err
 	}
 	return nil
