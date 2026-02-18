@@ -2552,7 +2552,7 @@ type Platform interface {
 	LockBoot() error
 	AppendEvents(deadline time.Time, evts []Event) []Event
 	Wakeup()
-	Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan uint) error
+	Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error
 	EngraverStatus() EngraverStatus
 	NFCReader() io.Reader
 	EngraverParams() engrave.Params

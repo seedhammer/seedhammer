@@ -20,7 +20,7 @@ func qaEngraveFlow(ctx *Context, ops op.Ctx) {
 		dims := sz.Dims(params.Millimeter)
 		plan := engrave.PlanEngraving(params.StepperConfig,
 			qaPlan(params.Millimeter, dims))
-		errs <- p.Engrave(false, plan, nil, nil)
+		errs <- p.Engrave(false, plan, nil)
 	}()
 	var eerr string
 	var xLoadVals, yLoadVals maxValue

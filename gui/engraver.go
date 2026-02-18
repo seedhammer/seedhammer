@@ -24,7 +24,7 @@ func newEngraverJob(p Platform, spline bspline.Curve) *engraveJob {
 	}
 	go func() {
 		defer p.Wakeup()
-		errs <- p.Engrave(true, spline, quit, progress)
+		errs <- p.Engrave(true, spline, quit)
 	}()
 	return e
 }

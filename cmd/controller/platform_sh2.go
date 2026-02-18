@@ -227,7 +227,7 @@ func Init() (*Platform, error) {
 	if err == nil {
 		p.voltage = voltage
 		// Home and move needle to origin.
-		go p.engrave(stepper.ModeHoming, nil, nil, nil)
+		go p.engrave(stepper.ModeHoming, nil, nil)
 	}
 
 	for i := range p.display.buffers {
@@ -608,7 +608,7 @@ func (e *engraver) handleDiag(pin machine.Pin) {
 	}
 }
 
-func (e *engraver) engrave(voltage int, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan uint) error {
+func (e *engraver) engrave(voltage int, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}) error {
 	<-e.ready
 	defer func() {
 		e.ready <- struct{}{}
@@ -665,7 +665,7 @@ func (e *engraver) engrave(voltage int, mode stepper.Mode, spline bspline.Curve,
 		return nil
 	}
 	defer e.home(act)
-	if err := e.execute(act, mode, spline, quit, progress); err != nil {
+	if err := e.execute(act, mode, spline, quit); err != nil {
 		return err
 	}
 	return nil
@@ -682,17 +682,17 @@ func (e *engraver) home(needleActivation time.Duration) error {
 	conf := engraverConf
 	conf.Speed = homingSpeed
 	spline := engrave.PlanEngraving(conf, home)
-	if err := e.execute(needleActivation, stepper.ModeHoming, spline, nil, nil); err != nil {
+	if err := e.execute(needleActivation, stepper.ModeHoming, spline, nil); err != nil {
 		return err
 	}
 	moveToOrigin := engrave.Engraving(slices.Values([]engrave.Command{
 		engrave.Move(bezier.Pt(originX, originY)),
 	}))
 	spline = engrave.PlanEngraving(conf, moveToOrigin)
-	return e.execute(needleActivation, stepper.ModeEngrave, spline, nil, nil)
+	return e.execute(needleActivation, stepper.ModeEngrave, spline, nil)
 }
 
-func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan uint) error {
+func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}) error {
 	e.xstalls.Store(0)
 	e.ystalls.Store(0)
 	e.mode = mode
@@ -706,7 +706,7 @@ func (e *engraver) execute(needleActivation time.Duration, mode stepper.Mode, sp
 		e.Dev.Enable(fillBuf, needleAct, needlePeriod)
 	}
 	defer e.Dev.Disable()
-	d := stepper.Engrave(start, progress)
+	d := stepper.Engrave(start)
 	// Set up interrupt handlers last, because they potentially undo pin configuration
 	// done in e.Dev.Enable above.
 	for _, pin := range []machine.Pin{X_DIAG, Y_DIAG, S_DIAG} {
@@ -755,16 +755,16 @@ func (p *Platform) NFCReader() io.Reader {
 	return poller.New(p.nfc)
 }
 
-func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}, progress chan uint) error {
+func (p *Platform) Engrave(stall bool, spline bspline.Curve, quit <-chan struct{}) error {
 	mode := stepper.ModeEngrave
 	if !stall {
 		mode = stepper.ModeNostall
 	}
-	return p.engrave(mode, spline, quit, progress)
+	return p.engrave(mode, spline, quit)
 }
 
-func (p *Platform) engrave(mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}, progress chan uint) error {
-	return p.engraver.engrave(p.voltage, mode, spline, quit, progress)
+func (p *Platform) engrave(mode stepper.Mode, spline bspline.Curve, quit <-chan struct{}) error {
+	return p.engraver.engrave(p.voltage, mode, spline, quit)
 }
 
 func (p *Platform) EngraverStatus() gui.EngraverStatus {
