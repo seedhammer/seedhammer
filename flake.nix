@@ -51,7 +51,7 @@
         # Newest TinyGo version.
         tinygo-overlay =
           let
-            version = "0.40.1";
+            version = "0.41.0";
           in
           final: prev: {
             tinygo = prev.tinygo.overrideAttrs (prev: {
@@ -61,8 +61,8 @@
                 owner = "tinygo-org";
                 repo = "tinygo";
 
-                rev = "v${version}";
-                hash = "sha256-+dLdQdq47M+HKjiMQI1/NJZqiRFuR8rnv/osCbFTpQE=";
+                rev = "fd1d10c9b7b6eba6168a0c03bb38c973da42ea1d";
+                hash = "sha256-bpcApOSbqh5xNUxC+iYDB7PVxJdgSPWfPJArHtiPNNY=";
 
                 fetchSubmodules = true;
                 postFetch = ''
