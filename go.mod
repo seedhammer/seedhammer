@@ -1,6 +1,6 @@
 module seedhammer.com
 
-go 1.25.6
+go 1.25.4
 
 require (
 	github.com/btcsuite/btcd v0.23.0

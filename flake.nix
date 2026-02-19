@@ -94,6 +94,29 @@
             tinygo-flags = "-target pico-plus2 -stack-size 16kb -gc precise -opt 2 -scheduler tasks";
           in
           {
+            firmware = pkgs.buildGoModule {
+              pname = "firmware";
+              version = "2.2.0";
+              src = ./.;
+
+              vendorHash = null; # Set to pkgs.lib.fakeHash first, then update
+
+              nativeBuildInputs = [ pkgs.tinygo ];
+
+              # Overriding the build phase to use tinygo instead of standard go
+              buildPhase = ''
+                export HOME=$TMPDIR
+                export GOCACHE=$TMPDIR/go-cache
+                export GOPATH=$TMPDIR/go
+                tinygo build -x -o firmware.elf -ldflags="-X main.Version=$VERSION" ${tinygo-flags} ./cmd/controller
+                tinygo build -x -o firmware.uf2 -ldflags="-X main.Version=$VERSION" ${tinygo-flags} ./cmd/controller
+              '';
+
+              installPhase = ''
+                install -Dm755 firmware.elf $out/bin/firmware.elf
+                install -Dm755 firmware.uf2 $out/bin/firmware.uf2
+              '';
+            };
             build-firmware = pkgs.writeShellScriptBin "build-firmware" ''
               set -eu -o pipefail
 
