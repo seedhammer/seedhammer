@@ -19,5 +19,5 @@ jobs:
     - run: VERSION="${{ env.version }}" nix run .#build-firmware
     - uses: actions/upload-artifact@v6
       with:
-        name: seedhammerii-${{ env.version }}.uf2
-        path: seedhammerii-${{ env.version }}.uf2
+        name: seedhammerii-${{ env.version }}.blah
+        path: seedhammerii-${{ env.version }}.*

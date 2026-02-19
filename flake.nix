@@ -103,6 +103,7 @@
               WORKDIR="$(mktemp -d)"
               OUTPUT="seedhammerii-$VERSION.uf2"
 
+              ${pkgs.tinygo}/bin/tinygo build -o "$WORKDIR/firmware.elf" -ldflags="-X main.Version=$VERSION" ${tinygo-flags} "$@" ./cmd/controller
               ${pkgs.tinygo}/bin/tinygo build -o "$WORKDIR/firmware.uf2" -ldflags="-X main.Version=$VERSION" ${tinygo-flags} "$@" ./cmd/controller
               # Sign with a dummy key to convince picotool to create the necessary
               # file structure for signing.
@@ -112,6 +113,7 @@
               ${pkgs.go}/bin/go run seedhammer.com/cmd/picosign sign -clear "$WORKDIR/firmware.signed.uf2"
 
               mv "$WORKDIR/firmware.signed.uf2" "$OUTPUT"
+              mv "$WORKDIR/firmware.elf" "seedhammerii-$VERSION.elf"
               rm -rf "$WORKDIR"
               echo "Built $OUTPUT"
             '';
