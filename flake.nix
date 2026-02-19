@@ -92,6 +92,16 @@
         // (
           let
             tinygo-flags = "-target pico-plus2 -stack-size 16kb -gc precise -opt 2 -scheduler tasks";
+            dummy_pem = pkgs.writeText "dummy.pem" ''
+              -----BEGIN EC PARAMETERS-----
+BgUrgQQACg==
+-----END EC PARAMETERS-----
+-----BEGIN EC PRIVATE KEY-----
+MHQCAQEEIFSrFKF8udYXSJ0l6gPi4EY74G3dhrdOKSfQsN7yyUy6oAcGBSuBBAAK
+oUQDQgAEumLU1YRqzQosru/AaObMpw8q/LsRDVVM0XF84o9qAvSxktFcrtwMlNZr
+P20/GJHNoGFZmfh7zOmY42TQcasEdw==
+-----END EC PRIVATE KEY-----
+'';
           in
           {
             firmware = pkgs.buildGoModule {
@@ -108,12 +118,13 @@
                 export HOME=$TMPDIR
                 export GOCACHE=$TMPDIR/go-cache
                 export GOPATH=$TMPDIR/go
-                tinygo build -x -o firmware.elf -ldflags="-X main.Version=$VERSION" ${tinygo-flags} ./cmd/controller
+                export VERSION="helloversion"
+                tinygo build -x -o firmware.bin -ldflags="-X main.Version=$VERSION" ${tinygo-flags} ./cmd/controller
                 tinygo build -x -o firmware.uf2 -ldflags="-X main.Version=$VERSION" ${tinygo-flags} ./cmd/controller
               '';
 
               installPhase = ''
-                install -Dm755 firmware.elf $out/bin/firmware.elf
+                install -Dm755 firmware.bin $out/bin/firmware.bin
                 install -Dm755 firmware.uf2 $out/bin/firmware.uf2
               '';
             };
@@ -126,17 +137,16 @@
               WORKDIR="$(mktemp -d)"
               OUTPUT="seedhammerii-$VERSION.uf2"
 
-              ${pkgs.tinygo}/bin/tinygo build -o "$WORKDIR/firmware.elf" -ldflags="-X main.Version=$VERSION" ${tinygo-flags} "$@" ./cmd/controller
               ${pkgs.tinygo}/bin/tinygo build -o "$WORKDIR/firmware.uf2" -ldflags="-X main.Version=$VERSION" ${tinygo-flags} "$@" ./cmd/controller
               # Sign with a dummy key to convince picotool to create the necessary
               # file structure for signing.
-              ${pkgs.openssl}/bin/openssl ecparam -genkey -name secp256k1 -out "$WORKDIR/dummy.pem"
-              ${pkgs.picotool}/bin/picotool seal --sign --clear --quiet "$WORKDIR/firmware.uf2" "$WORKDIR/firmware.signed.uf2" "$WORKDIR/dummy.pem"
+              # ${pkgs.openssl}/bin/openssl ecparam -genkey -name secp256k1 -out "$WORKDIR/dummy.pem"
+              # ${pkgs.picotool}/bin/picotool seal --hash --quiet "$WORKDIR/firmware.uf2" "$WORKDIR/firmware.signed.uf2"
+              ${pkgs.picotool}/bin/picotool seal --sign --clear --quiet "$WORKDIR/firmware.uf2" "$WORKDIR/firmware.signed.uf2" "${dummy_pem}"
               # Clear public key and signature.
               ${pkgs.go}/bin/go run seedhammer.com/cmd/picosign sign -clear "$WORKDIR/firmware.signed.uf2"
 
               mv "$WORKDIR/firmware.signed.uf2" "$OUTPUT"
-              mv "$WORKDIR/firmware.elf" "seedhammerii-$VERSION.elf"
               rm -rf "$WORKDIR"
               echo "Built $OUTPUT"
             '';
