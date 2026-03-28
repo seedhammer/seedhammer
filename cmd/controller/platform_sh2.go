@@ -151,7 +151,7 @@ var (
 
 const (
 	// The period of a needle cycle.
-	needlePeriod = 20 * time.Millisecond
+	needlePeriod = 25 * time.Millisecond
 	// The duration of a needle cycle turned on.
 	needleActivationMinVoltage = 5 * time.Millisecond
 	needleActivationMaxVoltage = 4 * time.Millisecond
