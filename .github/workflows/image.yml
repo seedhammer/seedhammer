@@ -18,7 +18,8 @@ jobs:
       if: ${{ github.ref_type == 'tag' }}
       run: echo "version=${{ github.ref_name }}" >> $GITHUB_ENV
     - run: VERSION="${{ env.version }}" nix run .#build-firmware
-    - uses: actions/upload-artifact@v6
+    - uses: actions/upload-artifact@v7
       with:
+        archive: false
         name: seedhammerii-${{ env.version }}.uf2
         path: seedhammerii-${{ env.version }}.uf2
