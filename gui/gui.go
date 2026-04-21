@@ -1655,13 +1655,17 @@ func layoutNavigation(ops op.Ctx, th *Colors, dims image.Point, btns ...NavButto
 			op.ImageOp(ops, assets.NavBtnPrimary, true)
 			op.ColorOp(ops, th.Primary)
 		}
+		const offset = 9
+		op.Offset(ops, image.Pt(offset, offset))
 		if b.Progress > 0 {
 			(&ProgressImage{
 				Progress: b.Progress,
 				Src:      assets.IconProgress,
 			}).Add(ops)
+			assets.IconProgress.Bounds().Size()
 		} else {
 			op.ImageOp(ops, b.Icon, true)
+			b.Icon.Bounds().Size()
 		}
 		switch b.Style {
 		case StyleSecondary:

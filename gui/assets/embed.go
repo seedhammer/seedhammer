@@ -197,14 +197,14 @@ var (
 
 	NavBtnPrimary = &alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(NavBtnPrimaryData), len(NavBtnPrimaryData)),
-		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 35, MaxY: 35},
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 53, MaxY: 53},
 	}
 	//go:embed nav-btn-primary.bin
 	NavBtnPrimaryData string
 
 	NavBtnSecondary = &alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(NavBtnSecondaryData), len(NavBtnSecondaryData)),
-		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 35, MaxY: 35},
+		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 53, MaxY: 53},
 	}
 	//go:embed nav-btn-secondary.bin
 	NavBtnSecondaryData string
