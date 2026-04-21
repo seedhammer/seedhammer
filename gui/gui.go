@@ -995,7 +995,7 @@ func NewKeyboard(ctx *Context, alphabet string) *Keyboard {
 	k.widest = ctx.Styles.keyboard.Measure(math.MaxInt, "W")
 	bsb := assets.KeyBackspace.Bounds()
 	bsWidth := bsb.Min.X*2 + bsb.Dx()
-	k.backspace = image.Pt(bsWidth, k.widest.Y)
+	k.backspace = image.Pt(max(bsWidth, k.widest.X), k.widest.Y)
 	bgbnds := assets.Key.Bounds(image.Rectangle{Max: k.widest})
 	const margin = 2
 	bgsz := bgbnds.Size().Add(image.Pt(margin, margin))

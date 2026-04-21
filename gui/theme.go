@@ -23,7 +23,6 @@ type Styles struct {
 	word     text.Style
 	keyboard text.Style
 	warning  text.Style
-	nav      text.Style
 	debug    text.Style
 	progress text.Style
 }
@@ -71,7 +70,7 @@ func init() {
 func NewStyles() Styles {
 	return Styles{
 		title: text.Style{
-			Face:            poppins.Bold23,
+			Face:            poppins.Bold25,
 			Alignment:       text.AlignCenter,
 			LetterSpacing:   -1,
 			LineHeightScale: 0.75,
@@ -84,7 +83,7 @@ func NewStyles() Styles {
 			Face: poppins.Bold10,
 		},
 		warning: text.Style{
-			Face:            poppins.Bold23,
+			Face:            poppins.Bold25,
 			LineHeightScale: 0.75,
 			Alignment:       text.AlignCenter,
 		},
@@ -97,9 +96,6 @@ func NewStyles() Styles {
 			Face:            poppins.Bold16,
 			LineHeightScale: 0.9,
 		},
-		nav: text.Style{
-			Face: poppins.Bold23,
-		},
 		button: text.Style{
 			Face:            poppins.Bold20,
 			Alignment:       text.AlignCenter,
@@ -109,7 +105,7 @@ func NewStyles() Styles {
 			Face: comfortaa.Bold17,
 		},
 		keyboard: text.Style{
-			Face: poppins.Bold16,
+			Face: poppins.Bold25,
 		},
 		progress: text.Style{
 			Face:          poppins.Boldprogress45,
