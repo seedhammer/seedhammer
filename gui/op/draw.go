@@ -115,44 +115,28 @@ func drawAlphaUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA,
 	maxx := dr.Dx()
 	dstPix := dst.Pix
 	maskPix := mask.Pix
+	sr := uint32(src.R >> 3)
+	sg := uint32(src.G >> 2)
+	sb := uint32(src.B >> 3)
+	sa := uint32(src.A)
 	for y := 0; y < dr.Dy(); y++ {
 		dstOff := dst.PixOffset(dr.Min.X, dr.Min.Y+y)
 		dstPix := dstPix[dstOff : dstOff+maxx]
 		maskOff := mask.PixOffset(maskOff.X, maskOff.Y+y)
-		for x, dstCol := range dstPix {
+		for x, dcol := range dstPix {
 			i := maskOff + x
-			a := alpha4.Val(i, maskPix[i/2])
-			a16 := uint16(a)
-			srcCol := color.RGBA{
-				R: uint8(uint16(src.R) * a16 / 255),
-				G: uint8(uint16(src.G) * a16 / 255),
-				B: uint8(uint16(src.B) * a16 / 255),
-				A: uint8(uint16(src.A) * a16 / 255),
-			}
-			// The following call is inlined manually for performance:
-			//
-			// dstPix[x] = blend888(dstCol, srcCol)
-			{
-				dr, dg, db := rgb565.RGB565ToRGB888(dstCol)
-				a1 := uint16(255 - srcCol.A)
-				r, g, b := uint8(uint16(dr)*a1/255)+srcCol.R, uint8(uint16(dg)*a1/255)+srcCol.G, uint8(uint16(db)*a1/255)+srcCol.B
-				dstPix[x] = rgb565.RGB888ToRGB565(r, g, b)
-			}
+			a := uint32(alpha4.Val(i, maskPix[i/2]))
+			a = a * sa
+			const div = 1<<(8+4) - 1
+			a1 := div - a
+			dr := uint32(dcol >> 11)
+			dg := uint32((dcol >> 5) & 0b111111)
+			db := uint32(dcol & 0b11111)
+			rr := (sr*a + dr*a1) / div
+			rg := (sg*a + dg*a1) / div
+			rb := (sb*a + db*a1) / div
+			res := rgb565.Color(rr<<11 | rg<<5 | rb)
+			dstPix[x] = res
 		}
 	}
-}
-
-func blend888(d rgb565.Color, s color.RGBA) rgb565.Color {
-	dr, dg, db := rgb565.RGB565ToRGB888(d)
-	a1 := uint16(255 - s.A)
-	r, g, b := uint8(uint16(dr)*a1/255)+s.R, uint8(uint16(dg)*a1/255)+s.G, uint8(uint16(db)*a1/255)+s.B
-	return rgb565.RGB888ToRGB565(r, g, b)
-}
-
-func blend565(d, s rgb565.Color, a uint8) rgb565.Color {
-	dr, dg, db := rgb565.RGB565ToRGB888(d)
-	sr, sg, sb := rgb565.RGB565ToRGB888(s)
-	a1 := uint16(255 - a)
-	r, g, b := uint8(uint16(dr)*a1/255)+sr, uint8(uint16(dg)*a1/255)+sg, uint8(uint16(db)*a1/255)+sb
-	return rgb565.RGB888ToRGB565(r, g, b)
 }
