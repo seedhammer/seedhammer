@@ -26,7 +26,7 @@ should match the released images bit-for-bit, except for the signature. To copy 
 from an official release to a locally built firmware:
 
 ```sh
-$ nix run .#copy-signature <path/to/official/seedhammerii-vX.Y.Z.uf2> seedhammerii-vX.Y.Z>
+$ nix run .#copy-signature <path/to/official/seedhammerii-vX.Y.Z.uf2> <path/to/your/seedhammerii-vX.Y.Z>
 ```
 
 ## Development
