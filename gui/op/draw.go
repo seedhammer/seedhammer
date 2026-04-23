@@ -119,7 +119,7 @@ func drawAlphaUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA,
 		dstOff := dst.PixOffset(dr.Min.X, dr.Min.Y+y)
 		dstPix := dstPix[dstOff : dstOff+maxx]
 		maskOff := mask.PixOffset(maskOff.X, maskOff.Y+y)
-		for x := range maxx {
+		for x, dstCol := range dstPix {
 			i := maskOff + x
 			a := alpha4.Val(i, maskPix[i/2])
 			a16 := uint16(a)
@@ -129,7 +129,6 @@ func drawAlphaUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA,
 				B: uint8(uint16(src.B) * a16 / 255),
 				A: uint8(uint16(src.A) * a16 / 255),
 			}
-			dstCol := dstPix[x]
 			// The following call is inlined manually for performance:
 			//
 			// dstPix[x] = blend888(dstCol, srcCol)
