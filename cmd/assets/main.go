@@ -146,7 +146,7 @@ func convert(out io.Writer, r io.Reader, p string) error {
 		for _, c := range img.Palette {
 			r, g, b, a := c.RGBA()
 			rgb565 := rgb565.RGB888ToRGB565(uint8(r>>8), uint8(g>>8), uint8(b>>8))
-			data.Write([]byte{rgb565.B0, rgb565.B1, uint8(a >> 8)})
+			data.Write([]byte{byte(rgb565), byte(rgb565 >> 8), uint8(a >> 8)})
 		}
 		fmt.Fprintf(out, "paletted.Image{\n")
 		fmt.Fprintf(out, "Pix: unsafe.Slice(unsafe.StringData(%sData[:%d]), len(%[1]sData[:%[2]d])),\n", goName, start)

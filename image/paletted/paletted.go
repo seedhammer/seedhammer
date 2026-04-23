@@ -27,7 +27,7 @@ type Palette []byte
 
 func (p Palette) At(i uint8) (rgb565.Color, uint8) {
 	col := p[int(i)*3 : (int(i)+1)*3]
-	return rgb565.Color{B0: col[0], B1: col[1]}, col[2]
+	return rgb565.Color(uint16(col[0]) | uint16(col[1])<<8), col[2]
 }
 
 func (p *Image) Bounds() image.Rectangle {
