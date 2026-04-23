@@ -73,7 +73,7 @@ func (p *Image) Set(x, y int, c color.Color) {
 	panic("not implemented")
 }
 
-func (p *Image) SetRGBA64(x, y int, c color.RGBA64) {
+func (p *Image) SetAlpha4(x, y int, a byte) {
 	if !(image.Point{x, y}).In(p.Rect.Rect()) {
 		return
 	}
@@ -81,7 +81,11 @@ func (p *Image) SetRGBA64(x, y int, c color.RGBA64) {
 	a2 := p.Pix[i/2]
 	mask := byte(0b1111) << ((i & 0b1) * 4)
 	a2 &= mask
-	a := byte(c.A >> 12)
 	a <<= ((^i & 0b1) * 4)
 	p.Pix[i/2] = a2 | a
+}
+
+func (p *Image) SetRGBA64(x, y int, c color.RGBA64) {
+	a := byte(c.A >> 12)
+	p.SetAlpha4(x, y, a)
 }

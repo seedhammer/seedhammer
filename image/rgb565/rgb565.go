@@ -32,6 +32,13 @@ func (p *Image) ColorModel() color.Model {
 	return color.RGBAModel
 }
 
+func (p *Image) SetRGB565(x, y int, c Color) {
+	if !(image.Point{x, y}).In(p.Rect) {
+		return
+	}
+	p.Pix[p.PixOffset(x, y)] = c
+}
+
 func (p *Image) Set(x, y int, c color.Color) {
 	if !(image.Point{x, y}).In(p.Rect) {
 		return
