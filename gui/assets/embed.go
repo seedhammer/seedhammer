@@ -46,14 +46,6 @@ var (
 	//go:embed button-focused.bin
 	ButtonFocusedData string
 
-	CameraCorners = ninepatch.New(&paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(CameraCornersData[:3249]), len(CameraCornersData[:3249])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 57, MaxY: 57},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(CameraCornersData[3249:]), len(CameraCornersData[3249:]))),
-	})
-	//go:embed camera-corners.bin
-	CameraCornersData string
-
 	CircleFilled = &alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(CircleFilledData), len(CircleFilledData)),
 		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 13, MaxY: 13},
@@ -83,13 +75,6 @@ var (
 	//go:embed icon-back.bin
 	IconBackData string
 
-	IconBackspace = &alpha4.Image{
-		Pix:  unsafe.Slice(unsafe.StringData(IconBackspaceData), len(IconBackspaceData)),
-		Rect: alpha4.Rectangle{MinX: 7, MinY: 11, MaxX: 27, MaxY: 24},
-	}
-	//go:embed icon-backspace.bin
-	IconBackspaceData string
-
 	IconCheckmark = &alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(IconCheckmarkData), len(IconCheckmarkData)),
 		Rect: alpha4.Rectangle{MinX: 6, MinY: 8, MaxX: 29, MaxY: 26},
@@ -104,26 +89,12 @@ var (
 	//go:embed icon-discard.bin
 	IconDiscardData string
 
-	IconDot = &alpha4.Image{
-		Pix:  unsafe.Slice(unsafe.StringData(IconDotData), len(IconDotData)),
-		Rect: alpha4.Rectangle{MinX: 12, MinY: 12, MaxX: 23, MaxY: 23},
-	}
-	//go:embed icon-dot.bin
-	IconDotData string
-
 	IconEdit = &alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(IconEditData), len(IconEditData)),
 		Rect: alpha4.Rectangle{MinX: 7, MinY: 7, MaxX: 28, MaxY: 28},
 	}
 	//go:embed icon-edit.bin
 	IconEditData string
-
-	IconFlip = &alpha4.Image{
-		Pix:  unsafe.Slice(unsafe.StringData(IconFlipData), len(IconFlipData)),
-		Rect: alpha4.Rectangle{MinX: 8, MinY: 9, MaxX: 28, MaxY: 27},
-	}
-	//go:embed icon-flip.bin
-	IconFlipData string
 
 	IconHammer = &alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(IconHammerData), len(IconHammerData)),
@@ -159,13 +130,6 @@ var (
 	}
 	//go:embed icon-right.bin
 	IconRightData string
-
-	IconSkip = &alpha4.Image{
-		Pix:  unsafe.Slice(unsafe.StringData(IconSkipData), len(IconSkipData)),
-		Rect: alpha4.Rectangle{MinX: 8, MinY: 10, MaxX: 26, MaxY: 25},
-	}
-	//go:embed icon-skip.bin
-	IconSkipData string
 
 	KeyActive = ninepatch.New(&alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(KeyActiveData), len(KeyActiveData)),
@@ -208,14 +172,6 @@ var (
 	}
 	//go:embed nav-btn-secondary.bin
 	NavBtnSecondaryData string
-
-	ProgressCircle = &paletted.Image{
-		Pix:     unsafe.Slice(unsafe.StringData(ProgressCircleData[:16384]), len(ProgressCircleData[:16384])),
-		Rect:    paletted.Rectangle{MinX: 0, MinY: 0, MaxX: 128, MaxY: 128},
-		Palette: paletted.Palette(unsafe.Slice(unsafe.StringData(ProgressCircleData[16384:]), len(ProgressCircleData[16384:]))),
-	}
-	//go:embed progress-circle.bin
-	ProgressCircleData string
 
 	WarningBoxBg = ninepatch.New(&alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(WarningBoxBgData), len(WarningBoxBgData)),
