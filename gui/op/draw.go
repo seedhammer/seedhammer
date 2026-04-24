@@ -39,30 +39,7 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 			case *paletted.Image:
 				switch op {
 				case draw.Over:
-					p := src.Palette
-					maxx := dr.Dx()
-					dstPix := dst.Pix
-					srcPix := src.Pix
-					for y := 0; y < dr.Dy(); y++ {
-						dstOff := dst.PixOffset(dr.Min.X, dr.Min.Y+y)
-						dstPix := dstPix[dstOff : dstOff+maxx]
-						srcOff := src.PixOffset(pos.X, pos.Y+y)
-						srcPix := srcPix[srcOff : srcOff+maxx]
-						for x := range maxx {
-							srcCol, a := p.At(srcPix[x])
-							dstCol := dstPix[x]
-							// The following call is inlined manually:
-							//
-							// dstPix[x] = blend565(dstCol, srcCol, a)
-							{
-								dr, dg, db := rgb565.ToRGB888(dstCol)
-								sr, sg, sb := rgb565.ToRGB888(srcCol)
-								a1 := uint16(255 - a)
-								r, g, b := uint8(uint16(dr)*a1/255)+sr, uint8(uint16(dg)*a1/255)+sg, uint8(uint16(db)*a1/255)+sb
-								dstPix[x] = rgb565.FromRGB888(r, g, b)
-							}
-						}
-					}
+					drawAlphaPalettedOver(dst, dr, src, pos)
 					return
 				}
 			}
@@ -128,14 +105,44 @@ func drawAlphaUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA,
 			a := uint32(alpha4.Val(i, maskPix[i/2]))
 			const div = 0xf * 0xff
 			a1 := div - a*sa
-			dr := uint32(dcol >> 11)
-			dg := uint32((dcol >> 5) & 0b111111)
-			db := uint32(dcol & 0b11111)
+			dr, dg, db := splitRGB565(dcol)
 			rr := (sr*a + dr*a1) / div
 			rg := (sg*a + dg*a1) / div
 			rb := (sb*a + db*a1) / div
-			res := rgb565.Color(rr<<11 | rg<<5 | rb)
+			res := combineRGB565(rr, rg, rb)
 			dstPix[x] = res
 		}
 	}
+}
+
+func drawAlphaPalettedOver(dst *rgb565.Image, dr image.Rectangle, src *paletted.Image, pos image.Point) {
+	p := src.Palette
+	maxx := dr.Dx()
+	dstPix := dst.Pix
+	srcPix := src.Pix
+	for y := 0; y < dr.Dy(); y++ {
+		dstOff := dst.PixOffset(dr.Min.X, dr.Min.Y+y)
+		dstPix := dstPix[dstOff : dstOff+maxx]
+		srcOff := src.PixOffset(pos.X, pos.Y+y)
+		srcPix := srcPix[srcOff : srcOff+maxx]
+		for x, sp := range srcPix {
+			srcCol, a := p.At(sp)
+			a1 := uint32(255 - a)
+			dr, dg, db := splitRGB565(dstPix[x])
+			sr, sg, sb := splitRGB565(srcCol)
+			rr, rg, rb := dr*a1/255+sr, dg*a1/255+sg, db*a1/255+sb
+			dstPix[x] = combineRGB565(rr, rg, rb)
+		}
+	}
+}
+
+func combineRGB565(r, g, b uint32) rgb565.Color {
+	return rgb565.Color(r<<11 | g<<5 | b)
+}
+
+func splitRGB565(c rgb565.Color) (uint32, uint32, uint32) {
+	dr := uint32(c >> 11)
+	dg := uint32((c >> 5) & 0b111111)
+	db := uint32(c & 0b11111)
+	return dr, dg, db
 }
