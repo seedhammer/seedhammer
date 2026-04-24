@@ -172,18 +172,4 @@ var (
 	}
 	//go:embed nav-btn-secondary.bin
 	NavBtnSecondaryData string
-
-	WarningBoxBg = ninepatch.New(&alpha4.Image{
-		Pix:  unsafe.Slice(unsafe.StringData(WarningBoxBgData), len(WarningBoxBgData)),
-		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 27, MaxY: 15},
-	})
-	//go:embed warning-box-bg.bin
-	WarningBoxBgData string
-
-	WarningBoxBorder = ninepatch.New(&alpha4.Image{
-		Pix:  unsafe.Slice(unsafe.StringData(WarningBoxBorderData), len(WarningBoxBorderData)),
-		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 27, MaxY: 15},
-	})
-	//go:embed warning-box-border.bin
-	WarningBoxBorderData string
 )

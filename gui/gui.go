@@ -487,7 +487,7 @@ func (c *ConfirmDelay) Progress(ctx *Context) float32 {
 
 const confirmDelay = 1 * time.Second
 
-func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, title, txt string) image.Point {
+func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, title, txt string) {
 	for {
 		e, ok := w.inp.Next(ctx, ButtonFilter(Up), ButtonFilter(Down))
 		if !ok {
@@ -509,28 +509,14 @@ func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point,
 	const btnMargin = 4
 	const boxMargin = 6
 
-	op.ColorOp(ops, color.RGBA{A: theme.overlayMask})
-
-	wbbg := assets.WarningBoxBg
-	wbout := assets.WarningBoxBorder
-	ptop, pend, pbottom, pstart := wbbg.Padding()
-	r := image.Rectangle{
-		Min: image.Pt(pstart+boxMargin, ptop+boxMargin),
-		Max: image.Pt(dims.X-pend-boxMargin, dims.Y-pbottom-boxMargin),
-	}
-	box := wbbg.Add(ops, r, true)
 	op.ColorOp(ops, th.Background)
-	wbout.Add(ops, r, true)
-	op.ColorOp(ops, th.Text)
+
+	layoutTitle(ctx, ops, dims.X, th.Text, title)
 
 	btnOff := assets.NavBtnPrimary.Bounds().Dx() + btnMargin
-	titlesz := widget.Labelw(ops.Begin(), ctx.Styles.warning, dims.X-btnOff*2, th.Text, title)
-	titlew := ops.End()
-	op.Position(ops, titlew, image.Pt((dims.X-titlesz.X)/2, r.Min.Y))
-
 	bodyClip := image.Rectangle{
-		Min: image.Pt(pstart+boxMargin, ptop+titlesz.Y),
-		Max: image.Pt(dims.X-btnOff, dims.Y-pbottom-boxMargin),
+		Min: image.Pt(boxMargin, leadingSize),
+		Max: image.Pt(dims.X-btnOff, dims.Y-boxMargin),
 	}
 	bodysz := widget.Labelw(ops.Begin(), ctx.Styles.body, bodyClip.Dx(), th.Text, txt)
 	body := ops.End()
@@ -545,8 +531,6 @@ func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point,
 	}
 	op.Position(innerCtx, body, image.Pt(bodyClip.Min.X, bodyClip.Min.Y+scrollFadeDist-w.scroll))
 	fadeClip(ops, ops.End(), image.Rectangle(bodyClip))
-
-	return box.Bounds().Size()
 }
 
 func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) ConfirmResult {
