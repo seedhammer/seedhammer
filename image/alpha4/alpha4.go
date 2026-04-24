@@ -58,7 +58,7 @@ func (p *Image) AlphaAt(x, y int) color.Alpha {
 }
 
 func Val(i int, a2 byte) byte {
-	return (a2 >> ((^i & 0b1) * 4)) & 0b1111
+	return (a2 >> ((i & 0b1) * 4)) & 0b1111
 }
 
 func (p *Image) PixOffset(x, y int) int {
@@ -79,9 +79,9 @@ func (p *Image) SetAlpha4(x, y int, a byte) {
 	}
 	i := p.PixOffset(x, y)
 	a2 := p.Pix[i/2]
-	mask := byte(0b1111) << ((i & 0b1) * 4)
+	mask := byte(0b1111) << ((^i & 0b1) * 4)
 	a2 &= mask
-	a <<= ((^i & 0b1) * 4)
+	a <<= ((i & 0b1) * 4)
 	p.Pix[i/2] = a2 | a
 }
 
