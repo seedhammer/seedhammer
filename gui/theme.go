@@ -28,9 +28,9 @@ type Styles struct {
 }
 
 type Colors struct {
-	Background color.NRGBA
-	Text       color.NRGBA
-	Primary    color.NRGBA
+	Background color.RGBA
+	Text       color.RGBA
+	Primary    color.RGBA
 }
 
 var (

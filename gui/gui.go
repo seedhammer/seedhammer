@@ -155,11 +155,11 @@ type richText struct {
 	Y int
 }
 
-func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.NRGBA, str string) {
+func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.RGBA, str string) {
 	r.Addf(ops, style, width, col, "%s", str)
 }
 
-func (r *richText) Addf(ops op.Ctx, style text.Style, width int, col color.NRGBA, format string, args ...any) {
+func (r *richText) Addf(ops op.Ctx, style text.Style, width int, col color.RGBA, format string, args ...any) {
 	m := style.Face.Metrics()
 	offy := r.Y + m.Ascent.Ceil()
 	lheight := style.LineHeight()
@@ -509,7 +509,7 @@ func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point,
 	const btnMargin = 4
 	const boxMargin = 6
 
-	op.ColorOp(ops, color.NRGBA{A: theme.overlayMask})
+	op.ColorOp(ops, color.RGBA{A: theme.overlayMask})
 
 	wbbg := assets.WarningBoxBg
 	wbout := assets.WarningBoxBorder
@@ -1300,7 +1300,7 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 			col := th.Text
 			switch {
 			case !valid:
-				bgcol.A = theme.inactiveMask
+				bgcol = mulAlpha(bgcol, theme.inactiveMask)
 				col = bgcol
 			case i == k.row && j == k.col:
 				bg = assets.KeyActive
@@ -1326,6 +1326,14 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 		}
 	}
 	return k.size
+}
+
+func mulAlpha(col color.RGBA, a uint8) color.RGBA {
+	col.R = uint8(uint(col.R) * uint(a) / 255)
+	col.G = uint8(uint(col.G) * uint(a) / 255)
+	col.B = uint8(uint(col.B) * uint(a) / 255)
+	col.A = uint8(uint(col.A) * uint(a) / 255)
+	return col
 }
 
 type ChoiceScreen struct {
@@ -1606,11 +1614,11 @@ func (m *MainScreen) draw(ctx *Context, ops op.Ctx, dims image.Point) {
 	op.Position(ops, ops.End(), r.SW(shsz).Add(image.Pt(3, 0)))
 }
 
-func layoutTitle(ctx *Context, ops op.Ctx, width int, col color.NRGBA, title string) image.Rectangle {
+func layoutTitle(ctx *Context, ops op.Ctx, width int, col color.RGBA, title string) image.Rectangle {
 	return layoutTitlef(ctx, ops, width, col, "%s", title)
 }
 
-func layoutTitlef(ctx *Context, ops op.Ctx, width int, col color.NRGBA, format string, args ...any) image.Rectangle {
+func layoutTitlef(ctx *Context, ops op.Ctx, width int, col color.RGBA, format string, args ...any) image.Rectangle {
 	const margin = 8
 	sz := widget.Labelwf(ops.Begin(), ctx.Styles.title, width-2*16, col, format, args...)
 	pos := image.Pt((width-sz.X)/2, margin)
@@ -1674,7 +1682,7 @@ func layoutNavigation(ops op.Ctx, th *Colors, dims image.Point, btns ...NavButto
 		}
 		if b.Progress == 0 && pressed {
 			op.ImageOp(ops, assets.NavBtnPrimary, true)
-			op.ColorOp(ops, color.NRGBA{A: theme.activeMask})
+			op.ColorOp(ops, color.RGBA{A: theme.activeMask})
 		}
 	}
 	btnsz := assets.NavBtnPrimary.Bounds().Size()
@@ -2070,7 +2078,7 @@ func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point
 
 	style := ctx.Styles.word
 	longestPrefix := style.Measure(math.MaxInt, "24: ")
-	layoutWord := func(ops op.Ctx, col color.NRGBA, n int, word string) image.Point {
+	layoutWord := func(ops op.Ctx, col color.RGBA, n int, word string) image.Point {
 		prefix := widget.Labelf(ops.Begin(), style, col, "%d: ", n)
 		op.Position(ops, ops.End(), image.Pt(longestPrefix.X-prefix.X, 0))
 		txt := widget.Label(ops.Begin(), style, col, word)
@@ -2079,7 +2087,7 @@ func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point
 	}
 
 	y := 0
-	longest := layoutWord(op.Ctx{}, color.NRGBA{}, 24, widestWord)
+	longest := layoutWord(op.Ctx{}, color.RGBA{}, 24, widestWord)
 	r := layout.Rectangle{Max: dims}
 	navw := assets.NavBtnPrimary.Bounds().Dx()
 	list := r.Shrink(leadingSize, 0, 0, 0)
@@ -2590,12 +2598,8 @@ func (r *runtimeStats) Dump(drawTime, layoutTime time.Duration, dirty image.Rect
 	log.Writer().Write(buf)
 }
 
-func rgb(c uint32) color.NRGBA {
-	return argb(0xff000000 | c)
-}
-
-func argb(c uint32) color.NRGBA {
-	return color.NRGBA{A: uint8(c >> 24), R: uint8(c >> 16), G: uint8(c >> 8), B: uint8(c)}
+func rgb(c uint32) color.RGBA {
+	return color.RGBA{A: 0xff, R: uint8(c >> 16), G: uint8(c >> 8), B: uint8(c)}
 }
 
 func toPlate(plan engrave.Engraving, params engrave.Params) (Plate, error) {

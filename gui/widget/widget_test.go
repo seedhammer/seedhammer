@@ -16,7 +16,7 @@ func BenchmarkLayout(b *testing.B) {
 		format := "₿ %.2d%% %s %.8x %c %s %.32b"
 		args := []any{120, "Hi", 0xcafe, 'B', bytes, 0b11101100}
 		ops.Reset()
-		Labelf(ops.Context(), text.Style{Face: poppins.Bold10}, color.NRGBA{}, format, args...)
+		Labelf(ops.Context(), text.Style{Face: poppins.Bold10}, color.RGBA{}, format, args...)
 	}
 }
 

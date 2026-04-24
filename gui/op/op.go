@@ -599,19 +599,8 @@ func decodeGlyphImage(args ImageArguments) (*bitmap.Face, rune) {
 	return args.Refs[0].(*bitmap.Face), rune(args.Args[0])
 }
 
-func ColorOp(ops Ctx, col color.NRGBA) {
-	a := uint32(col.A)
-	r := uint32(col.R)
-	r *= a
-	r /= 0xff
-	g := uint32(col.G)
-	g *= a
-	g /= 0xff
-	b := uint32(col.B)
-	b *= a
-	b /= 0xff
-	a |= a << 8
-	nrgba := (r&0xff)<<24 | (g&0xff)<<16 | (b&0xff)<<8 | (a & 0xff)
+func ColorOp(ops Ctx, col color.RGBA) {
+	nrgba := uint32(col.R)<<24 | uint32(col.G)<<16 | uint32(col.B)<<8 | uint32(col.A)
 	addImageOp(ops, nil, uniformImage, imageMask, image.Rect(-1e9, -1e9, 1e9, 1e9), nil, []uint32{nrgba})
 }
 
