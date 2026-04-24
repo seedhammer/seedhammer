@@ -14,8 +14,9 @@ type Template struct {
 	padding image.Rectangle
 	src     image.RGBA64Image
 	srcb    image.Rectangle
-	img     op.Image
 }
+
+var imgGen = op.RegisterParameterizedImage(templateAt)
 
 func New(src image.RGBA64Image) *Template {
 	inner := nineBounds(src, 0, 0)
@@ -31,7 +32,6 @@ func New(src image.RGBA64Image) *Template {
 			Max: srcb.Max.Sub(image.Pt(1, 1)),
 		},
 	}
-	np.img = op.RegisterParameterizedImage(np.at)
 	return np
 }
 
@@ -92,11 +92,12 @@ func (n *Template) Bounds(r image.Rectangle) image.Rectangle {
 
 func (n *Template) Add(ops op.Ctx, r image.Rectangle, mask bool) image.Rectangle {
 	r = n.Bounds(r)
-	op.ParamImageOp(ops, n.img, mask, r, nil, nil)
+	op.ParamImageOp(ops, imgGen, mask, r, []any{n}, nil)
 	return r
 }
 
-func (n *Template) at(args op.ImageArguments, x, y int) color.RGBA64 {
+func templateAt(args op.ImageArguments, x, y int) color.RGBA64 {
+	n := args.Refs[0].(*Template)
 	x -= args.Bounds.Min.X
 	y -= args.Bounds.Min.Y
 	x += n.srcb.Min.X
