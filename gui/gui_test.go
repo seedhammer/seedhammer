@@ -476,5 +476,5 @@ func uiContains(content, str string) bool {
 	str = strings.ToLower(str)
 	txt := strings.ToLower(content)
 	clean := strings.ReplaceAll(strings.ToLower(str), " ", "")
-	return strings.Index(txt, clean) != -1
+	return strings.Contains(txt, clean)
 }

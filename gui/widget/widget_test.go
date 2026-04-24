@@ -12,7 +12,7 @@ import (
 func BenchmarkLayout(b *testing.B) {
 	bytes := any([]byte{'a', 'b'})
 	var ops op.Ops
-	for range b.N {
+	for b.Loop() {
 		format := "₿ %.2d%% %s %.8x %c %s %.32b"
 		args := []any{120, "Hi", 0xcafe, 'B', bytes, 0b11101100}
 		ops.Reset()

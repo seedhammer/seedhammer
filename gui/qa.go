@@ -66,7 +66,9 @@ func qaPlan(mm int, dims bezier.Point) engrave.Engraving {
 	return func(yield func(engrave.Command) bool) {
 		margin := 1 * mm
 		mp := bezier.Pt(margin, margin)
-		yield(engrave.Move(mp))
+		if !yield(engrave.Move(mp)) {
+			return
+		}
 		const (
 			repeats = 10
 		)
@@ -146,7 +148,6 @@ func qaPlan(mm int, dims bezier.Point) engrave.Engraving {
 			{X: 265600, Y: 0},
 			{X: 265600, Y: 0},
 		}
-		cont := true
 		for {
 			for range repeats {
 				for _, c := range rect {
@@ -163,7 +164,9 @@ func qaPlan(mm int, dims bezier.Point) engrave.Engraving {
 				}
 			}
 			for range repeats {
-				cont = cont && yield(engrave.Move(circle[0].Add(center)))
+				if !yield(engrave.Move(circle[0].Add(center))) {
+					return
+				}
 				for _, c := range circle {
 					c = c.Add(center)
 					if !yield(engrave.ControlPoint(false, c)) {
