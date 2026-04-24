@@ -29,7 +29,7 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 						for y := dr.Min.Y; y < dr.Max.Y; y++ {
 							poff := dst.PixOffset(dr.Min.X, y)
 							dstPix := dstPix[poff : poff+maxx]
-							for x := range maxx {
+							for x := range dstPix {
 								dstPix[x] = rgb
 							}
 						}
