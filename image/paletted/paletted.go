@@ -58,7 +58,7 @@ func (p *Image) RGBA64At(x, y int) color.RGBA64 {
 	}
 	i := p.PixOffset(x, y)
 	c, a := p.Palette.At(p.Pix[i])
-	r, g, b := rgb565.RGB565ToRGB888(c)
+	r, g, b := rgb565.ToRGB888(c)
 	rgba := color.RGBA{R: r, G: g, B: b, A: a}
 	r16, g16, b16, a16 := rgba.RGBA()
 	return color.RGBA64{

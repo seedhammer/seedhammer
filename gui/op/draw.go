@@ -23,7 +23,7 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 				case uniformImage.id:
 					col := colorFromArgs(src.ImageArguments)
 					if col.A == 255 || op == draw.Src {
-						rgb := rgb565.RGB888ToRGB565(col.R, col.G, col.B)
+						rgb := rgb565.FromRGB888(col.R, col.G, col.B)
 						maxx := dr.Dx()
 						dstPix := dst.Pix
 						for y := dr.Min.Y; y < dr.Max.Y; y++ {
@@ -55,11 +55,11 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 							//
 							// dstPix[x] = blend565(dstCol, srcCol, a)
 							{
-								dr, dg, db := rgb565.RGB565ToRGB888(dstCol)
-								sr, sg, sb := rgb565.RGB565ToRGB888(srcCol)
+								dr, dg, db := rgb565.ToRGB888(dstCol)
+								sr, sg, sb := rgb565.ToRGB888(srcCol)
 								a1 := uint16(255 - a)
 								r, g, b := uint8(uint16(dr)*a1/255)+sr, uint8(uint16(dg)*a1/255)+sg, uint8(uint16(db)*a1/255)+sb
-								dstPix[x] = rgb565.RGB888ToRGB565(r, g, b)
+								dstPix[x] = rgb565.FromRGB888(r, g, b)
 							}
 						}
 					}
