@@ -62,6 +62,21 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 						}
 					}
 				}
+			case roundedRectImage.id:
+				switch src := src.(type) {
+				case *genImage:
+					switch src.gen.id {
+					case uniformImage.id:
+						switch op {
+						case draw.Over:
+							bounds := mask.ImageArguments.Bounds
+							cornerRadius := int(int32(mask.Args[0]))
+							src := colorFromArgs(src.ImageArguments)
+							drawRRectUniformOver(dst, dr, src, bounds.Sub(maskOff), cornerRadius)
+							return
+						}
+					}
+				}
 			}
 		case *alpha4.Image:
 			switch src := src.(type) {
@@ -86,6 +101,31 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 		mask, maskOff,
 		op,
 	)
+}
+
+func drawRRectUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA, bounds image.Rectangle, cornerRadius int) {
+	maxx := dr.Dx()
+	dstPix := dst.Pix
+	sr := uint32(src.R>>3) * 0xff
+	sg := uint32(src.G>>2) * 0xff
+	sb := uint32(src.B>>3) * 0xff
+	sa := uint32(src.A)
+	for y := 0; y < dr.Dy(); y++ {
+		dstOff := dst.PixOffset(dr.Min.X, dr.Min.Y+y)
+		dstPix := dstPix[dstOff : dstOff+maxx]
+		for x, dcol := range dstPix {
+			a8 := roundedRectAlpha(bounds, cornerRadius, image.Pt(x, y))
+			a := uint32(a8)
+			const div = 0xff * 0xff
+			a1 := div - a*sa
+			dr, dg, db := splitRGB565(dcol)
+			rr := (sr*a + dr*a1) / div
+			rg := (sg*a + dg*a1) / div
+			rb := (sb*a + db*a1) / div
+			res := combineRGB565(rr, rg, rb)
+			dstPix[x] = res
+		}
+	}
 }
 
 func drawAlphaUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA, mask *alpha4.Image, maskOff image.Point) {

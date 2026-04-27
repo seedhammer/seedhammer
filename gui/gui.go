@@ -50,6 +50,12 @@ var ErrTooLarge = errors.New("backup: data does not fit plate")
 // engraving.
 const safetyMargin = 3
 
+const (
+	cornerRadius = 5
+	buttonPadX   = 6
+	buttonPadY   = 1
+)
+
 type Context struct {
 	Platform      Platform
 	Styles        Styles
@@ -807,8 +813,11 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 		layoutWord(ops.Begin(), selected+1, wordLabel)
 		word := ops.End()
 		r := image.Rectangle{Max: longest}
-		r.Min.Y -= 3
-		assets.ButtonFocused.Add(ops.Begin(), r, true)
+		r.Min.Y -= 3 + buttonPadY
+		r.Max.Y += buttonPadY
+		r.Min.X -= buttonPadX
+		r.Max.X += buttonPadX
+		op.RoundedRect(ops.Begin(), r, cornerRadius)
 		op.ColorOp(ops, th.Text)
 		word.Add(ops)
 		top, _ := content.CutBottom(kbdsz.Y)
@@ -859,7 +868,10 @@ func inputCodex32Flow(ctx *Context, ops op.Ctx, th *Colors) (codex32.String, boo
 		word := ops.End()
 		r := image.Rectangle{Max: frgSize}
 		r.Min.Y -= 3
-		assets.ButtonFocused.Add(ops.Begin(), r, true)
+		r.Max.Y += buttonPadY
+		r.Min.X -= buttonPadX
+		r.Max.X += buttonPadX
+		op.RoundedRect(ops.Begin(), r, cornerRadius)
 		op.ColorOp(ops, th.Text)
 		word.Add(ops)
 		top, _ := content.CutBottom(kbdsz.Y)
@@ -934,7 +946,10 @@ func inputSLIP39Flow(ctx *Context, ops op.Ctx, th *Colors, mnemonic slip39words.
 		word := ops.End()
 		r := image.Rectangle{Max: longest}
 		r.Min.Y -= 3
-		assets.ButtonFocused.Add(ops.Begin(), r, true)
+		r.Max.Y += buttonPadY
+		r.Min.X -= buttonPadX
+		r.Max.X += buttonPadX
+		op.RoundedRect(ops.Begin(), r, cornerRadius)
 		op.ColorOp(ops, th.Text)
 		word.Add(ops)
 		top, _ := content.CutBottom(kbdsz.Y)
@@ -1421,23 +1436,24 @@ func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 
 	inner := ops.Begin()
 	h := 0
-	focusBg := assets.ButtonFocused
 	for i := range s.children {
 		c := &s.children[i]
-		xoff := (maxW - c.Size.X) / 2
+		xoff := (maxW-c.Size.X)/2 + buttonPadX
 		pos := image.Pt(xoff, h)
 		txt := c.W
 		bg := image.Rectangle{Max: c.Size}
 		bg.Min.X -= xoff
 		bg.Max.X += xoff
+		bg.Min.Y -= buttonPadY
+		bg.Max.Y += buttonPadY
 		if i == s.choice {
-			focusBg.Add(inner.Begin(), bg, true)
+			op.RoundedRect(inner.Begin(), bg, cornerRadius)
 			op.ColorOp(inner, th.Text)
 			txt.Add(inner)
 			txt = inner.End()
 		}
 		op.Offset(inner, pos)
-		op.ClipOp(focusBg.Bounds(bg)).Add(inner)
+		op.ClipOp(bg).Add(inner)
 		op.InputOp(inner, &c.click)
 		op.Position(inner, txt, pos)
 		h += c.Size.Y
@@ -2100,7 +2116,10 @@ func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point
 			if i == s.selected {
 				col = th.Background
 				r.Min.Y -= 3
-				assets.ButtonFocused.Add(ops, r, true)
+				r.Max.Y += buttonPadY
+				r.Min.X -= buttonPadX
+				r.Max.X += buttonPadX
+				op.RoundedRect(ops, r, cornerRadius)
 				op.ColorOp(ops, th.Text)
 			}
 			word := strings.ToUpper(bip39.LabelFor(w))

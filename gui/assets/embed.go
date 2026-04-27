@@ -39,13 +39,6 @@ var (
 	//go:embed arrow-up.bin
 	ArrowUpData string
 
-	ButtonFocused = ninepatch.New(&alpha4.Image{
-		Pix:  unsafe.Slice(unsafe.StringData(ButtonFocusedData), len(ButtonFocusedData)),
-		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 34, MaxY: 25},
-	})
-	//go:embed button-focused.bin
-	ButtonFocusedData string
-
 	CircleFilled = &alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(CircleFilledData), len(CircleFilledData)),
 		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 13, MaxY: 13},

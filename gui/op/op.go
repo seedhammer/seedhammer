@@ -586,6 +586,42 @@ var glyphImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) 
 	return glyph.RGBA64At(x, y)
 })
 
+var roundedRectImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) color.RGBA64 {
+	bounds := args.Bounds
+	r := int(int32(args.Args[0]))
+
+	a := roundedRectAlpha(bounds, r, image.Pt(x, y))
+	return color.RGBA64{A: uint16(a)<<8 | uint16(a)}
+})
+
+func roundedRectAlpha(bounds image.Rectangle, r int, p image.Point) byte {
+	const px = 1 << 8
+	b := bounds.Size().Mul(px).Div(2)
+	r *= px
+	// Center.
+	half := image.Pt(px/2, px/2)
+	p = p.Sub(bounds.Min).Mul(px).Add(half).Sub(b)
+	if p.X < 0 {
+		p.X = -p.X
+	}
+	if p.Y < 0 {
+		p.Y = -p.Y
+	}
+	q := p.Sub(b).Add(image.Pt(r, r))
+	cq := image.Pt(max(q.X, 0), max(q.Y, 0))
+	// Approximate l = √(cq.X²+cq.Y²) using a few iterations of Heron's method.
+	S := cq.X*cq.X + cq.Y*cq.Y
+	l := 0
+	if S > 0 {
+		l = r // Initial guess.
+		l = (l + S/l) / 2
+		l = (l + S/l) / 2
+	}
+	dist := min(max(q.X, q.Y), 0.0) - r + l
+	dist = max(min(dist, px), 0)
+	return uint8(0xff * (px - dist) / px)
+}
+
 func colorFromArgs(args ImageArguments) color.RGBA {
 	nrgba := args.Args[0]
 	r := nrgba >> 24
@@ -634,6 +670,10 @@ func GlyphOp(ops Ctx, face *bitmap.Face, r rune) {
 		[]any{face},
 		[]uint32{uint32(r)},
 	)
+}
+
+func RoundedRect(ops Ctx, bounds image.Rectangle, cornerRadius int) {
+	ParamImageOp(ops, roundedRectImage, true, bounds, nil, []uint32{uint32(cornerRadius)})
 }
 
 func ParamImageOp(ops Ctx, img Image, mask bool, bounds image.Rectangle, refs []any, args []uint32) {
