@@ -51,9 +51,13 @@ var ErrTooLarge = errors.New("backup: data does not fit plate")
 const safetyMargin = 3
 
 const (
-	cornerRadius = 5
-	buttonPadX   = 6
-	buttonPadY   = 1
+	cornerRadius    = 5
+	buttonPadX      = 6
+	buttonPadY      = 1
+	keyCornerRadius = 3
+	keyLineWidth    = 1
+	keyPadX         = 3
+	keyPadY         = 4
 )
 
 type Context struct {
@@ -994,7 +998,11 @@ func NewKeyboard(ctx *Context, alphabet string) *Keyboard {
 	bsb := assets.KeyBackspace.Bounds()
 	bsWidth := bsb.Min.X*2 + bsb.Dx()
 	k.backspace = image.Pt(max(bsWidth, k.widest.X), k.widest.Y)
-	bgbnds := assets.Key.Bounds(image.Rectangle{Max: k.widest})
+	bgbnds := image.Rectangle{Max: k.widest}
+	bgbnds.Min.X -= keyPadX
+	bgbnds.Max.X += keyPadX
+	bgbnds.Min.Y -= keyPadY
+	bgbnds.Max.Y += keyPadY
 	const margin = 2
 	bgsz := bgbnds.Size().Add(image.Pt(margin, margin))
 	longest := 0
@@ -1289,7 +1297,6 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 	for i, row := range k.keys {
 		for j, key := range row {
 			valid := k.Valid(key)
-			bg := assets.Key
 			bgsz := k.widest
 			if key.r == '⌫' {
 				bgsz = k.backspace
@@ -1297,12 +1304,13 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 			bgcol := th.Text
 			style := ctx.Styles.keyboard
 			col := th.Text
+			active := false
 			switch {
 			case !valid:
 				bgcol = mulAlpha(bgcol, theme.inactiveMask)
 				col = bgcol
 			case i == k.row && j == k.col:
-				bg = assets.KeyActive
+				active = true
 				col = th.Background
 			}
 			var sz image.Point
@@ -1316,9 +1324,17 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 			}
 			key := ops.End()
 			bgr := image.Rectangle{Max: bgsz}
-			op.ClipOp(bg.Bounds(bgr)).Add(ops.Begin())
+			bgr.Min.X -= keyPadX
+			bgr.Max.X += keyPadX
+			bgr.Min.Y -= keyPadY
+			bgr.Max.Y += keyPadY
+			op.ClipOp(bgr).Add(ops.Begin())
 			op.InputOp(ops, &k.keys[i][j].clk)
-			bg.Add(ops, bgr, true)
+			if active {
+				op.RoundedRect(ops, bgr, keyCornerRadius)
+			} else {
+				op.RoundedOutline(ops, bgr, keyCornerRadius, keyLineWidth)
+			}
 			op.ColorOp(ops, bgcol)
 			op.Position(ops, key, bgsz.Sub(sz).Div(2))
 			op.Position(ops, ops.End(), k.keys[i][j].pos)

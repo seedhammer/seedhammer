@@ -594,13 +594,38 @@ var roundedRectImage = RegisterParameterizedImage(func(args ImageArguments, x, y
 	return color.RGBA64{A: uint16(a)<<8 | uint16(a)}
 })
 
-func roundedRectAlpha(bounds image.Rectangle, r int, p image.Point) byte {
-	const px = 1 << 8
-	b := bounds.Size().Mul(px).Div(2)
-	r *= px
+var roundedOutlineImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) color.RGBA64 {
+	bounds := args.Bounds
+	r := int(int32(args.Args[0]))
+	lw := int(int32(args.Args[1]))
+
+	a := roundedOutlineAlpha(bounds, r, lw, image.Pt(x, y))
+	return color.RGBA64{A: uint16(a)<<8 | uint16(a)}
+})
+
+const px = 1 << 8
+
+//go:inline
+func roundedOutlineAlpha(bounds image.Rectangle, r, lw int, p image.Point) uint8 {
+	dist := roundedRectDist(bounds, r, p)
+	outer := min(dist, px)
+	inner := min(-dist-lw, px)
+	a := 0xff * (px - max(outer, inner, 0)) / px
+	return uint8(a)
+}
+
+//go:inline
+func roundedRectAlpha(bounds image.Rectangle, r int, p image.Point) uint8 {
+	dist := roundedRectDist(bounds, r, p)
+	dist = max(min(dist, px), 0)
+	return uint8(0xff * (px - dist) / px)
+}
+
+//go:inline
+func roundedRectDist(bounds image.Rectangle, r int, p image.Point) int {
+	b := bounds.Size().Sub(image.Pt(1, 1)).Mul(px).Div(2)
 	// Center.
-	half := image.Pt(px/2, px/2)
-	p = p.Sub(bounds.Min).Mul(px).Add(half).Sub(b)
+	p = p.Sub(bounds.Min).Mul(px).Sub(b)
 	if p.X < 0 {
 		p.X = -p.X
 	}
@@ -613,13 +638,11 @@ func roundedRectAlpha(bounds image.Rectangle, r int, p image.Point) byte {
 	S := cq.X*cq.X + cq.Y*cq.Y
 	l := 0
 	if S > 0 {
-		l = r // Initial guess.
+		l = 1 + r // Initial guess.
 		l = (l + S/l) / 2
 		l = (l + S/l) / 2
 	}
-	dist := min(max(q.X, q.Y), 0.0) - r + l
-	dist = max(min(dist, px), 0)
-	return uint8(0xff * (px - dist) / px)
+	return min(max(q.X, q.Y), 0) - r + l
 }
 
 func colorFromArgs(args ImageArguments) color.RGBA {
@@ -672,8 +695,15 @@ func GlyphOp(ops Ctx, face *bitmap.Face, r rune) {
 	)
 }
 
+func RoundedOutline(ops Ctx, bounds image.Rectangle, cornerRadius, lineWidth int) {
+	r := cornerRadius * px
+	lw := (lineWidth - 1) * px
+	ParamImageOp(ops, roundedOutlineImage, true, bounds, nil, []uint32{uint32(r), uint32(lw)})
+}
+
 func RoundedRect(ops Ctx, bounds image.Rectangle, cornerRadius int) {
-	ParamImageOp(ops, roundedRectImage, true, bounds, nil, []uint32{uint32(cornerRadius)})
+	r := cornerRadius * px
+	ParamImageOp(ops, roundedRectImage, true, bounds, nil, []uint32{uint32(r)})
 }
 
 func ParamImageOp(ops Ctx, img Image, mask bool, bounds image.Rectangle, refs []any, args []uint32) {

@@ -6,7 +6,6 @@ import (
 	"unsafe"
 
 	"seedhammer.com/image/alpha4"
-	"seedhammer.com/image/ninepatch"
 	"seedhammer.com/image/paletted"
 )
 
@@ -124,26 +123,12 @@ var (
 	//go:embed icon-right.bin
 	IconRightData string
 
-	KeyActive = ninepatch.New(&alpha4.Image{
-		Pix:  unsafe.Slice(unsafe.StringData(KeyActiveData), len(KeyActiveData)),
-		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 8, MaxY: 14},
-	})
-	//go:embed key-active.bin
-	KeyActiveData string
-
 	KeyBackspace = &alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(KeyBackspaceData), len(KeyBackspaceData)),
 		Rect: alpha4.Rectangle{MinX: 2, MinY: 0, MaxX: 19, MaxY: 11},
 	}
 	//go:embed key-backspace.bin
 	KeyBackspaceData string
-
-	Key = ninepatch.New(&alpha4.Image{
-		Pix:  unsafe.Slice(unsafe.StringData(KeyData), len(KeyData)),
-		Rect: alpha4.Rectangle{MinX: 0, MinY: 0, MaxX: 8, MaxY: 14},
-	})
-	//go:embed key.bin
-	KeyData string
 
 	LogoSmall = &alpha4.Image{
 		Pix:  unsafe.Slice(unsafe.StringData(LogoSmallData), len(LogoSmallData)),

@@ -42,7 +42,7 @@ func run() error {
 	fmt.Fprintf(out, "_ \"embed\"\n")
 	fmt.Fprintf(out, "\"unsafe\"\n\n")
 	fmt.Fprintf(out, "\"seedhammer.com/image/alpha4\"\n")
-	fmt.Fprintf(out, "\"seedhammer.com/image/ninepatch\"\n")
+	// fmt.Fprintf(out, "\"seedhammer.com/image/ninepatch\"\n")
 	fmt.Fprintf(out, "\"seedhammer.com/image/paletted\"\n\n")
 	fmt.Fprintf(out, ")\n\n")
 	fmt.Fprintf(out, "var (\n")
