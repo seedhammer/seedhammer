@@ -93,7 +93,7 @@ func TestAllocs(t *testing.T) {
 func dumpUI(t testing.TB, ops *op.Ops, path string) {
 	t.Helper()
 	clip := image.Rectangle{Max: image.Pt(testDisplayDim, testDisplayDim)}
-	fb := image.NewNRGBA(clip)
+	fb := rgb565.New(clip)
 	maskfb := image.NewAlpha(clip)
 	ops.Draw(fb, maskfb)
 	buf := new(bytes.Buffer)
