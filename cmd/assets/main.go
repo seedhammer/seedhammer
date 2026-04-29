@@ -42,7 +42,6 @@ func run() error {
 	fmt.Fprintf(out, "_ \"embed\"\n")
 	fmt.Fprintf(out, "\"unsafe\"\n\n")
 	fmt.Fprintf(out, "\"seedhammer.com/image/alpha4\"\n")
-	// fmt.Fprintf(out, "\"seedhammer.com/image/ninepatch\"\n")
 	fmt.Fprintf(out, "\"seedhammer.com/image/paletted\"\n\n")
 	fmt.Fprintf(out, ")\n\n")
 	fmt.Fprintf(out, "var (\n")
@@ -110,11 +109,6 @@ func convert(out io.Writer, r io.Reader, p string) error {
 		img = pimg
 	}
 	name := p[:len(p)-len(filepath.Ext(p))]
-	ninePatchPrefix, ninePatchSuffix := "", ""
-	if ext := filepath.Ext(name); ext == ".9" {
-		name = name[:len(name)-len(ext)]
-		ninePatchPrefix, ninePatchSuffix = "ninepatch.New(", ")"
-	}
 	if ext := filepath.Ext(name); ext == ".alpha" {
 		name = name[:len(name)-len(ext)]
 		switch src := img.(type) {
@@ -132,7 +126,7 @@ func convert(out io.Writer, r io.Reader, p string) error {
 		}
 	}
 	goName := filenameToGoName(name)
-	fmt.Fprintf(out, "%s = %s&", goName, ninePatchPrefix)
+	fmt.Fprintf(out, "%s = &", goName)
 	data := new(bytes.Buffer)
 	switch img := img.(type) {
 	case *image.Paletted:
@@ -166,7 +160,7 @@ func convert(out io.Writer, r io.Reader, p string) error {
 	default:
 		return fmt.Errorf("unsupported image format: %T\n", img)
 	}
-	fmt.Fprintf(out, "%s\n", ninePatchSuffix)
+	fmt.Fprintln(out)
 	binName := fmt.Sprintf("%s.bin", name)
 	fmt.Fprintf(out, "//go:embed %s\n", binName)
 	fmt.Fprintf(out, "%sData string\n\n", goName)
