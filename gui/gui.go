@@ -779,7 +779,6 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 			if completedWord, complete := completeBIP39Word(wordLabel, nvalid); complete {
 				wordLabel = bip39.LabelFor(completedWord)
 			}
-			wordLabel = strings.ToUpper(wordLabel)
 		}
 		if backBtn.Clicked(ctx) {
 			return
@@ -841,13 +840,11 @@ func inputCodex32Flow(ctx *Context, ops op.Ctx, th *Colors) (codex32.String, boo
 	kbd := NewKeyboard(ctx, alph)
 	backBtn := &Clickable{Button: Button1}
 	okBtn := &Clickable{Button: Button2}
-	frag := ""
 	var share codex32.String
 	valid := false
 	for !ctx.Done {
 		for kbd.Update(ctx) {
-			frag = strings.ToUpper(kbd.Fragment)
-			s, err := codex32.New(frag)
+			s, err := codex32.New(kbd.Fragment)
 			share, valid = s, err == nil
 		}
 		if backBtn.Clicked(ctx) {
@@ -867,7 +864,7 @@ func inputCodex32Flow(ctx *Context, ops op.Ctx, th *Colors) (codex32.String, boo
 		kbdsz := kbd.Layout(ctx, ops.Begin(), th)
 		op.Position(ops, ops.End(), content.S(kbdsz))
 
-		frgSize := widget.Labelw(ops.Begin(), ctx.Styles.word, dims.X-50, th.Background, frag)
+		frgSize := widget.Labelw(ops.Begin(), ctx.Styles.word, dims.X-50, th.Background, kbd.Fragment)
 		frgSize.X = max(frgSize.X, 100)
 		word := ops.End()
 		r := image.Rectangle{Max: frgSize}
@@ -911,7 +908,6 @@ func inputSLIP39Flow(ctx *Context, ops op.Ctx, th *Colors, mnemonic slip39words.
 			if completedWord, complete := completeSLIP39Word(wordLabel, nvalid); complete {
 				wordLabel = slip39words.LabelFor(completedWord)
 			}
-			wordLabel = strings.ToUpper(wordLabel)
 		}
 		if backBtn.Clicked(ctx) {
 			break
@@ -1083,7 +1079,7 @@ func updateValidBIP39Keys(frag string, keys []keyboardKey) int {
 		nvalid++
 		suffix := bip39w[len(frag):]
 		if len(suffix) > 0 {
-			idx := suffix[0] - 'a'
+			idx := unicode.ToLower(rune(suffix[0])) - 'a'
 			mask &^= 1 << idx
 		}
 	}
@@ -1109,7 +1105,7 @@ func updateValidSLIP39Keys(frag string, keys []keyboardKey) int {
 		nvalid++
 		suffix := bip39w[len(frag):]
 		if len(suffix) > 0 {
-			idx := suffix[0] - 'a'
+			idx := unicode.ToLower(rune(suffix[0])) - 'a'
 			mask &^= 1 << idx
 		}
 	}
@@ -1235,7 +1231,7 @@ func (k *Keyboard) rune() {
 		_, n := utf8.DecodeLastRuneInString(k.Fragment)
 		k.Fragment = k.Fragment[:len(k.Fragment)-n]
 	} else {
-		k.Fragment = k.Fragment + string(r)
+		k.Fragment = k.Fragment + string(unicode.ToUpper(r))
 	}
 }
 
@@ -2138,7 +2134,7 @@ func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point
 				op.RoundedRect(ops, r, cornerRadius)
 				op.ColorOp(ops, th.Text)
 			}
-			word := strings.ToUpper(bip39.LabelFor(w))
+			word := bip39.LabelFor(w)
 			layoutWord(ops, col, i+1, word)
 			op.ClipOp(r).Add(ops)
 			op.InputOp(ops, &s.words[i])

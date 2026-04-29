@@ -3,6 +3,7 @@
 package nonstandard
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/binary"
@@ -23,7 +24,7 @@ func ElectrumSeed(phrase string) bool {
 	// Compute version number.
 	// From https://electrum.readthedocs.io/en/latest/seedphrase.html#version-number
 	mac := hmac.New(sha512.New, []byte("Seed version"))
-	mac.Write([]byte(phrase))
+	mac.Write(bytes.ToLower([]byte(phrase)))
 	hsum := hex.EncodeToString(mac.Sum(nil))
 	switch {
 	case strings.HasPrefix(hsum, "01"), strings.HasPrefix(hsum, "100"), strings.HasPrefix(hsum, "101"):

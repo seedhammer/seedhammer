@@ -50,7 +50,7 @@ func generate() error {
 	fmt.Fprintf(buf, "const LongestWord = %d\n\n", longest)
 	fmt.Fprintf(buf, "const words = \"")
 	for w := range bytes.SplitSeq(words, []byte("\n")) {
-		buf.Write(w)
+		buf.Write(bytes.ToUpper(w))
 	}
 	fmt.Fprintf(buf, "\"\n\n")
 	formatted, err := format.Source(buf.Bytes())

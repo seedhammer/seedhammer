@@ -193,7 +193,7 @@ func TestConstantFont(t *testing.T) {
 func TestConstantWords(t *testing.T) {
 	const em = 1000
 	s := NewConstantStringer(constant.Font, params(), em)
-	w := strings.ToUpper(bip39.LabelFor(bip39.Word(0)))
+	w := bip39.LabelFor(bip39.Word(0))
 	plan := func(yield func(Command) bool) {
 		s.PaddedString(yield, w, bip39.ShortestWord, bip39.LongestWord)
 	}
@@ -201,7 +201,7 @@ func TestConstantWords(t *testing.T) {
 	for w := bip39.Word(1); w < bip39.NumWords; w++ {
 		t.Run(bip39.LabelFor(w), func(t *testing.T) {
 			t.Parallel()
-			w := strings.ToUpper(bip39.LabelFor(w))
+			w := bip39.LabelFor(w)
 			cmd := func(yield func(Command) bool) {
 				s.PaddedString(yield, w, bip39.ShortestWord, bip39.LongestWord)
 			}

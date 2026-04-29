@@ -2,6 +2,7 @@ package nonstandard
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"seedhammer.com/bip380"
@@ -133,5 +134,8 @@ func TestElectrumSeed(t *testing.T) {
 	phrase := "head orient raw shoulder size fancy front cycle lamp giant camera jacket"
 	if !ElectrumSeed(phrase) {
 		t.Fatal("failed to detect Electrum seed")
+	}
+	if !ElectrumSeed(strings.ToUpper(phrase)) {
+		t.Fatal("failed to detect upper-case Electrum seed")
 	}
 }

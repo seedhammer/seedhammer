@@ -117,7 +117,7 @@ func engraveSeedString(params engrave.Params, plate SeedString, qrc *engrave.Con
 		innerMargin := params.I(innerMargin)
 		metaMargin := params.I(4)
 		if plate.MasterFingerprint != 0 {
-			mfp := strings.ToUpper(fmt.Sprintf("%.8x", plate.MasterFingerprint))
+			mfp := fmt.Sprintf("%.8X", plate.MasterFingerprint)
 			offy := (plateDims.Y-col1Height)/2 - metaMargin
 			mfpStr := engrave.String(plate.Font, params.F(plateSmallFontSize), mfp)
 			mfpszX, mfpszY := mfpStr.Measure()
@@ -179,7 +179,7 @@ func frontSideSeed(params engrave.Params, plate Seed, qrc *engrave.ConstantQRCmd
 		innerMargin := params.I(innerMargin)
 		metaMargin := params.I(4)
 		if plate.MasterFingerprint != 0 {
-			mfp := strings.ToUpper(fmt.Sprintf("%.8x", plate.MasterFingerprint))
+			mfp := fmt.Sprintf("%.8X", plate.MasterFingerprint)
 			offy := (plateDims.Y-col1Height)/2 - metaMargin
 			mfpStr := engrave.String(plate.Font, params.F(plateSmallFontSize), mfp)
 			mfpszX, mfpszY := mfpStr.Measure()
