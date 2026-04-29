@@ -139,7 +139,8 @@ func (o *Ctx) Begin() Ctx {
 	if o.ops == nil {
 		return Ctx{}
 	}
-	o.add(opBegin)
+	// The end indices are filled in by Ctx.End.
+	o.add(opBegin, 0, 0)
 	o.beginIdx = opCursor{
 		op:  len(o.ops.frame.args),
 		ref: len(o.ops.frame.refs),
@@ -155,6 +156,9 @@ func (o *Ctx) End() CallOp {
 		panic("End without a Begin")
 	}
 	o.add(opEnd)
+	// Fill in opBegin indices.
+	o.ops.frame.args[o.beginIdx.op-2] = uint32(len(o.ops.frame.args))
+	o.ops.frame.args[o.beginIdx.op-1] = uint32(len(o.ops.frame.refs))
 	call := CallOp{start: o.beginIdx}
 	o.beginIdx = opCursor{}
 	return call
@@ -346,7 +350,6 @@ func (it *frameIter) resetState() {
 func (it *frameIter) Next(f frame) (frameIterElem, bool) {
 outer:
 	for {
-		macros := 0
 		istate := &it.stack[len(it.stack)-1]
 		ops := f.args[istate.cur.op:]
 		refs := f.refs[istate.cur.ref:]
@@ -356,30 +359,24 @@ outer:
 			nrefs := (opnargs >> 8) & 0xf
 			nargs := opnargs >> 16
 			args := ops[1 : 1+nargs]
+			switch op {
+			case opBegin:
+				// Skip interleaved macro.
+				istate.cur = opCursor{
+					op:  int(int32(args[0])),
+					ref: int(int32(args[1])),
+				}
+				continue outer
+			case opEnd:
+				it.stack = it.stack[:len(it.stack)-1]
+				it.resetState()
+				continue outer
+			}
 			istate.cur.op += int(1 + nargs)
 			istate.cur.ref += int(nrefs)
 			ops = ops[1+nargs:]
-			switch op {
-			case opBegin:
-				macros++
-				continue
-			case opEnd:
-				if macros == 0 {
-					it.stack = it.stack[:len(it.stack)-1]
-					istate = &it.stack[len(it.stack)-1]
-					ops = f.args[istate.cur.op:]
-					refs = f.refs[istate.cur.ref:]
-					it.resetState()
-				} else {
-					macros--
-				}
-				continue
-			}
 			rargs := refs[:nrefs]
 			refs = refs[nrefs:]
-			if macros > 0 {
-				continue
-			}
 			switch op {
 			case opOffset:
 				off := image.Point{X: int(int32(args[0])), Y: int(int32(args[1]))}
