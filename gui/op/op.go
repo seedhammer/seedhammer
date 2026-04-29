@@ -13,10 +13,7 @@ type Ops struct {
 	maskStack []frameOp
 	inputs    []inputOp
 	frame     frame
-	prevFrame frame
 	fiter     frameIter
-	fiterPrev frameIter
-	fiterScan frameIter
 
 	scratch struct {
 		image     scratchImage
@@ -168,7 +165,6 @@ func (o *Ops) Context() Ctx {
 }
 
 func (o *Ops) Reset() {
-	o.frame, o.prevFrame = o.prevFrame, o.frame
 	o.frame.Reset()
 	o.inputs = o.inputs[:0]
 }
@@ -224,13 +220,8 @@ func (o *Ops) Hit(p image.Point) (Tag, image.Rectangle, bool) {
 	return nil, image.Rectangle{}, false
 }
 
-func (o *Ops) Clip(dst image.Rectangle) image.Rectangle {
+func (o *Ops) Clip(dst image.Rectangle) {
 	o.fiter.Reset(dst.Bounds())
-	fiterPrev, fiterScan := &o.fiterPrev, &o.fiterScan
-	fiterPrev.Reset(dst.Bounds())
-	prevOp, _ := o.fiterPrev.Scan(o.prevFrame, opImage)
-	clip := image.Rectangle{}
-loop:
 	for {
 		fop, ok := o.fiter.Next(o.frame)
 		if !ok {
@@ -239,88 +230,8 @@ loop:
 		switch fop.Op {
 		case opInput:
 			o.inputs = append(o.inputs, fop.Input)
-		case opImage:
-			// Scan previous frame for matching operation.
-			// Limit scan distance to dodge O(n²).
-			const scanMax = 10
-			scanned := 0
-			// prevClip collects unmatched clip rectangles.
-			prevClip := image.Rectangle{}
-			fiterPrev.Clone(fiterScan)
-			scanOp := prevOp
-			for scanned < scanMax {
-				if opsEqual(fop, scanOp) {
-					// Match found; add interim unmatched clip areas and
-					// advance the previous frame.
-					clip = clip.Union(prevClip)
-					fiterPrev, fiterScan = fiterScan, fiterPrev
-					prevOp, _ = fiterPrev.Scan(o.prevFrame, opImage)
-					continue loop
-				}
-				// Count the ops matched by opsEqual.
-				scanned += len(scanOp.ImageStack)
-				prevClip = prevClip.Union(scanOp.Clip)
-				scanOp, ok = fiterScan.Scan(o.prevFrame, opImage)
-				if !ok {
-					break
-				}
-			}
-			// No match found.
-			clip = clip.Union(fop.Clip)
 		}
 	}
-	clip = clip.Union(prevOp.Clip)
-	// Add remaining ops from the previous frame.
-	for {
-		fop, ok := fiterPrev.Next(o.prevFrame)
-		if !ok {
-			break
-		}
-		clip = clip.Union(fop.Clip)
-	}
-	return clip
-}
-
-func opsEqual(op1, op2 frameIterElem) bool {
-	if len(op1.ImageStack) != len(op2.ImageStack) || op1.Clip != op2.Clip {
-		return false
-	}
-	for i, op1 := range op1.ImageStack {
-		if !opEqual(op1, op2.ImageStack[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func opEqual(op1, op2 frameOp) bool {
-	if op1.pos != op2.pos {
-		return false
-	}
-	iop1, iop2 := op1.op, op2.op
-	if len(iop1.Args) != len(iop2.Args) {
-		return false
-	}
-	if len(iop1.Refs) != len(iop2.Refs) {
-		return false
-	}
-	for i, a := range iop1.Args {
-		if a != iop2.Args[i] {
-			return false
-		}
-	}
-	for i, r := range iop1.Refs {
-		if r != iop2.Refs[i] {
-			return false
-		}
-	}
-	if iop1.src != iop2.src {
-		return false
-	}
-	if iop1.gen.id != iop2.gen.id {
-		return false
-	}
-	return true
 }
 
 func (o *Ops) Draw(dst draw.Image, maskfb draw.Image) {
@@ -409,11 +320,6 @@ type iterState struct {
 	cur   opCursor
 }
 
-func (it *frameIter) Clone(dst *frameIter) {
-	dst.stack = append(dst.stack[:0], it.stack...)
-	dst.maskStack = append(dst.maskStack[:0], it.maskStack...)
-}
-
 func (it *frameIter) Reset(dst image.Rectangle) {
 	it.stack = it.stack[:0]
 	it.maskStack = it.maskStack[:0]
@@ -435,15 +341,6 @@ func (it *frameIter) resetState() {
 	istate := &it.stack[len(it.stack)-1]
 	istate.state = it.stack[len(it.stack)-2].state
 	it.maskStack = it.maskStack[:0]
-}
-
-func (it *frameIter) Scan(f frame, t opType) (frameIterElem, bool) {
-	for {
-		fop, ok := it.Next(f)
-		if !ok || fop.Op == t {
-			return fop, ok
-		}
-	}
 }
 
 func (it *frameIter) Next(f frame) (frameIterElem, bool) {
