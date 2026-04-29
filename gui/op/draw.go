@@ -115,9 +115,9 @@ func drawAlphaUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA,
 	maxx := dr.Dx()
 	dstPix := dst.Pix
 	maskPix := mask.Pix
-	sr := uint32(src.R >> 3)
-	sg := uint32(src.G >> 2)
-	sb := uint32(src.B >> 3)
+	sr := uint32(src.R>>3) * 0xff
+	sg := uint32(src.G>>2) * 0xff
+	sb := uint32(src.B>>3) * 0xff
 	sa := uint32(src.A)
 	for y := 0; y < dr.Dy(); y++ {
 		dstOff := dst.PixOffset(dr.Min.X, dr.Min.Y+y)
@@ -126,9 +126,8 @@ func drawAlphaUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA,
 		for x, dcol := range dstPix {
 			i := maskOff + x
 			a := uint32(alpha4.Val(i, maskPix[i/2]))
-			a = a * sa
-			const div = 1<<(8+4) - 1
-			a1 := div - a
+			const div = 0xf * 0xff
+			a1 := div - a*sa
 			dr := uint32(dcol >> 11)
 			dg := uint32((dcol >> 5) & 0b111111)
 			db := uint32(dcol & 0b11111)
