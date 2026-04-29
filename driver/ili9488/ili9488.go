@@ -46,8 +46,6 @@ func New(dc, cs, rst, wrx, rdx, db0, te machine.Pin, pio *rp.PIO0_Type) (*Device
 	}, nil
 }
 
-const MaxDrawSize = 4096
-
 const pioStateMachine = 0
 
 func (d *Device) Configure(c Config) error {

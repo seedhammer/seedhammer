@@ -238,8 +238,10 @@ func Init() (*Platform, error) {
 		go home()
 	}
 
+	const framebuffer = lcdHeight / 6 * lcdWidth * 2
+
 	for i := range p.display.buffers {
-		p.display.buffers[i] = make([][2]byte, ili9488.MaxDrawSize/int(unsafe.Sizeof([2]byte{})))
+		p.display.buffers[i] = make([][2]byte, framebuffer/2/len(p.display.buffers))
 	}
 	sb, err := isSecureBootEnabled()
 	if err == nil && sb {
