@@ -22,27 +22,32 @@ func Labelf(ops op.Ctx, l text.Style, col color.RGBA, txt string, args ...any) i
 }
 
 func Labelwf(ops op.Ctx, st text.Style, width int, col color.RGBA, format string, args ...any) image.Point {
-	sz := st.Measure(width, format, args...)
 	m := st.Face.Metrics()
 	lheight := st.LineHeight()
-	offy := m.Ascent.Ceil()
 	l := &text.Layout{
-		MaxWidth: sz.X,
+		MaxWidth: width,
 		Style:    st,
 	}
+	minx, maxx := math.MaxInt, math.MinInt
+	y := m.Ascent.Ceil()
+	ops.Begin()
 	for {
 		g, ok := l.Next(format, args...)
 		if !ok {
 			break
 		}
+		minx = min(minx, g.Dot.Floor())
+		maxx = max(maxx, (g.Dot + g.Advance).Ceil())
 		if g.Rune == '\n' {
-			offy += lheight
+			y += lheight
 			continue
 		}
-		off := image.Pt(g.Dot.Round(), offy)
+		off := image.Pt(g.Dot.Round(), y)
 		op.Offset(ops, off)
 		op.GlyphOp(ops, st.Face, g.Rune)
 		op.ColorOp(ops, col)
 	}
-	return sz
+	// Adjust the text body to the origin.
+	op.Position(ops, ops.End(), image.Pt(-minx, 0))
+	return image.Pt(maxx-minx, y+m.Descent.Ceil())
 }

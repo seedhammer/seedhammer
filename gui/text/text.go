@@ -32,6 +32,19 @@ const (
 	AlignCenter
 )
 
+func (a Alignment) String() string {
+	switch a {
+	case AlignCenter:
+		return "center"
+	case AlignEnd:
+		return "end"
+	case AlignStart:
+		return "start"
+	default:
+		panic("invalid alignment")
+	}
+}
+
 func (l Style) LineHeight() int {
 	lheight := l.Face.Metrics().Height.Ceil()
 	if l.LineHeightScale != 0 {
