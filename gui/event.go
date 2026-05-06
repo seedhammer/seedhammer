@@ -198,8 +198,8 @@ func (p PointerEvent) Event() Event {
 	if p.Entered {
 		e.data[0] |= enteredBit
 	}
-	e.data[1] = uint32(int32(p.Pos.X))
-	e.data[2] = uint32(int32(p.Pos.Y))
+	e.data[1] = uint32(p.Pos.X)
+	e.data[2] = uint32(p.Pos.Y)
 	return e
 }
 

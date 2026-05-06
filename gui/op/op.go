@@ -556,7 +556,7 @@ func decodeRect(args []uint32) image.Rectangle {
 
 func Offset(ops Ctx, off image.Point) {
 	ops.add(opOffset,
-		uint32(int32(off.X)), uint32(int32(off.Y)),
+		uint32(off.X), uint32(off.Y),
 	)
 }
 
@@ -569,8 +569,8 @@ type ClipOp image.Rectangle
 
 func (c ClipOp) Add(ops Ctx) {
 	ops.add(opClip,
-		uint32(int32(c.Min.X)), uint32(int32(c.Min.Y)),
-		uint32(int32(c.Max.X)), uint32(int32(c.Max.Y)),
+		uint32(c.Min.X), uint32(c.Min.Y),
+		uint32(c.Max.X), uint32(c.Max.Y),
 	)
 }
 
@@ -701,8 +701,8 @@ func addImageOp(ops Ctx, src image.Image, img Image, mask maskType, bounds image
 		encodeCmdHeader(opImage, nargs, nrefs),
 		uint32(mask),
 		uint32(img.id),
-		uint32(int32(b.Min.X)), uint32(int32(b.Min.Y)),
-		uint32(int32(b.Max.X)), uint32(int32(b.Max.Y)),
+		uint32(b.Min.X), uint32(b.Min.Y),
+		uint32(b.Max.X), uint32(b.Max.Y),
 	)
 	ops.ops.frame.appendArgs(args...)
 	ops.ops.frame.appendRefs(src, img.gen)
@@ -715,6 +715,6 @@ type CallOp struct {
 
 func (c CallOp) Add(ops Ctx) {
 	if c.start != (opCursor{}) {
-		ops.add(opCall, uint32(int32(c.start.op)), uint32(int32(c.start.ref)))
+		ops.add(opCall, uint32(c.start.op), uint32(c.start.ref))
 	}
 }
