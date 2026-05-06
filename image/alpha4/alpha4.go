@@ -33,7 +33,9 @@ func Rect(r image.Rectangle) Rectangle {
 	}
 }
 
-func (p *Image) ColorModel() color.Model { panic("not implemented") }
+func (p *Image) ColorModel() color.Model {
+	return color.AlphaModel
+}
 
 func (p *Image) Bounds() image.Rectangle { return p.Rect.Rect() }
 
