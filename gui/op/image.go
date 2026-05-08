@@ -13,13 +13,13 @@ type rgbaUniform struct {
 }
 
 type roundedRect struct {
-	bounds image.Rectangle
-	r      int
+	sz image.Point
+	r  int
 }
 
 type roundedOutline struct {
-	bounds image.Rectangle
-	r, lw  int
+	sz    image.Point
+	r, lw int
 }
 
 type glyph struct {
@@ -49,9 +49,12 @@ var uniformImage = RegisterParameterizedImage(func() ParameterizedImage {
 var roundedOutlineImage = RegisterParameterizedImage(func() ParameterizedImage {
 	img := new(roundedOutline)
 	return func(args ImageArguments) image.Image {
-		img.bounds = args.Bounds
-		img.r = int(int32(args.Args[0]))
-		img.lw = int(int32(args.Args[1]))
+		img.sz = image.Point{
+			X: int(int32(args.Args[0])),
+			Y: int(int32(args.Args[1])),
+		}
+		img.r = int(int32(args.Args[2]))
+		img.lw = int(int32(args.Args[3]))
 		return img
 	}
 })
@@ -59,8 +62,11 @@ var roundedOutlineImage = RegisterParameterizedImage(func() ParameterizedImage {
 var roundedRectImage = RegisterParameterizedImage(func() ParameterizedImage {
 	img := new(roundedRect)
 	return func(args ImageArguments) image.Image {
-		img.bounds = args.Bounds
-		img.r = int(int32(args.Args[0]))
+		img.sz = image.Point{
+			X: int(int32(args.Args[0])),
+			Y: int(int32(args.Args[1])),
+		}
+		img.r = int(int32(args.Args[2]))
 		return img
 	}
 })
@@ -86,16 +92,16 @@ func (img *roundedOutline) ColorModel() color.Model {
 }
 
 func (img *roundedOutline) Bounds() image.Rectangle {
-	return img.bounds
+	return image.Rectangle{Max: img.sz}
 }
 
 func (img *roundedOutline) At(x, y int) color.Color {
-	a := roundedOutlineAlpha(img.bounds, img.r, img.lw, image.Pt(x, y))
+	a := roundedOutlineAlpha(img.sz, img.r, img.lw, image.Pt(x, y))
 	return color.Alpha{A: a}
 }
 
 func (img *roundedOutline) RGBA64At(x, y int) color.RGBA64 {
-	a := roundedOutlineAlpha(img.bounds, img.r, img.lw, image.Pt(x, y))
+	a := roundedOutlineAlpha(img.sz, img.r, img.lw, image.Pt(x, y))
 	return color.RGBA64{A: uint16(a)<<8 | uint16(a)}
 }
 
@@ -104,16 +110,16 @@ func (img *roundedRect) ColorModel() color.Model {
 }
 
 func (img *roundedRect) Bounds() image.Rectangle {
-	return img.bounds
+	return image.Rectangle{Max: img.sz}
 }
 
 func (img *roundedRect) At(x, y int) color.Color {
-	a := roundedRectAlpha(img.bounds, img.r, image.Pt(x, y))
+	a := roundedRectAlpha(img.sz, img.r, image.Pt(x, y))
 	return color.Alpha{A: a}
 }
 
 func (img *roundedRect) RGBA64At(x, y int) color.RGBA64 {
-	a := roundedRectAlpha(img.bounds, img.r, image.Pt(x, y))
+	a := roundedRectAlpha(img.sz, img.r, image.Pt(x, y))
 	return color.RGBA64{A: uint16(a)<<8 | uint16(a)}
 }
 
@@ -139,8 +145,8 @@ func (c *rgbaUniform) Opaque() bool {
 const px = 1 << 8
 
 //go:inline
-func roundedOutlineAlpha(bounds image.Rectangle, r, lw int, p image.Point) uint8 {
-	dist := roundedRectDist(bounds, r, p)
+func roundedOutlineAlpha(sz image.Point, r, lw int, p image.Point) uint8 {
+	dist := roundedRectDist(sz, r, p)
 	outer := min(dist, px)
 	inner := min(-dist-lw, px)
 	a := 0xff * (px - max(outer, inner, 0)) / px
@@ -148,17 +154,17 @@ func roundedOutlineAlpha(bounds image.Rectangle, r, lw int, p image.Point) uint8
 }
 
 //go:inline
-func roundedRectAlpha(bounds image.Rectangle, r int, p image.Point) uint8 {
-	dist := roundedRectDist(bounds, r, p)
+func roundedRectAlpha(sz image.Point, r int, p image.Point) uint8 {
+	dist := roundedRectDist(sz, r, p)
 	dist = max(min(dist, px), 0)
 	return uint8(0xff * (px - dist) / px)
 }
 
 //go:inline
-func roundedRectDist(bounds image.Rectangle, r int, p image.Point) int {
-	b := bounds.Size().Sub(image.Pt(1, 1)).Mul(px).Div(2)
+func roundedRectDist(sz image.Point, r int, p image.Point) int {
+	b := sz.Sub(image.Pt(1, 1)).Mul(px).Div(2)
 	// Center.
-	p = p.Sub(bounds.Min).Mul(px).Sub(b)
+	p = p.Mul(px).Sub(b)
 	if p.X < 0 {
 		p.X = -p.X
 	}

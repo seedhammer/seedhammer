@@ -22,9 +22,8 @@ type Ctx struct {
 }
 
 type ImageArguments struct {
-	Refs   []any
-	Args   []uint32
-	Bounds image.Rectangle
+	Refs []any
+	Args []uint32
 }
 
 type Image struct {
@@ -388,12 +387,11 @@ outer:
 				iop := imageOp{
 					src: rargs[0],
 					ImageArguments: ImageArguments{
-						Bounds: decodeRect(args[1:5]),
-						Args:   args[5:],
-						Refs:   rargs[1:],
+						Args: args[1:],
+						Refs: rargs[1:],
 					},
 				}
-				r := iop.Bounds.Add(istate.state.pos)
+				r := iop.materialize(0).Bounds().Add(istate.state.pos)
 				istate.state.clip = istate.state.clip.Intersect(r)
 				fop := frameOp{pos: istate.state.pos, op: iop}
 				it.maskStack = append(it.maskStack, fop)
@@ -445,7 +443,7 @@ func (c ClipOp) Add(ops Ctx) {
 
 func ColorOp(ops Ctx, col color.RGBA) {
 	nrgba := uint32(col.R)<<24 | uint32(col.G)<<16 | uint32(col.B)<<8 | uint32(col.A)
-	addImageOp(ops, uniformImage, imageMask, image.Rect(-1e9, -1e9, 1e9, 1e9), nil, []uint32{nrgba})
+	addImageOp(ops, uniformImage, imageMask, nil, []uint32{nrgba})
 }
 
 func InputOp(ops Ctx, tag Tag) {
@@ -461,11 +459,11 @@ func ImageOp(ops Ctx, img image.Image, mask bool) {
 	if mask {
 		m = intersectMask
 	}
-	addImageOp(ops, img, m, img.Bounds(), nil, nil)
+	addImageOp(ops, img, m, nil, nil)
 }
 
 func GlyphOp(ops Ctx, face *bitmap.Face, r rune) {
-	m, _, ok := face.Glyph(r)
+	_, _, ok := face.Glyph(r)
 	if !ok {
 		ClipOp{}.Add(ops)
 		return
@@ -474,7 +472,6 @@ func GlyphOp(ops Ctx, face *bitmap.Face, r rune) {
 		ops,
 		glyphImage,
 		intersectMask,
-		m.Bounds(),
 		[]any{face},
 		[]uint32{uint32(r)},
 	)
@@ -483,20 +480,33 @@ func GlyphOp(ops Ctx, face *bitmap.Face, r rune) {
 func RoundedOutline(ops Ctx, bounds image.Rectangle, cornerRadius, lineWidth int) {
 	r := cornerRadius * px
 	lw := (lineWidth - 1) * px
-	ParamImageOp(ops, roundedOutlineImage, true, bounds, nil, []uint32{uint32(r), uint32(lw)})
+	Offset(ops, bounds.Min)
+	sz := bounds.Size()
+	ParamImageOp(ops, roundedOutlineImage, true, nil, []uint32{
+		uint32(sz.X),
+		uint32(sz.Y),
+		uint32(r),
+		uint32(lw),
+	})
 }
 
 func RoundedRect(ops Ctx, bounds image.Rectangle, cornerRadius int) {
 	r := cornerRadius * px
-	ParamImageOp(ops, roundedRectImage, true, bounds, nil, []uint32{uint32(r)})
+	Offset(ops, bounds.Min)
+	sz := bounds.Size()
+	ParamImageOp(ops, roundedRectImage, true, nil, []uint32{
+		uint32(sz.X),
+		uint32(sz.Y),
+		uint32(r),
+	})
 }
 
-func ParamImageOp(ops Ctx, img *Image, mask bool, bounds image.Rectangle, refs []any, args []uint32) {
+func ParamImageOp(ops Ctx, img *Image, mask bool, refs []any, args []uint32) {
 	m := imageMask
 	if mask {
 		m = intersectMask
 	}
-	addImageOp(ops, img, m, bounds, refs, args)
+	addImageOp(ops, img, m, refs, args)
 }
 
 type maskType int
@@ -511,18 +521,15 @@ type imageOp struct {
 	ImageArguments
 }
 
-func addImageOp(ops Ctx, src any, mask maskType, bounds image.Rectangle, refs []any, args []uint32) {
+func addImageOp(ops Ctx, src any, mask maskType, refs []any, args []uint32) {
 	if ops.ops == nil {
 		return
 	}
-	nargs := len(args) + 1 + 4
+	nargs := len(args) + 1
 	nrefs := len(refs) + 1
-	b := bounds
 	ops.ops.frame.appendArgs(
 		encodeCmdHeader(opImage, nargs, nrefs),
 		uint32(mask),
-		uint32(b.Min.X), uint32(b.Min.Y),
-		uint32(b.Max.X), uint32(b.Max.Y),
 	)
 	ops.ops.frame.appendArgs(args...)
 	ops.ops.frame.appendRefs(src)

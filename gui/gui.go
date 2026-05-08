@@ -580,7 +580,7 @@ type ProgressImage struct {
 }
 
 func (p *ProgressImage) Add(ctx op.Ctx) {
-	op.ParamImageOp(ctx, progressImageGen, true, p.Bounds(), []any{p.Src}, []uint32{math.Float32bits(p.Progress)})
+	op.ParamImageOp(ctx, progressImageGen, true, []any{p.Src}, []uint32{math.Float32bits(p.Progress)})
 }
 
 func (p *ProgressImage) At(x, y int) color.Color {

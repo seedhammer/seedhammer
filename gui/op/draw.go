@@ -55,7 +55,7 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 			case *rgbaUniform:
 				switch op {
 				case draw.Over:
-					drawRRectUniformOver(dst, dr, src.C, mask.bounds.Sub(maskOff), mask.r)
+					drawRRectUniformOver(dst, dr, src.C, mask, maskOff)
 					return
 				}
 			}
@@ -64,7 +64,7 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 			case *rgbaUniform:
 				switch op {
 				case draw.Over:
-					drawROutlineUniformOver(dst, dr, src.C, mask.bounds.Sub(maskOff), mask.r, mask.lw)
+					drawROutlineUniformOver(dst, dr, src.C, mask, maskOff)
 					return
 				}
 			}
@@ -89,18 +89,20 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 	)
 }
 
-func drawRRectUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA, bounds image.Rectangle, cornerRadius int) {
+func drawRRectUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA, rr *roundedRect, maskOff image.Point) {
 	maxx := dr.Dx()
 	dstPix := dst.Pix
 	sr := uint32(src.R>>3) * 0xff
 	sg := uint32(src.G>>2) * 0xff
 	sb := uint32(src.B>>3) * 0xff
 	sa := uint32(src.A)
+	sz := rr.sz
+	r := rr.r
 	for y := 0; y < dr.Dy(); y++ {
 		dstOff := dst.PixOffset(dr.Min.X, dr.Min.Y+y)
 		dstPix := dstPix[dstOff : dstOff+maxx]
 		for x, dcol := range dstPix {
-			a8 := roundedRectAlpha(bounds, cornerRadius, image.Pt(x, y))
+			a8 := roundedRectAlpha(sz, r, image.Pt(x, y).Add(maskOff))
 			a := uint32(a8)
 			const div = 0xff * 0xff
 			a1 := div - a*sa
@@ -114,18 +116,21 @@ func drawRRectUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA,
 	}
 }
 
-func drawROutlineUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA, bounds image.Rectangle, cornerRadius, lineWidth int) {
+func drawROutlineUniformOver(dst *rgb565.Image, dr image.Rectangle, src color.RGBA, ro *roundedOutline, maskOff image.Point) {
 	maxx := dr.Dx()
 	dstPix := dst.Pix
 	sr := uint32(src.R>>3) * 0xff
 	sg := uint32(src.G>>2) * 0xff
 	sb := uint32(src.B>>3) * 0xff
 	sa := uint32(src.A)
+	sz := ro.sz
+	r := ro.r
+	lw := ro.lw
 	for y := 0; y < dr.Dy(); y++ {
 		dstOff := dst.PixOffset(dr.Min.X, dr.Min.Y+y)
 		dstPix := dstPix[dstOff : dstOff+maxx]
 		for x, dcol := range dstPix {
-			a8 := roundedOutlineAlpha(bounds, cornerRadius, lineWidth, image.Pt(x, y))
+			a8 := roundedOutlineAlpha(sz, r, lw, image.Pt(x, y).Add(maskOff))
 			a := uint32(a8)
 			const div = 0xff * 0xff
 			a1 := div - a*sa
