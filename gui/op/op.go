@@ -48,9 +48,9 @@ type Tag any
 
 var globalID = 0
 
-func RegisterParameterizedImage(gen ImageGenerator) Image {
+func RegisterParameterizedImage(gen ImageGenerator) *Image {
 	globalID++
-	return Image{
+	return &Image{
 		id:  globalID,
 		gen: gen,
 	}
@@ -406,17 +406,17 @@ outer:
 				iop := imageOp{
 					mask: maskType(args[0]),
 					ImageArguments: ImageArguments{
-						Bounds: decodeRect(args[2:6]),
-						Args:   args[6:],
-						Refs:   rargs[2:],
+						Bounds: decodeRect(args[1:5]),
+						Args:   args[5:],
+						Refs:   rargs[1:],
 					},
 				}
-				iop.gen.id = int(int32(args[1]))
-				if src := rargs[0]; src != nil {
-					iop.src = src.(image.Image)
-				}
-				if gen := rargs[1]; gen != nil {
-					iop.gen.gen = gen.(ImageGenerator)
+				switch src := rargs[0].(type) {
+				case *Image:
+					iop.gen.id = src.id
+					iop.gen.gen = src.gen.(ImageGenerator)
+				case image.Image:
+					iop.src = src
 				}
 				r := iop.Bounds.Add(istate.state.pos)
 				istate.state.clip = istate.state.clip.Intersect(r)
@@ -554,7 +554,7 @@ func decodeGlyphImage(args ImageArguments) (*bitmap.Face, rune) {
 
 func ColorOp(ops Ctx, col color.RGBA) {
 	nrgba := uint32(col.R)<<24 | uint32(col.G)<<16 | uint32(col.B)<<8 | uint32(col.A)
-	addImageOp(ops, nil, uniformImage, imageMask, image.Rect(-1e9, -1e9, 1e9, 1e9), nil, []uint32{nrgba})
+	addImageOp(ops, uniformImage, imageMask, image.Rect(-1e9, -1e9, 1e9, 1e9), nil, []uint32{nrgba})
 }
 
 func InputOp(ops Ctx, tag Tag) {
@@ -570,7 +570,7 @@ func ImageOp(ops Ctx, img image.Image, mask bool) {
 	if mask {
 		m = intersectMask
 	}
-	addImageOp(ops, img, Image{}, m, img.Bounds(), nil, nil)
+	addImageOp(ops, img, m, img.Bounds(), nil, nil)
 }
 
 func GlyphOp(ops Ctx, face *bitmap.Face, r rune) {
@@ -580,7 +580,7 @@ func GlyphOp(ops Ctx, face *bitmap.Face, r rune) {
 		return
 	}
 	addImageOp(
-		ops, nil,
+		ops,
 		glyphImage,
 		intersectMask,
 		m.Bounds(),
@@ -600,12 +600,12 @@ func RoundedRect(ops Ctx, bounds image.Rectangle, cornerRadius int) {
 	ParamImageOp(ops, roundedRectImage, true, bounds, nil, []uint32{uint32(r)})
 }
 
-func ParamImageOp(ops Ctx, img Image, mask bool, bounds image.Rectangle, refs []any, args []uint32) {
+func ParamImageOp(ops Ctx, img *Image, mask bool, bounds image.Rectangle, refs []any, args []uint32) {
 	m := imageMask
 	if mask {
 		m = intersectMask
 	}
-	addImageOp(ops, nil, img, m, bounds, refs, args)
+	addImageOp(ops, img, m, bounds, refs, args)
 }
 
 func (img *genImage) ColorModel() color.Model {
@@ -643,22 +643,21 @@ type imageOp struct {
 	ImageArguments
 }
 
-func addImageOp(ops Ctx, src image.Image, img Image, mask maskType, bounds image.Rectangle, refs []any, args []uint32) {
+func addImageOp(ops Ctx, src any, mask maskType, bounds image.Rectangle, refs []any, args []uint32) {
 	if ops.ops == nil {
 		return
 	}
-	nargs := len(args) + 1 + 1 + 4
-	nrefs := len(refs) + 1 + 1
+	nargs := len(args) + 1 + 4
+	nrefs := len(refs) + 1
 	b := bounds
 	ops.ops.frame.appendArgs(
 		encodeCmdHeader(opImage, nargs, nrefs),
 		uint32(mask),
-		uint32(img.id),
 		uint32(b.Min.X), uint32(b.Min.Y),
 		uint32(b.Max.X), uint32(b.Max.Y),
 	)
 	ops.ops.frame.appendArgs(args...)
-	ops.ops.frame.appendRefs(src, img.gen)
+	ops.ops.frame.appendRefs(src)
 	ops.ops.frame.appendRefs(refs...)
 }
 
