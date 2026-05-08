@@ -26,6 +26,8 @@ import (
 )
 
 func BenchmarkRedraw(b *testing.B) {
+	b.ReportAllocs()
+
 	ops := new(op.Ops)
 	ctx := NewContext(newPlatform())
 	ctx.FrameCallback = func() {
@@ -43,6 +45,8 @@ func BenchmarkRedraw(b *testing.B) {
 }
 
 func BenchmarkAllocs(b *testing.B) {
+	b.ReportAllocs()
+
 	desc := &bip380.Descriptor{
 		Script:    bip380.P2WSH,
 		Type:      bip380.SortedMulti,

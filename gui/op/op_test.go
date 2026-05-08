@@ -16,6 +16,7 @@ func TestAllocs(t *testing.T) {
 }
 
 func BenchmarkOps(b *testing.B) {
+	b.ReportAllocs()
 	bounds := image.Rect(0, 0, 100, 100)
 	fb := rgb565.New(bounds)
 	mask := image.NewAlpha(bounds)
