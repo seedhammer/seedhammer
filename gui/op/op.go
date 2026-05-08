@@ -14,23 +14,12 @@ type Ops struct {
 	inputs    []inputOp
 	frame     frame
 	fiter     frameIter
-
-	scratch struct {
-		image     scratchImage
-		intersect scratchImage
-	}
-}
-
-type scratchImage struct {
-	img genImage
 }
 
 type Ctx struct {
 	beginIdx opCursor
 	ops      *Ops
 }
-
-type ImageGenerator func(args ImageArguments, x, y int) color.RGBA64
 
 type ImageArguments struct {
 	Refs   []any
@@ -39,26 +28,20 @@ type ImageArguments struct {
 }
 
 type Image struct {
-	id int
-	// gen is the ImageGenerator function as an interface.
-	gen any
+	scratch [2]ParameterizedImage
 }
 
 type Tag any
 
-var globalID = 0
-
-func RegisterParameterizedImage(gen ImageGenerator) *Image {
-	globalID++
-	return &Image{
-		id:  globalID,
-		gen: gen,
+func RegisterParameterizedImage(factory func() ParameterizedImage) *Image {
+	img := new(Image)
+	for i := range img.scratch {
+		img.scratch[i] = factory()
 	}
+	return img
 }
 
-type genImage struct {
-	imageOp
-}
+type ParameterizedImage func(ImageArguments) image.Image
 
 type frame struct {
 	args []uint32
@@ -195,11 +178,10 @@ func (o *Ops) ExtractText(dst image.Rectangle) string {
 		switch fop.Op {
 		case opImage:
 			for _, op := range fop.ImageStack {
-				if op.op.gen.id != glyphImage.id {
-					continue
+				switch img := op.op.materialize(0).(type) {
+				case *glyph:
+					b.WriteRune(img.r)
 				}
-				_, r := decodeGlyphImage(op.op.ImageArguments)
-				b.WriteRune(r)
 			}
 		}
 	}
@@ -264,7 +246,7 @@ func (o *Ops) drawMasks(dst draw.Image, clip image.Rectangle, src imageOp, pos i
 			maskSrc = nil
 		case 1:
 			m := o.maskStack[0]
-			maskSrc = o.materialize(m.op)
+			maskSrc = m.op.materialize(1)
 			mfbPos = clip.Min.Sub(m.pos)
 		default:
 			mclip := image.Rectangle{Max: clip.Size()}
@@ -274,12 +256,11 @@ func (o *Ops) drawMasks(dst draw.Image, clip image.Rectangle, src imageOp, pos i
 				if i == 0 {
 					mfb = nil
 				}
-				scratch := &o.scratch.intersect
-				src := scratch.materialize(m.op)
+				src := m.op.materialize(0)
 				drawMask(maskfb, mclip, src, maskp, mfb, mfbPos, draw.Src)
 			}
 		}
-		drawMask(dst, clip, o.materialize(src), clip.Min.Sub(pos), maskSrc, mfbPos, draw.Over)
+		drawMask(dst, clip, src.materialize(0), clip.Min.Sub(pos), maskSrc, mfbPos, draw.Over)
 		return
 	}
 	mask := masks[0]
@@ -288,21 +269,21 @@ func (o *Ops) drawMasks(dst draw.Image, clip image.Rectangle, src imageOp, pos i
 	o.maskStack = o.maskStack[:len(o.maskStack)-1]
 }
 
-func (o *Ops) materialize(op imageOp) image.Image {
-	switch op.mask {
-	case imageMask:
-		return o.scratch.image.materialize(op)
+func (op imageOp) materialize(slot int) image.Image {
+	switch src := op.src.(type) {
+	case *Image:
+		return src.materialize(slot, op.ImageArguments)
+	case image.Image:
+		return src
+	case nil:
+		return nil
 	default:
-		return o.scratch.intersect.materialize(op)
+		panic("invalid source")
 	}
 }
 
-func (s *scratchImage) materialize(op imageOp) image.Image {
-	if op.src != nil {
-		return op.src
-	}
-	s.img.imageOp = op
-	return &s.img
+func (img *Image) materialize(slot int, args ImageArguments) image.Image {
+	return img.scratch[slot](args)
 }
 
 type frameIter struct {
@@ -403,26 +384,20 @@ outer:
 				it.resetState()
 				return fop, true
 			case opImage:
+				mask := maskType(args[0])
 				iop := imageOp{
-					mask: maskType(args[0]),
+					src: rargs[0],
 					ImageArguments: ImageArguments{
 						Bounds: decodeRect(args[1:5]),
 						Args:   args[5:],
 						Refs:   rargs[1:],
 					},
 				}
-				switch src := rargs[0].(type) {
-				case *Image:
-					iop.gen.id = src.id
-					iop.gen.gen = src.gen.(ImageGenerator)
-				case image.Image:
-					iop.src = src
-				}
 				r := iop.Bounds.Add(istate.state.pos)
 				istate.state.clip = istate.state.clip.Intersect(r)
 				fop := frameOp{pos: istate.state.pos, op: iop}
 				it.maskStack = append(it.maskStack, fop)
-				if iop.mask != imageMask {
+				if mask != imageMask {
 					break
 				}
 				elem := frameIterElem{
@@ -466,90 +441,6 @@ func (c ClipOp) Add(ops Ctx) {
 		uint32(c.Min.X), uint32(c.Min.Y),
 		uint32(c.Max.X), uint32(c.Max.Y),
 	)
-}
-
-var uniformImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) color.RGBA64 {
-	col := colorFromArgs(args)
-	r, g, b, a := uint16(col.R), uint16(col.G), uint16(col.B), uint16(col.A)
-	return color.RGBA64{R: r | r<<8, G: g | g<<8, B: b | b<<8, A: a | a<<8}
-})
-
-var glyphImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) color.RGBA64 {
-	face, r := decodeGlyphImage(args)
-	glyph, _, _ := face.Glyph(r)
-	return glyph.RGBA64At(x, y)
-})
-
-var roundedRectImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) color.RGBA64 {
-	bounds := args.Bounds
-	r := int(int32(args.Args[0]))
-
-	a := roundedRectAlpha(bounds, r, image.Pt(x, y))
-	return color.RGBA64{A: uint16(a)<<8 | uint16(a)}
-})
-
-var roundedOutlineImage = RegisterParameterizedImage(func(args ImageArguments, x, y int) color.RGBA64 {
-	bounds := args.Bounds
-	r := int(int32(args.Args[0]))
-	lw := int(int32(args.Args[1]))
-
-	a := roundedOutlineAlpha(bounds, r, lw, image.Pt(x, y))
-	return color.RGBA64{A: uint16(a)<<8 | uint16(a)}
-})
-
-const px = 1 << 8
-
-//go:inline
-func roundedOutlineAlpha(bounds image.Rectangle, r, lw int, p image.Point) uint8 {
-	dist := roundedRectDist(bounds, r, p)
-	outer := min(dist, px)
-	inner := min(-dist-lw, px)
-	a := 0xff * (px - max(outer, inner, 0)) / px
-	return uint8(a)
-}
-
-//go:inline
-func roundedRectAlpha(bounds image.Rectangle, r int, p image.Point) uint8 {
-	dist := roundedRectDist(bounds, r, p)
-	dist = max(min(dist, px), 0)
-	return uint8(0xff * (px - dist) / px)
-}
-
-//go:inline
-func roundedRectDist(bounds image.Rectangle, r int, p image.Point) int {
-	b := bounds.Size().Sub(image.Pt(1, 1)).Mul(px).Div(2)
-	// Center.
-	p = p.Sub(bounds.Min).Mul(px).Sub(b)
-	if p.X < 0 {
-		p.X = -p.X
-	}
-	if p.Y < 0 {
-		p.Y = -p.Y
-	}
-	q := p.Sub(b).Add(image.Pt(r, r))
-	cq := image.Pt(max(q.X, 0), max(q.Y, 0))
-	// Approximate l = √(cq.X²+cq.Y²) using a few iterations of Heron's method.
-	S := cq.X*cq.X + cq.Y*cq.Y
-	l := 0
-	if S > 0 {
-		l = 1 + r // Initial guess.
-		l = (l + S/l) / 2
-		l = (l + S/l) / 2
-	}
-	return min(max(q.X, q.Y), 0) - r + l
-}
-
-func colorFromArgs(args ImageArguments) color.RGBA {
-	nrgba := args.Args[0]
-	r := nrgba >> 24
-	g := (nrgba >> 16) & 0xff
-	b := (nrgba >> 8) & 0xff
-	a := nrgba & 0xff
-	return color.RGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: uint8(a)}
-}
-
-func decodeGlyphImage(args ImageArguments) (*bitmap.Face, rune) {
-	return args.Refs[0].(*bitmap.Face), rune(args.Args[0])
 }
 
 func ColorOp(ops Ctx, col color.RGBA) {
@@ -608,22 +499,6 @@ func ParamImageOp(ops Ctx, img *Image, mask bool, bounds image.Rectangle, refs [
 	addImageOp(ops, img, m, bounds, refs, args)
 }
 
-func (img *genImage) ColorModel() color.Model {
-	return color.RGBA64Model
-}
-
-func (img *genImage) Bounds() image.Rectangle {
-	return img.ImageArguments.Bounds
-}
-
-func (img *genImage) At(x, y int) color.Color {
-	return img.RGBA64At(x, y)
-}
-
-func (img *genImage) RGBA64At(x, y int) color.RGBA64 {
-	return img.gen.gen(img.ImageArguments, x, y)
-}
-
 type maskType int
 
 const (
@@ -632,14 +507,7 @@ const (
 )
 
 type imageOp struct {
-	mask maskType
-
-	src image.Image
-
-	gen struct {
-		id  int
-		gen ImageGenerator
-	}
+	src any
 	ImageArguments
 }
 

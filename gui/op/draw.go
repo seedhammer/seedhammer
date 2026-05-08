@@ -18,23 +18,19 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 		switch mask := mask.(type) {
 		case nil:
 			switch src := src.(type) {
-			case *genImage:
-				switch src.gen.id {
-				case uniformImage.id:
-					col := colorFromArgs(src.ImageArguments)
-					if col.A == 255 || op == draw.Src {
-						rgb := rgb565.FromRGB888(col.R, col.G, col.B)
-						maxx := dr.Dx()
-						dstPix := dst.Pix
-						for y := dr.Min.Y; y < dr.Max.Y; y++ {
-							poff := dst.PixOffset(dr.Min.X, y)
-							dstPix := dstPix[poff : poff+maxx]
-							for x := range dstPix {
-								dstPix[x] = rgb
-							}
+			case *rgbaUniform:
+				if src.Opaque() || op == draw.Src {
+					rgb := rgb565.FromRGB888(src.C.R, src.C.G, src.C.B)
+					maxx := dr.Dx()
+					dstPix := dst.Pix
+					for y := dr.Min.Y; y < dr.Max.Y; y++ {
+						poff := dst.PixOffset(dr.Min.X, y)
+						dstPix := dstPix[poff : poff+maxx]
+						for x := range dstPix {
+							dstPix[x] = rgb
 						}
-						return
 					}
+					return
 				}
 			case *paletted.Image:
 				switch op {
@@ -45,66 +41,40 @@ func drawMask(dst draw.Image, dr image.Rectangle, src image.Image, pos image.Poi
 			}
 			dst.Draw(dr, src, pos, op)
 			return
-		case *genImage:
-			switch mask.gen.id {
-			case glyphImage.id:
-				switch src := src.(type) {
-				case *genImage:
-					switch src.gen.id {
-					case uniformImage.id:
-						switch op {
-						case draw.Over:
-							face, r := decodeGlyphImage(mask.ImageArguments)
-							mask, _, _ := face.Glyph(r)
-							src := colorFromArgs(src.ImageArguments)
-							drawAlphaUniformOver(dst, dr, src, &mask, maskOff)
-							return
-						}
-					}
+		case *glyph:
+			switch src := src.(type) {
+			case *rgbaUniform:
+				switch op {
+				case draw.Over:
+					drawAlphaUniformOver(dst, dr, src.C, &mask.g, maskOff)
+					return
 				}
-			case roundedRectImage.id:
-				switch src := src.(type) {
-				case *genImage:
-					switch src.gen.id {
-					case uniformImage.id:
-						switch op {
-						case draw.Over:
-							bounds := mask.ImageArguments.Bounds
-							cornerRadius := int(int32(mask.Args[0]))
-							src := colorFromArgs(src.ImageArguments)
-							drawRRectUniformOver(dst, dr, src, bounds.Sub(maskOff), cornerRadius)
-							return
-						}
-					}
+			}
+		case *roundedRect:
+			switch src := src.(type) {
+			case *rgbaUniform:
+				switch op {
+				case draw.Over:
+					drawRRectUniformOver(dst, dr, src.C, mask.bounds.Sub(maskOff), mask.r)
+					return
 				}
-			case roundedOutlineImage.id:
-				switch src := src.(type) {
-				case *genImage:
-					switch src.gen.id {
-					case uniformImage.id:
-						switch op {
-						case draw.Over:
-							bounds := mask.ImageArguments.Bounds
-							cornerRadius := int(int32(mask.Args[0]))
-							lineWidth := int(int32(mask.Args[1]))
-							src := colorFromArgs(src.ImageArguments)
-							drawROutlineUniformOver(dst, dr, src, bounds.Sub(maskOff), cornerRadius, lineWidth)
-							return
-						}
-					}
+			}
+		case *roundedOutline:
+			switch src := src.(type) {
+			case *rgbaUniform:
+				switch op {
+				case draw.Over:
+					drawROutlineUniformOver(dst, dr, src.C, mask.bounds.Sub(maskOff), mask.r, mask.lw)
+					return
 				}
 			}
 		case *alpha4.Image:
 			switch src := src.(type) {
-			case *genImage:
-				switch src.gen.id {
-				case uniformImage.id:
-					switch op {
-					case draw.Over:
-						src := colorFromArgs(src.ImageArguments)
-						drawAlphaUniformOver(dst, dr, src, mask, maskOff)
-						return
-					}
+			case *rgbaUniform:
+				switch op {
+				case draw.Over:
+					drawAlphaUniformOver(dst, dr, src.C, mask, maskOff)
+					return
 				}
 			}
 		}

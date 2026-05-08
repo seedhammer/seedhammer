@@ -580,21 +580,40 @@ type ProgressImage struct {
 }
 
 func (p *ProgressImage) Add(ctx op.Ctx) {
-	op.ParamImageOp(ctx, ProgressImageGen, true, p.Src.Bounds(), []any{p.Src}, []uint32{math.Float32bits(p.Progress)})
+	op.ParamImageOp(ctx, progressImageGen, true, p.Bounds(), []any{p.Src}, []uint32{math.Float32bits(p.Progress)})
 }
 
-var ProgressImageGen = op.RegisterParameterizedImage(func(args op.ImageArguments, x, y int) color.RGBA64 {
-	src := args.Refs[0].(image.RGBA64Image)
-	progress := math.Float32frombits(args.Args[0])
-	b := src.Bounds()
+func (p *ProgressImage) At(x, y int) color.Color {
+	return p.RGBA64At(x, y)
+}
+
+func (p *ProgressImage) RGBA64At(x, y int) color.RGBA64 {
+	b := p.Bounds()
 	c := b.Max.Add(b.Min).Div(2)
 	d := image.Pt(x, y).Sub(c)
 	angle := float32(math.Atan2(float64(d.X), float64(d.Y)))
 	angle = math.Pi - angle
-	if angle > 2*math.Pi*progress {
+	if angle > 2*math.Pi*p.Progress {
 		return color.RGBA64{}
 	}
-	return src.RGBA64At(x, y)
+	return p.Src.RGBA64At(x, y)
+}
+
+func (p *ProgressImage) ColorModel() color.Model {
+	return p.Src.ColorModel()
+}
+
+func (p *ProgressImage) Bounds() image.Rectangle {
+	return p.Src.Bounds()
+}
+
+var progressImageGen = op.RegisterParameterizedImage(func() op.ParameterizedImage {
+	img := new(ProgressImage)
+	return func(args op.ImageArguments) image.Image {
+		img.Src = args.Refs[0].(image.RGBA64Image)
+		img.Progress = math.Float32frombits(args.Args[0])
+		return img
+	}
 })
 
 func NewErrorScreen(err error) *ErrorScreen {
