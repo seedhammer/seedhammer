@@ -25,12 +25,16 @@ func New(r Rectangle) *Image {
 }
 
 func Rect(r image.Rectangle) Rectangle {
-	return Rectangle{
+	r8 := Rectangle{
 		MinX: int8(r.Min.X),
 		MaxX: int8(r.Max.X),
 		MinY: int8(r.Min.Y),
 		MaxY: int8(r.Max.Y),
 	}
+	if r8.Rect() != r {
+		panic("rectangle too large")
+	}
+	return r8
 }
 
 func (p *Image) ColorModel() color.Model {
