@@ -26,7 +26,6 @@ func BenchmarkOps(b *testing.B) {
 		ctx := ops.Context()
 		Offset(ctx, image.Pt(50, 50))
 		ColorOp(ctx, color.RGBA{})
-		ops.Clip(fb.Bounds())
 		ops.Draw(fb, mask)
 	}
 }

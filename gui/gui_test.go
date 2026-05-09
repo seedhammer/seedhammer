@@ -36,7 +36,6 @@ func BenchmarkRedraw(b *testing.B) {
 	m := new(MainScreen)
 	m.Flow(ctx, ops.Context())
 	clip := image.Rectangle{Max: ctx.Platform.DisplaySize()}
-	ops.Clip(clip)
 	fb := rgb565.New(clip)
 	maskfb := image.NewAlpha(clip)
 	for b.Loop() {

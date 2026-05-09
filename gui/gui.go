@@ -2537,7 +2537,6 @@ func Run(pl Platform, version string) func(yield func() bool) {
 		stats := new(runtimeStats)
 		for range it {
 			dirty := image.Rectangle{Max: pl.DisplaySize()}
-			a.root.Clip(dirty)
 			layoutTime := time.Since(startTime)
 			if err := pl.Dirty(dirty); err != nil {
 				panic(err)

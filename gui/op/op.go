@@ -3,17 +3,20 @@ package op
 import (
 	"image"
 	"image/color"
-	"strings"
 
 	"golang.org/x/image/draw"
 	"seedhammer.com/font/bitmap"
+	"seedhammer.com/image/rgb565"
 )
 
 type Ops struct {
-	maskStack []frameOp
-	inputs    []inputOp
-	frame     frame
-	fiter     frameIter
+	maskStack    []frameOp
+	inputs       []inputOp
+	skipInputOps bool
+	frame        frame
+	// text is non-nil for ExtractText to collect
+	// all runes from a frame.
+	text []rune
 }
 
 type Ctx struct {
@@ -153,6 +156,7 @@ func (o *Ops) Context() Ctx {
 func (o *Ops) Reset() {
 	o.frame.Reset()
 	o.inputs = o.inputs[:0]
+	o.skipInputOps = false
 }
 
 type drawState struct {
@@ -167,24 +171,15 @@ func (f *frame) Reset() {
 }
 
 func (o *Ops) ExtractText(dst image.Rectangle) string {
-	var b strings.Builder
-	o.fiter.Reset(dst.Bounds())
-	for {
-		fop, ok := o.fiter.Next(o.frame)
-		if !ok {
-			break
-		}
-		switch fop.Op {
-		case opImage:
-			for _, op := range fop.ImageStack {
-				switch img := op.op.materialize(0).(type) {
-				case *glyph:
-					b.WriteRune(img.r)
-				}
-			}
-		}
-	}
-	return b.String()
+	// Instruct Draw to collect runes.
+	o.text = []rune{}
+	fb := rgb565.New(dst)
+	maskfb := image.NewAlpha(dst)
+	o.Draw(fb, maskfb)
+
+	txt := string(o.text)
+	o.text = nil
+	return txt
 }
 
 func (o *Ops) TagBounds(t Tag) (image.Rectangle, bool) {
@@ -205,67 +200,119 @@ func (o *Ops) Hit(p image.Point) (Tag, image.Rectangle, bool) {
 	return nil, image.Rectangle{}, false
 }
 
-func (o *Ops) Clip(dst image.Rectangle) {
-	o.fiter.Reset(dst.Bounds())
-	for {
-		fop, ok := o.fiter.Next(o.frame)
-		if !ok {
-			break
-		}
-		switch fop.Op {
-		case opInput:
-			o.inputs = append(o.inputs, fop.Input)
-		}
-	}
-}
-
 func (o *Ops) Draw(dst draw.Image, maskfb draw.Image) {
-	o.fiter.Reset(dst.Bounds())
-	for {
-		fop, ok := o.fiter.Next(o.frame)
-		if !ok {
-			break
-		}
-		switch fop.Op {
-		case opImage:
-			masks := fop.ImageStack[:len(fop.ImageStack)-1]
-			op := fop.ImageStack[len(fop.ImageStack)-1]
-			o.maskStack = o.maskStack[:0]
-			o.drawMasks(dst, fop.Clip, op.op, op.pos, maskfb, masks)
-		}
-	}
+	o.maskStack = o.maskStack[:0]
+	o.draw(dst, maskfb, drawState{clip: image.Rect(-1e9, -1e9, 1e9, 1e9)}, opCursor{})
+	// o.inputs has been populated, skip the work for subsequent frames.
+	o.skipInputOps = true
 }
 
-func (o *Ops) drawMasks(dst draw.Image, clip image.Rectangle, src imageOp, pos image.Point, maskfb draw.Image, masks []frameOp) {
-	if len(masks) == 0 {
-		var maskSrc image.Image = maskfb
-		mfbPos := maskfb.Bounds().Min
-		switch len(o.maskStack) {
-		case 0:
-			maskSrc = nil
-		case 1:
-			m := o.maskStack[0]
-			maskSrc = m.op.materialize(1)
-			mfbPos = clip.Min.Sub(m.pos)
-		default:
-			mclip := image.Rectangle{Max: clip.Size()}
-			for i, m := range o.maskStack {
-				maskp := clip.Min.Sub(m.pos)
-				mfb := maskfb
-				if i == 0 {
-					mfb = nil
-				}
-				src := m.op.materialize(0)
-				drawMask(maskfb, mclip, src, maskp, mfb, mfbPos, draw.Src)
-			}
+func (o *Ops) draw(dst draw.Image, maskfb draw.Image, state drawState, cur opCursor) {
+	origMaskStackLen := len(o.maskStack)
+	orig := state
+	ops := o.frame.args
+	refs := o.frame.refs
+	for len(ops) > cur.op {
+		opnargs := ops[cur.op]
+		op := opType(opnargs & 0xf)
+		nrefs := int((opnargs >> 8) & 0xf)
+		nargs := int(opnargs >> 16)
+		args := ops[cur.op+1 : cur.op+1+nargs]
+		switch op {
+		case opBegin:
+			cur = opCursor{op: int(args[0]), ref: int(args[1])}
+			continue
+		case opEnd:
+			return
 		}
-		drawMask(dst, clip, src.materialize(0), clip.Min.Sub(pos), maskSrc, mfbPos, draw.Over)
-		return
+		rargs := refs[cur.ref : cur.ref+nrefs]
+		cur.op += 1 + nargs
+		cur.ref += nrefs
+		switch op {
+		case opOffset:
+			off := image.Point{X: int(int32(args[0])), Y: int(int32(args[1]))}
+			state.pos = state.pos.Add(image.Point(off))
+		case opClip:
+			r := image.Rectangle{
+				Min: image.Point{X: int(int32(args[0])), Y: int(int32(args[1]))},
+				Max: image.Point{X: int(int32(args[2])), Y: int(int32(args[3]))},
+			}.Add(state.pos)
+			state.clip = state.clip.Intersect(r)
+		case opCall:
+			cur := opCursor{op: int(args[0]), ref: int(args[1])}
+			o.draw(dst, maskfb, state, cur)
+			state = orig
+			o.maskStack = o.maskStack[:origMaskStackLen]
+		case opInput:
+			if !o.skipInputOps {
+				iop := inputOp{
+					tag:    rargs[0],
+					bounds: state.clip,
+				}
+				o.inputs = append(o.inputs, iop)
+			}
+			state = orig
+			o.maskStack = o.maskStack[:origMaskStackLen]
+		case opImage:
+			maskt := maskType(args[0])
+			iop := imageOp{src: rargs[0], ImageArguments: ImageArguments{Args: args[1:], Refs: rargs[1:]}}
+			r := iop.materialize(0).Bounds().Add(state.pos)
+			state.clip = state.clip.Intersect(r)
+			fop := frameOp{pos: state.pos, op: iop}
+			if maskt != imageMask {
+				o.maskStack = append(o.maskStack, fop)
+				break
+			}
+			clip := state.clip.Intersect(dst.Bounds())
+			if !clip.Empty() {
+				var maskSrc image.Image
+				var maskPos image.Point
+				maskStack := o.maskStack
+				if o.text != nil {
+					for _, m := range maskStack {
+						switch img := m.op.materialize(0).(type) {
+						case *glyph:
+							o.text = append(o.text, img.r)
+						}
+					}
+				}
+				switch len(maskStack) {
+				case 0:
+				case 1:
+					mask := maskStack[len(maskStack)-1]
+					maskSrc = mask.op.materialize(1)
+					maskPos = mask.pos
+				default:
+					// Blend the masks into maskfb.
+					maskSrc = maskfb
+					// First operation initializes maskfb content.
+					op := draw.Src
+					for len(maskStack) > 0 {
+						if len(maskStack) > 1 {
+							// Draw 2 masks at a time.
+							m1, m2 := maskStack[0], maskStack[1]
+							maskStack = maskStack[2:]
+							drawMask(maskfb, clip,
+								m2.op.materialize(0), clip.Min.Sub(m2.pos),
+								m1.op.materialize(1), clip.Min.Sub(m1.pos), op)
+						} else {
+							m := maskStack[0]
+							maskStack = maskStack[1:]
+							drawMask(maskfb, clip,
+								m.op.materialize(0), clip.Min.Sub(m.pos),
+								nil, image.Point{}, op)
+						}
+						// Subsequent operations blend into maskfb.
+						op = draw.Over
+					}
+				}
+				src := fop.op.materialize(0)
+				drawMask(dst, clip, src, clip.Min.Sub(fop.pos), maskSrc, clip.Min.Sub(maskPos), draw.Over)
+			}
+			state = orig
+			o.maskStack = o.maskStack[:origMaskStackLen]
+		}
 	}
-	mask := masks[0]
-	o.maskStack = append(o.maskStack, mask)
-	o.drawMasks(dst, clip, src, pos, maskfb, masks[1:])
-	o.maskStack = o.maskStack[:len(o.maskStack)-1]
 }
 
 func (op imageOp) materialize(slot int) image.Image {
@@ -283,142 +330,6 @@ func (op imageOp) materialize(slot int) image.Image {
 
 func (img *Image) materialize(slot int, args ImageArguments) image.Image {
 	return img.scratch[slot](args)
-}
-
-type frameIter struct {
-	stack     []iterState
-	maskStack []frameOp
-}
-
-type frameIterElem struct {
-	Op   opType
-	Clip image.Rectangle
-	// For opInput.
-	Input inputOp
-	// For opImage.
-	ImageStack []frameOp
-}
-
-type iterState struct {
-	state drawState
-	cur   opCursor
-}
-
-func (it *frameIter) Reset(dst image.Rectangle) {
-	it.stack = it.stack[:0]
-	it.maskStack = it.maskStack[:0]
-	root := drawState{clip: dst}
-	// Root state.
-	it.push(root, opCursor{})
-	// Current state.
-	it.push(root, opCursor{})
-}
-
-func (it *frameIter) push(state drawState, cur opCursor) {
-	it.stack = append(it.stack, iterState{
-		state: state,
-		cur:   cur,
-	})
-}
-
-func (it *frameIter) resetState() {
-	istate := &it.stack[len(it.stack)-1]
-	istate.state = it.stack[len(it.stack)-2].state
-	it.maskStack = it.maskStack[:0]
-}
-
-func (it *frameIter) Next(f frame) (frameIterElem, bool) {
-outer:
-	for {
-		istate := &it.stack[len(it.stack)-1]
-		ops := f.args[istate.cur.op:]
-		refs := f.refs[istate.cur.ref:]
-		for len(ops) > 0 {
-			opnargs := ops[0]
-			op := opType(opnargs & 0xf)
-			nrefs := (opnargs >> 8) & 0xf
-			nargs := opnargs >> 16
-			args := ops[1 : 1+nargs]
-			switch op {
-			case opBegin:
-				// Skip interleaved macro.
-				istate.cur = opCursor{
-					op:  int(int32(args[0])),
-					ref: int(int32(args[1])),
-				}
-				continue outer
-			case opEnd:
-				it.stack = it.stack[:len(it.stack)-1]
-				it.resetState()
-				continue outer
-			}
-			istate.cur.op += int(1 + nargs)
-			istate.cur.ref += int(nrefs)
-			ops = ops[1+nargs:]
-			rargs := refs[:nrefs]
-			refs = refs[nrefs:]
-			switch op {
-			case opOffset:
-				off := image.Point{X: int(int32(args[0])), Y: int(int32(args[1]))}
-				istate.state.pos = istate.state.pos.Add(image.Point(off))
-			case opClip:
-				r := decodeRect(args)
-				istate.state.clip = istate.state.clip.Intersect(r.Add(istate.state.pos))
-			case opCall:
-				state := istate.state
-				it.push(state, opCursor{
-					op:  int(int32(args[0])),
-					ref: int(int32(args[1])),
-				})
-				continue outer
-			case opInput:
-				fop := frameIterElem{
-					Op:   op,
-					Clip: istate.state.clip,
-					Input: inputOp{
-						tag:    rargs[0],
-						bounds: istate.state.clip,
-					},
-				}
-				it.resetState()
-				return fop, true
-			case opImage:
-				mask := maskType(args[0])
-				iop := imageOp{
-					src: rargs[0],
-					ImageArguments: ImageArguments{
-						Args: args[1:],
-						Refs: rargs[1:],
-					},
-				}
-				r := iop.materialize(0).Bounds().Add(istate.state.pos)
-				istate.state.clip = istate.state.clip.Intersect(r)
-				fop := frameOp{pos: istate.state.pos, op: iop}
-				it.maskStack = append(it.maskStack, fop)
-				if mask != imageMask {
-					break
-				}
-				elem := frameIterElem{
-					Op:         op,
-					Clip:       istate.state.clip,
-					ImageStack: it.maskStack,
-				}
-				it.resetState()
-				if elem.Clip.Empty() {
-					break
-				}
-				return elem, true
-			}
-		}
-		return frameIterElem{}, false
-	}
-}
-
-func decodeRect(args []uint32) image.Rectangle {
-	return image.Rectangle{
-		Min: image.Point{X: int(int32(args[0])), Y: int(int32(args[1]))},
-		Max: image.Point{X: int(int32(args[2])), Y: int(int32(args[3]))},
-	}
 }
 
 func Offset(ops Ctx, off image.Point) {
