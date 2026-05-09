@@ -118,6 +118,8 @@ func TestPaletted(t *testing.T) {
 		ColorOp(ctx, argb(0xde11adbe))
 
 		Offset(ctx, image.Pt(10, 10))
+		AlphaOp(ctx, 0xcc)
+		AlphaOp(ctx, 0xaa)
 		ImageOp(ctx, assets.Hammer, false)
 	})
 }

@@ -446,6 +446,11 @@ func ColorOp(ops Ctx, col color.RGBA) {
 	addImageOp(ops, uniformImage, imageMask, nil, []uint32{nrgba})
 }
 
+func AlphaOp(ops Ctx, alpha byte) {
+	nrgba := uint32(alpha)
+	addImageOp(ops, uniformImage, intersectMask, nil, []uint32{nrgba})
+}
+
 func InputOp(ops Ctx, tag Tag) {
 	if ops.ops == nil {
 		return
