@@ -217,8 +217,15 @@ func TestEngraveScreenError(t *testing.T) {
 		press(&ctx.Router, Button3)
 		frame()
 		time.Sleep(confirmDelay)
-		frame()
-		<-e.closes
+	out:
+		for {
+			select {
+			case <-e.closes:
+				break out
+			default:
+				frame()
+			}
+		}
 		content, ok := frame()
 		if !ok || !uiContains(content, ioErr.Error()) {
 			t.Fatalf("EngraveScreen: no error reported, expected %v", ioErr)
@@ -446,7 +453,7 @@ func newPlatform() *testPlatform {
 
 func newEngraver() *testEngraver {
 	t := &testEngraver{
-		closes: make(chan struct{}),
+		closes: make(chan struct{}, 1),
 		opens:  make(chan struct{}, 1),
 	}
 	return t
