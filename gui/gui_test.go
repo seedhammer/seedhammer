@@ -452,14 +452,6 @@ func newEngraver() *testEngraver {
 	return t
 }
 
-func mnemonicFor(phrase string) bip39.Mnemonic {
-	m, err := bip39.ParseMnemonic(phrase)
-	if err != nil {
-		panic(err)
-	}
-	return m
-}
-
 func runUI(ctx *Context, ops *op.Ops, ui func()) (frame func() (string, bool), close func()) {
 	return iter.Pull(func(yield func(content string) bool) {
 		ctx.FrameCallback = func() {
