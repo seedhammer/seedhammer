@@ -62,6 +62,7 @@ const (
 	opEnd
 	opOffset
 	opImage
+	opMask
 	opClip
 	opCall
 	opInput
@@ -248,13 +249,12 @@ func (o *Ops) draw(dst draw.Image, maskfb draw.Image, state drawState, cur opCur
 			}
 			state = orig
 			o.maskStack = o.maskStack[:origMaskStackLen]
-		case opImage:
-			maskt := maskType(args[0])
-			iop := imageOp{src: rargs[0], args: args[1:], refs: rargs[1:]}
+		case opImage, opMask:
+			iop := imageOp{src: rargs[0], args: args, refs: rargs[1:]}
 			r := iop.materialize(0).Bounds().Add(state.pos)
 			state.clip = state.clip.Intersect(r)
 			fop := frameOp{pos: state.pos, op: iop}
-			if maskt != imageMask {
+			if op != opImage {
 				o.maskStack = append(o.maskStack, fop)
 				break
 			}
@@ -349,12 +349,12 @@ func (c ClipOp) Add(ops Ctx) {
 
 func ColorOp(ops Ctx, col color.RGBA) {
 	nrgba := uint32(col.R)<<24 | uint32(col.G)<<16 | uint32(col.B)<<8 | uint32(col.A)
-	addImageOp(ops, uniformImage, imageMask, nil, []uint32{nrgba})
+	addImageOp(ops, opImage, uniformImage, nil, []uint32{nrgba})
 }
 
 func AlphaOp(ops Ctx, alpha byte) {
 	nrgba := uint32(alpha)
-	addImageOp(ops, uniformImage, intersectMask, nil, []uint32{nrgba})
+	addImageOp(ops, opMask, uniformImage, nil, []uint32{nrgba})
 }
 
 func InputOp(ops Ctx, tag Tag) {
@@ -366,11 +366,11 @@ func InputOp(ops Ctx, tag Tag) {
 }
 
 func ImageOp(ops Ctx, img image.Image, mask bool) {
-	m := imageMask
+	op := opImage
 	if mask {
-		m = intersectMask
+		op = opMask
 	}
-	addImageOp(ops, img, m, nil, nil)
+	addImageOp(ops, op, img, nil, nil)
 }
 
 func GlyphOp(ops Ctx, face *bitmap.Face, r rune) {
@@ -381,8 +381,8 @@ func GlyphOp(ops Ctx, face *bitmap.Face, r rune) {
 	}
 	addImageOp(
 		ops,
+		opMask,
 		glyphImage,
-		intersectMask,
 		[]any{face},
 		[]uint32{uint32(r)},
 	)
@@ -413,19 +413,12 @@ func RoundedRect(ops Ctx, bounds image.Rectangle, cornerRadius int) {
 }
 
 func ParamImageOp(ops Ctx, img *Image, mask bool, refs []any, args []uint32) {
-	m := imageMask
+	op := opImage
 	if mask {
-		m = intersectMask
+		op = opMask
 	}
-	addImageOp(ops, img, m, refs, args)
+	addImageOp(ops, op, img, refs, args)
 }
-
-type maskType int
-
-const (
-	imageMask maskType = iota
-	intersectMask
-)
 
 type imageOp struct {
 	src  any
@@ -433,15 +426,14 @@ type imageOp struct {
 	args []uint32
 }
 
-func addImageOp(ops Ctx, src any, mask maskType, refs []any, args []uint32) {
+func addImageOp(ops Ctx, op opType, src any, refs []any, args []uint32) {
 	if ops.ops == nil {
 		return
 	}
-	nargs := len(args) + 1
+	nargs := len(args)
 	nrefs := len(refs) + 1
 	ops.ops.frame.appendArgs(
-		encodeCmdHeader(opImage, nargs, nrefs),
-		uint32(mask),
+		encodeCmdHeader(op, nargs, nrefs),
 	)
 	ops.ops.frame.appendArgs(args...)
 	ops.ops.frame.appendRefs(src)
