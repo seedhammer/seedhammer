@@ -609,9 +609,9 @@ func (p *ProgressImage) Bounds() image.Rectangle {
 
 var progressImageGen = op.RegisterParameterizedImage(func() op.ParameterizedImage {
 	img := new(ProgressImage)
-	return func(args op.ImageArguments) image.Image {
-		img.Src = args.Refs[0].(image.RGBA64Image)
-		img.Progress = math.Float32frombits(args.Args[0])
+	return func(args []uint32, refs []any) image.Image {
+		img.Src = refs[0].(image.RGBA64Image)
+		img.Progress = math.Float32frombits(args[0])
 		return img
 	}
 })

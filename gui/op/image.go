@@ -30,9 +30,9 @@ type glyph struct {
 
 var glyphImage = RegisterParameterizedImage(func() ParameterizedImage {
 	img := new(glyph)
-	return func(args ImageArguments) image.Image {
-		img.face = args.Refs[0].(*bitmap.Face)
-		img.r = rune(args.Args[0])
+	return func(args []uint32, refs []any) image.Image {
+		img.face = refs[0].(*bitmap.Face)
+		img.r = rune(args[0])
 		img.g, _, _ = img.face.Glyph(img.r)
 		return img
 	}
@@ -40,7 +40,7 @@ var glyphImage = RegisterParameterizedImage(func() ParameterizedImage {
 
 var uniformImage = RegisterParameterizedImage(func() ParameterizedImage {
 	u := new(rgbaUniform)
-	return func(args ImageArguments) image.Image {
+	return func(args []uint32, _ []any) image.Image {
 		u.C = colorFromArgs(args)
 		return u
 	}
@@ -48,25 +48,25 @@ var uniformImage = RegisterParameterizedImage(func() ParameterizedImage {
 
 var roundedOutlineImage = RegisterParameterizedImage(func() ParameterizedImage {
 	img := new(roundedOutline)
-	return func(args ImageArguments) image.Image {
+	return func(args []uint32, _ []any) image.Image {
 		img.sz = image.Point{
-			X: int(int32(args.Args[0])),
-			Y: int(int32(args.Args[1])),
+			X: int(int32(args[0])),
+			Y: int(int32(args[1])),
 		}
-		img.r = int(int32(args.Args[2]))
-		img.lw = int(int32(args.Args[3]))
+		img.r = int(int32(args[2]))
+		img.lw = int(int32(args[3]))
 		return img
 	}
 })
 
 var roundedRectImage = RegisterParameterizedImage(func() ParameterizedImage {
 	img := new(roundedRect)
-	return func(args ImageArguments) image.Image {
+	return func(args []uint32, _ []any) image.Image {
 		img.sz = image.Point{
-			X: int(int32(args.Args[0])),
-			Y: int(int32(args.Args[1])),
+			X: int(int32(args[0])),
+			Y: int(int32(args[1])),
 		}
-		img.r = int(int32(args.Args[2]))
+		img.r = int(int32(args[2]))
 		return img
 	}
 })
@@ -184,8 +184,8 @@ func roundedRectDist(sz image.Point, r int, p image.Point) int {
 	return min(max(q.X, q.Y), 0) - r + l
 }
 
-func colorFromArgs(args ImageArguments) color.RGBA {
-	nrgba := args.Args[0]
+func colorFromArgs(args []uint32) color.RGBA {
+	nrgba := args[0]
 	r := nrgba >> 24
 	g := (nrgba >> 16) & 0xff
 	b := (nrgba >> 8) & 0xff

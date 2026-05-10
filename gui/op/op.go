@@ -24,11 +24,6 @@ type Ctx struct {
 	ops      *Ops
 }
 
-type ImageArguments struct {
-	Refs []any
-	Args []uint32
-}
-
 type Image struct {
 	scratch [2]ParameterizedImage
 }
@@ -43,7 +38,7 @@ func RegisterParameterizedImage(factory func() ParameterizedImage) *Image {
 	return img
 }
 
-type ParameterizedImage func(ImageArguments) image.Image
+type ParameterizedImage func(args []uint32, refs []any) image.Image
 
 type frame struct {
 	args []uint32
@@ -255,7 +250,7 @@ func (o *Ops) draw(dst draw.Image, maskfb draw.Image, state drawState, cur opCur
 			o.maskStack = o.maskStack[:origMaskStackLen]
 		case opImage:
 			maskt := maskType(args[0])
-			iop := imageOp{src: rargs[0], ImageArguments: ImageArguments{Args: args[1:], Refs: rargs[1:]}}
+			iop := imageOp{src: rargs[0], args: args[1:], refs: rargs[1:]}
 			r := iop.materialize(0).Bounds().Add(state.pos)
 			state.clip = state.clip.Intersect(r)
 			fop := frameOp{pos: state.pos, op: iop}
@@ -318,7 +313,7 @@ func (o *Ops) draw(dst draw.Image, maskfb draw.Image, state drawState, cur opCur
 func (op imageOp) materialize(slot int) image.Image {
 	switch src := op.src.(type) {
 	case *Image:
-		return src.materialize(slot, op.ImageArguments)
+		return src.materialize(slot, op.args, op.refs)
 	case image.Image:
 		return src
 	case nil:
@@ -328,8 +323,8 @@ func (op imageOp) materialize(slot int) image.Image {
 	}
 }
 
-func (img *Image) materialize(slot int, args ImageArguments) image.Image {
-	return img.scratch[slot](args)
+func (img *Image) materialize(slot int, args []uint32, refs []any) image.Image {
+	return img.scratch[slot](args, refs)
 }
 
 func Offset(ops Ctx, off image.Point) {
@@ -433,8 +428,9 @@ const (
 )
 
 type imageOp struct {
-	src any
-	ImageArguments
+	src  any
+	refs []any
+	args []uint32
 }
 
 func addImageOp(ops Ctx, src any, mask maskType, refs []any, args []uint32) {
