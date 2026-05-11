@@ -21,12 +21,64 @@ $ nix run .#build-firmware
 
 ### Reproducible builds
 
-The build process is designed to be deterministic, that is, images produced with the above steps
-should match the released images bit-for-bit, except for the signature. To copy the signature
-from an official release to a locally built firmware:
+The build process is designed to be deterministic: a local build from the same
+source and version should match the released image, except for the signature.
+To reproduce an official release, set the release version once and reuse it for
+the verification commands. The examples below use Nix to provide tools such as
+`curl` and `sha256sum`.
 
 ```sh
-$ nix run .#copy-signature <path/to/official/seedhammerii-vX.Y.Z.uf2> <path/to/your/seedhammerii-vX.Y.Z>
+$ export VERSION=v1.4.1
+```
+
+Check out the release tag:
+
+```sh
+$ git switch --detach "$VERSION"
+```
+
+Build the tagged source with the same version string used by the release
+workflow:
+
+```sh
+$ nix run .#build-firmware
+```
+
+Download the official release image:
+
+```sh
+$ nix shell nixpkgs#curl -c curl -L \
+    -o "official-seedhammerii-$VERSION.uf2" \
+    "https://github.com/seedhammer/seedhammer/releases/download/$VERSION/seedhammerii-$VERSION.uf2"
+```
+
+Local builds do not have the SeedHammer release signing key, so the complete
+UF2 file will not match the official release until the official signature is
+copied into the local file. Before copying the signature, compare the signed
+firmware payload with the `picosign` tool included in this repository. The Nix
+development shell provides Go, so no separate Go installation is required:
+
+```sh
+$ nix develop -c go run seedhammer.com/cmd/picosign hash "seedhammerii-$VERSION.uf2" | nix shell nixpkgs#coreutils -c sha256sum
+$ nix develop -c go run seedhammer.com/cmd/picosign hash "official-seedhammerii-$VERSION.uf2" | nix shell nixpkgs#coreutils -c sha256sum
+```
+
+To copy the signature from an official release to a locally built firmware:
+
+```sh
+$ nix run .#copy-signature "official-seedhammerii-$VERSION.uf2" "seedhammerii-$VERSION.uf2"
+```
+
+After copying the signature, the full files should have identical SHA-256 sums:
+
+```sh
+$ nix shell nixpkgs#coreutils -c sha256sum "seedhammerii-$VERSION.uf2" "official-seedhammerii-$VERSION.uf2"
+```
+
+After verifying that the SHA-256 sums are identical, return to the main branch:
+
+```sh
+$ git switch main
 ```
 
 ## Development
