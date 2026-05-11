@@ -6,9 +6,18 @@ This repository contains the source code to run the controller program for the
 
 ## Installation
 
-Press and hold the firmware upgrade button while connecting the machine to
-a computer. Then, copy the firmware file to the USB drive that appears. The
-installation is complete when the drive disappears.
+Firmware installation requires an Android or Windows device.
+
+Connect the USB-C cable to the Android or Windows device first, but do not
+connect it to the machine yet. Press and hold the white firmware upgrade button
+on the underside of the control board above the hammerhead, then connect the
+cable to the machine while continuing to hold the button. Release the button
+when a USB drive appears on the Android or Windows device. The machine screen
+may remain blank or show only the backlight while it is in firmware upgrade
+mode.
+
+Copy the firmware file to the USB drive. The machine restarts when the
+installation is complete and shows the installed firmware version on screen.
 
 ### Building from source
 
