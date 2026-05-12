@@ -2,7 +2,7 @@
   description = "Seedhammer firmware";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     utils.url = "github:numtide/flake-utils";
   };
 
@@ -63,17 +63,11 @@
               vendorHash = "sha256-OO8o/s71jZIypfYZCLT6jwUPyQJ89AKg3DfzTrbrD/A=";
             });
           };
-        # Full pico SDK for picotool seal support.
-        # TODO: remove after NixOS 26.05.
-        pico-sdk-full = final: prev: {
-          withSubmodules = true;
-        };
         pkgs = import nixpkgs {
           inherit system;
           overlays = [
             tinygo-overlay
             openocd-overlay
-            pico-sdk-full
           ];
         };
       in
@@ -134,7 +128,6 @@
               DST="$1"; shift
               SIGNATURE=$(${pkgs.go}/bin/go run seedhammer.com/cmd/picosign extract "$SRC")
               ${pkgs.go}/bin/go run seedhammer.com/cmd/picosign sign -pubkey "$PUBKEY" -sig "$SIGNATURE" "$DST"
-              echo "wat" $?
             '';
           }
         );
