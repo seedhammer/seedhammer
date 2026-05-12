@@ -293,7 +293,7 @@ discard:
 	return len(r.events) > 0
 }
 
-func (r *EventRouter) Events(o *op.Ops, evts ...Event) {
+func (r *EventRouter) Events(d *op.Drawer, evts ...Event) {
 	for _, e := range evts {
 		pe, ok := e.AsPointer()
 		if !ok {
@@ -304,7 +304,7 @@ func (r *EventRouter) Events(o *op.Ops, evts ...Event) {
 		}
 		pctx := &r.pointer
 		var pressedBounds image.Rectangle
-		b, ok := o.TagBounds(pctx.pressedTag)
+		b, ok := d.TagBounds(pctx.pressedTag)
 		if !ok {
 			pctx.pressedTag = nil
 		}
@@ -316,7 +316,7 @@ func (r *EventRouter) Events(o *op.Ops, evts ...Event) {
 				Bounds: pressedBounds,
 			}
 		} else {
-			t.Tag, t.Bounds, _ = o.Hit(pe.Pos)
+			t.Tag, t.Bounds, _ = d.Hit(pe.Pos)
 			pctx.pressedTag = t.Tag
 		}
 		pctx.pressed = pe.Pressed

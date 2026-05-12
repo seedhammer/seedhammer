@@ -48,93 +48,103 @@ func TestDrawAlphaUniformOver(t *testing.T) {
 }
 
 func TestRoundedRect(t *testing.T) {
-	testGolden(t, "rounded-rect", 100, 60, func(ctx Ctx) {
+	testGolden(t, "rounded-rect", 100, 60, func(b *Buffer) Op {
 		outer := image.Rect(11, 12, 41, 52)
 		inner := image.Rect(21, 22, 31, 42)
-		ColorOp(ctx, argb(0xde11adbe))
 
-		RoundedRect(ctx, outer, 10)
-		ColorOp(ctx, argb(0xf03530aa))
+		l := Layer(
+			Compose(
+				Color(b, argb(0xff000000)),
+				RoundedOutline2(b, inner, 4, 1),
+			),
 
-		RoundedRect(ctx, inner, 4)
-		ColorOp(ctx, argb(0xffffffff))
+			Compose(
+				Color(b, argb(0xf1a2040a)),
+				RoundedOutline2(b, outer, 10, 1),
+			),
+		)
+		return Layer(
+			Compose(
+				Color(b, argb(0xff00ffff)),
+				RoundedRect2(b, inner, 4),
+			).Clip(image.Rect(22, 23, 30, 41)).
+				Offset(image.Pt(25, 0)),
 
-		Offset(ctx, image.Pt(50, 0))
-		RoundedOutline(ctx, outer, 10, 1)
-		ColorOp(ctx, argb(0xf1a2040a))
+			l.Offset(image.Pt(50, 0)),
 
-		Offset(ctx, image.Pt(50, 0))
-		RoundedOutline(ctx, inner, 4, 1)
-		ColorOp(ctx, argb(0xff000000))
+			Compose(
+				Color(b, argb(0xffffffff)),
+				RoundedRect2(b, inner, 4),
+			),
 
-		Offset(ctx, image.Pt(25, 0))
-		ClipOp(image.Rect(22, 23, 30, 41)).Add(ctx)
-		RoundedRect(ctx, inner, 4)
-		ColorOp(ctx, argb(0xff00ffff))
+			Compose(
+				Color(b, argb(0xf03530aa)),
+				RoundedRect2(b, outer, 10),
+			),
+
+			Color(b, argb(0xde11adbe)),
+		)
 	})
 }
 
 func TestClip(t *testing.T) {
-	testGolden(t, "alpha-mask", 100, 60, func(ctx Ctx) {
+	testGolden(t, "alpha-mask", 100, 60, func(b *Buffer) Op {
 		r := image.Rect(1, 2, 31, 42)
-		ColorOp(ctx, argb(0xde11adbe))
 
-		m := ctx.Begin()
-		ClipOp(r).Add(m)
-		ColorOp(m, argb(0xf03530aa))
-		c := ctx.End()
-		Offset(ctx, image.Pt(10, 10))
-		c.Add(ctx)
+		c1 := Color(b, argb(0xf03530aa)).
+			Clip(r).
+			Offset(image.Pt(10, 10))
 
-		m = ctx.Begin()
-		Offset(ctx, image.Pt(10, 10))
-		ClipOp(r).Add(m)
-		ColorOp(m, argb(0xf1a2040a))
-		c = ctx.End()
-		Offset(ctx, image.Pt(50, 0))
-		c.Add(ctx)
+		c2 := Color(b, argb(0xf1a2040a)).
+			Clip(r).
+			Offset(image.Pt(10, 10)).
+			Offset(image.Pt(50, 0))
+		background := Color(b, argb(0xde11adbe))
+		return Layer(c2, c1, background)
 	})
 }
 
 func TestImageMask(t *testing.T) {
-	testGolden(t, "image-mask", 80, 50, func(ctx Ctx) {
-		ColorOp(ctx, argb(0xde11adbe))
-
-		Offset(ctx, image.Pt(10, 10))
-		ImageOp(ctx, assets.IconDiscard, true)
-		ColorOp(ctx, argb(0xffdfcf0f))
-
+	testGolden(t, "image-mask", 80, 50, func(b *Buffer) Op {
 		fnt := poppins.Bold25
 		m := fnt.Metrics()
-		Offset(ctx, image.Pt(50, m.Ascent.Round()+10))
-		GlyphOp(ctx, fnt, 'R')
-		ColorOp(ctx, argb(0xffdfcf0f))
+		return Layer(
+			Compose(
+				Color(b, argb(0xffdfcf0f)),
+				Glyph(b, fnt, 'R'),
+			).Offset(image.Pt(50, m.Ascent.Round()+10)),
+			Compose(
+				Color(b, argb(0xffdfcf0f)),
+				Mask(b, assets.IconDiscard),
+			).Offset(image.Pt(10, 10)),
+			Color(b, argb(0xde11adbe)),
+		)
 	})
 }
 
 func TestPaletted(t *testing.T) {
-	testGolden(t, "paletted", 150, 150, func(ctx Ctx) {
-		ColorOp(ctx, argb(0xde11adbe))
-
-		Offset(ctx, image.Pt(10, 10))
-		AlphaOp(ctx, 0xcc)
-		AlphaOp(ctx, 0xaa)
-		ImageOp(ctx, assets.Hammer, false)
+	testGolden(t, "paletted", 150, 150, func(b *Buffer) Op {
+		return Layer(
+			Compose(
+				Image(b, assets.Hammer),
+				_Alpha(b, 0xaa),
+				_Alpha(b, 0xcc),
+			).Offset(image.Pt(10, 10)),
+			Color(b, argb(0xde11adbe)),
+		)
 	})
 }
 
-func testGolden(t *testing.T, name string, w, h int, f func(ctx Ctx)) {
+func testGolden(t *testing.T, name string, w, h int, f func(b *Buffer) Op) {
 	t.Helper()
 
-	var ops Ops
-	ctx := ops.Context()
-
-	f(ctx)
+	op := f(new(Buffer))
 
 	dr := image.Rect(0, 0, w, h)
 	fb := rgb565.New(dr)
 	mask := image.NewAlpha(dr)
-	ops.Draw(fb, mask)
+	d := new(Drawer)
+	d.Draw(fb, mask, op)
 	if err := os.MkdirAll("testdata", 0o770); err != nil {
 		t.Fatal(err)
 	}

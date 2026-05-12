@@ -61,10 +61,8 @@ type Context struct {
 	Styles        Styles
 	Wakeup        time.Time
 	Done          bool
-	FrameCallback func()
-
-	// Global UI state.
-	Version string
+	FrameCallback func(op.Op)
+	B             op.Buffer
 
 	// scan is the last scanned object (seed, descriptor
 	// etc.).
@@ -73,10 +71,11 @@ type Context struct {
 	Router EventRouter
 }
 
-func (c *Context) Frame() {
+func (c *Context) Frame(op op.Op) {
 	if f := c.FrameCallback; f != nil {
-		f()
+		f(op)
 	}
+	c.B.Reset()
 }
 
 func NewContext(pl Platform) *Context {
@@ -158,14 +157,15 @@ const (
 )
 
 type richText struct {
-	Y int
+	Content op.Op
+	Y       int
 }
 
-func (r *richText) Add(ops op.Ctx, style text.Style, width int, col color.RGBA, str string) {
-	r.Addf(ops, style, width, col, "%s", str)
+func (r *richText) Add(b *op.Buffer, style text.Style, width int, col color.RGBA, str string) {
+	r.Addf(b, style, width, col, "%s", str)
 }
 
-func (r *richText) Addf(ops op.Ctx, style text.Style, width int, col color.RGBA, format string, args ...any) {
+func (r *richText) Addf(b *op.Buffer, style text.Style, width int, col color.RGBA, format string, args ...any) {
 	m := style.Face.Metrics()
 	offy := r.Y + m.Ascent.Ceil()
 	lheight := style.LineHeight()
@@ -183,9 +183,13 @@ func (r *richText) Addf(ops op.Ctx, style text.Style, width int, col color.RGBA,
 			continue
 		}
 		off := image.Pt(g.Dot.Round(), offy)
-		op.Offset(ops, off)
-		op.GlyphOp(ops, style.Face, g.Rune)
-		op.ColorOp(ops, col)
+		r.Content = op.Layer(
+			r.Content,
+			op.Compose(
+				op.Color(b, col),
+				op.Glyph(b, style.Face, g.Rune),
+			).Offset(off),
+		)
 	}
 	r.Y = offy + m.Descent.Ceil()
 }
@@ -208,14 +212,14 @@ type ErrorScreen struct {
 	ok    Clickable
 }
 
-func (s *ErrorScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) bool {
+func (s *ErrorScreen) Layout(ctx *Context, th *Colors, dims image.Point) (op.Op, bool) {
 	s.ok.Button = Button3
 	if s.ok.Clicked(ctx) {
-		return true
+		return op.Op{}, true
 	}
-	s.w.Layout(ctx, ops, th, dims, s.Title, s.Body)
-	layoutNavigation(ops, th, dims, NavButton{Clickable: &s.ok, Style: StylePrimary, Icon: assets.IconCheckmark})
-	return false
+	nav, _ := layoutNavigation(&ctx.B, th, dims, NavButton{Clickable: &s.ok, Style: StylePrimary, Icon: assets.IconCheckmark})
+	content := s.w.Layout(ctx, th, dims, s.Title, s.Body)
+	return op.Layer(nav, content), false
 }
 
 type ConfirmWarningScreen struct {
@@ -267,7 +271,7 @@ func (c *ConfirmDelay) Progress(ctx *Context) float32 {
 
 const confirmDelay = 1 * time.Second
 
-func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, title, txt string) {
+func (w *Warning) Layout(ctx *Context, th *Colors, dims image.Point, title, txt string) op.Op {
 	for {
 		e, ok := w.inp.Next(ctx, ButtonFilter(Up), ButtonFilter(Down))
 		if !ok {
@@ -289,18 +293,12 @@ func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point,
 	const btnMargin = 4
 	const boxMargin = 6
 
-	op.ColorOp(ops, th.Background)
-
-	layoutTitle(ctx, ops, dims.X, th.Text, title)
-
 	btnOff := assets.NavBtnPrimary.Bounds().Dx() + btnMargin
 	bodyClip := image.Rectangle{
 		Min: image.Pt(boxMargin, leadingSize),
 		Max: image.Pt(dims.X-btnOff, dims.Y-boxMargin),
 	}
-	bodysz := widget.Labelw(ops.Begin(), ctx.Styles.body, bodyClip.Dx(), th.Text, txt)
-	body := ops.End()
-	innerCtx := ops.Begin()
+	body, bodysz := widget.Labelw(&ctx.B, ctx.Styles.body, bodyClip.Dx(), th.Text, txt)
 	w.txtclip = bodyClip.Dy()
 	maxScroll := bodysz.Y - (bodyClip.Dy() - 2*scrollFadeDist)
 	if w.scroll > maxScroll {
@@ -309,15 +307,22 @@ func (w *Warning) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point,
 	if w.scroll < 0 {
 		w.scroll = 0
 	}
-	op.Position(innerCtx, body, image.Pt(bodyClip.Min.X, bodyClip.Min.Y+scrollFadeDist-w.scroll))
-	fadeClip(ops, ops.End(), image.Rectangle(bodyClip))
+	body = body.Offset(image.Pt(bodyClip.Min.X, bodyClip.Min.Y+scrollFadeDist-w.scroll))
+	body = fadeClip(&ctx.B, body, image.Rectangle(bodyClip))
+
+	titleOp, _ := layoutTitle(ctx, dims.X, th.Text, title)
+	return op.Layer(
+		body,
+		titleOp,
+		op.Color(&ctx.B, th.Background),
+	)
 }
 
-func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) ConfirmResult {
+func (s *ConfirmWarningScreen) Layout(ctx *Context, th *Colors, dims image.Point) (op.Op, ConfirmResult) {
 	cancelBtn := s.cancelBtn.For(Button1)
 	confirmBtn := s.confirmBtn.For(Button3, Center)
 	if cancelBtn.Clicked(ctx) {
-		return ConfirmNo
+		return op.Op{}, ConfirmNo
 	}
 	for {
 		if _, ok := confirmBtn.Next(ctx); !ok {
@@ -334,14 +339,14 @@ func (s *ConfirmWarningScreen) Layout(ctx *Context, ops op.Ctx, th *Colors, dims
 	}
 	progress := s.confirm.Progress(ctx)
 	if progress == 1 {
-		return ConfirmYes
+		return op.Op{}, ConfirmYes
 	}
-	s.warning.Layout(ctx, ops, th, dims, s.Title, s.Body)
-	layoutNavigation(ops, th, dims, []NavButton{
+	nav, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{
 		{Clickable: cancelBtn, Style: StyleSecondary, Icon: assets.IconBack},
 		{Clickable: confirmBtn, Style: StylePrimary, Icon: s.Icon, Progress: progress},
 	}...)
-	return ConfirmNone
+	content := s.warning.Layout(ctx, th, dims, s.Title, s.Body)
+	return op.Layer(nav, content), ConfirmNone
 }
 
 type ProgressImage struct {
@@ -349,8 +354,8 @@ type ProgressImage struct {
 	Src      image.RGBA64Image
 }
 
-func (p *ProgressImage) Add(ctx op.Ctx) {
-	op.ParamImageOp(ctx, progressImageGen, true, []any{p.Src}, []uint32{math.Float32bits(p.Progress)})
+func (p *ProgressImage) Op(buf *op.Buffer) op.MaskOp {
+	return op.ParamImageMask(buf, progressImageGen, []any{p.Src}, []uint32{math.Float32bits(p.Progress)})
 }
 
 func (p *ProgressImage) At(x, y int) color.Color {
@@ -523,9 +528,9 @@ func emptyBIP39Mnemonic(nwords int) bip39.Mnemonic {
 
 const scrollFadeDist = 16
 
-func fadeClip(ops op.Ctx, w op.CallOp, r image.Rectangle) {
+func fadeClip(b *op.Buffer, o op.Op, r image.Rectangle) op.Op {
 	// op.ParamImageOp(ops, scrollMask, true, r, nil, nil)
-	op.Position(ops, w, image.Pt(0, 0))
+	return o.Offset(image.Pt(0, 0))
 }
 
 // var scrollMask = op.RegisterParameterizedImage(func(args op.ImageArguments, x, y int) color.RGBA64 {
@@ -541,16 +546,16 @@ func fadeClip(ops op.Ctx, w op.CallOp, r image.Rectangle) {
 
 const wordKeys = "qwertyuiop\nasdfghjkl\nzxcvbnm"
 
-func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic, selected int) {
+func inputWordsFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic, selected int) {
 	kbd := NewKeyboard(ctx, wordKeys)
 	wordLabel := ""
 	backBtn := &Clickable{Button: Button1}
 	okBtn := &Clickable{Button: Button2}
-	layoutWord := func(ops op.Ctx, n int, word string) image.Point {
+	layoutWord := func(buf *op.Buffer, n int, word string) (op.Op, image.Point) {
 		style := ctx.Styles.word
-		return widget.Labelf(ops, style, th.Background, "%2d: %s", n, word)
+		return widget.Labelf(buf, style, th.Background, "%2d: %s", n, word)
 	}
-	longest := layoutWord(op.Ctx{}, 24, widestWord)
+	_, longest := layoutWord(nil, 24, widestWord)
 	var nvalid int
 	for !ctx.Done {
 		for kbd.Update(ctx) {
@@ -583,38 +588,49 @@ func inputWordsFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemoni
 			}
 		}
 		dims := ctx.Platform.DisplaySize()
-		op.ColorOp(ops, th.Background)
-		layoutTitle(ctx, ops, dims.X, th.Text, "Input Words")
 
 		screen := layout.Rectangle{Max: dims}
 		_, content := screen.CutTop(leadingSize)
 		content, _ = content.CutBottom(8)
 
-		kbdsz := kbd.Layout(ctx, ops.Begin(), th)
-		op.Position(ops, ops.End(), content.S(kbdsz))
+		kbdOp, kbdsz := kbd.Layout(ctx, th)
+		kbdOp = kbdOp.Offset(content.S(kbdsz))
 
-		layoutWord(ops.Begin(), selected+1, wordLabel)
-		word := ops.End()
 		r := image.Rectangle{Max: longest}
 		r.Min.Y -= 3 + buttonPadY
 		r.Max.Y += buttonPadY
 		r.Min.X -= buttonPadX
 		r.Max.X += buttonPadX
-		op.RoundedRect(ops.Begin(), r, cornerRadius)
-		op.ColorOp(ops, th.Text)
-		word.Add(ops)
 		top, _ := content.CutBottom(kbdsz.Y)
-		op.Position(ops, ops.End(), top.Center(longest))
+		word, _ := layoutWord(&ctx.B, selected+1, wordLabel)
+		txtBg := op.Layer(
+			word,
+			op.Compose(
+				op.Color(&ctx.B, th.Text),
+				op.RoundedRect2(&ctx.B, r, cornerRadius),
+			),
+		).Offset(top.Center(longest))
 
-		layoutNavigation(ops, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
+		nav, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
 		if _, complete := completeBIP39Word(kbd.Fragment, nvalid); complete {
-			layoutNavigation(ops, th, dims, []NavButton{{Clickable: okBtn, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
+			nav2, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{{Clickable: okBtn, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
+			nav = op.Layer(
+				nav,
+				nav2,
+			)
 		}
-		ctx.Frame()
+		title, _ := layoutTitle(ctx, dims.X, th.Text, "Input Words")
+		ctx.Frame(op.Layer(
+			kbdOp,
+			txtBg,
+			nav,
+			title,
+			op.Color(&ctx.B, th.Background),
+		))
 	}
 }
 
-func inputCodex32Flow(ctx *Context, ops op.Ctx, th *Colors) (codex32.String, bool) {
+func inputCodex32Flow(ctx *Context, th *Colors) (codex32.String, bool) {
 	const alph = "1234567890\nqwertyup\nasdfghjk\nlzxcvnm"
 
 	kbd := NewKeyboard(ctx, alph)
@@ -634,52 +650,60 @@ func inputCodex32Flow(ctx *Context, ops op.Ctx, th *Colors) (codex32.String, boo
 			return share, true
 		}
 		dims := ctx.Platform.DisplaySize()
-		op.ColorOp(ops, th.Background)
-		layoutTitle(ctx, ops, dims.X, th.Text, "Input Codex32 Share")
 
 		screen := layout.Rectangle{Max: dims}
 		_, content := screen.CutTop(leadingSize)
 		content, _ = content.CutBottom(8)
 
-		kbdsz := kbd.Layout(ctx, ops.Begin(), th)
-		op.Position(ops, ops.End(), content.S(kbdsz))
+		kbdOp, kbdsz := kbd.Layout(ctx, th)
+		kbdOp = kbdOp.Offset(content.S(kbdsz))
 
-		frgSize := widget.Labelw(ops.Begin(), ctx.Styles.word, dims.X-50, th.Background, kbd.Fragment)
+		word, frgSize := widget.Labelw(&ctx.B, ctx.Styles.word, dims.X-50, th.Background, kbd.Fragment)
 		frgSize.X = max(frgSize.X, 100)
-		word := ops.End()
 		r := image.Rectangle{Max: frgSize}
 		r.Min.Y -= 3
 		r.Max.Y += buttonPadY
 		r.Min.X -= buttonPadX
 		r.Max.X += buttonPadX
-		op.RoundedRect(ops.Begin(), r, cornerRadius)
-		op.ColorOp(ops, th.Text)
-		word.Add(ops)
 		top, _ := content.CutBottom(kbdsz.Y)
-		op.Position(ops, ops.End(), top.Center(frgSize))
+		word = op.Layer(
+			word,
+			op.Compose(
+				op.Color(&ctx.B, th.Text),
+				op.RoundedRect2(&ctx.B, r, cornerRadius),
+			),
+		).Offset(top.Center(frgSize))
 
-		layoutNavigation(ops, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
+		nav, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
 		if valid {
-			layoutNavigation(ops, th, dims, []NavButton{{Clickable: okBtn, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
+			nav2, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{{Clickable: okBtn, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
+			nav = op.Layer(nav, nav2)
 		}
-		ctx.Frame()
+		title, _ := layoutTitle(ctx, dims.X, th.Text, "Input Codex32 Share")
+		ctx.Frame(op.Layer(
+			kbdOp,
+			word,
+			nav,
+			title,
+			op.Color(&ctx.B, th.Background),
+		))
 	}
 	return codex32.String{}, false
 }
 
-func inputSLIP39Flow(ctx *Context, ops op.Ctx, th *Colors, mnemonic slip39words.Mnemonic, selected int) bool {
+func inputSLIP39Flow(ctx *Context, th *Colors, mnemonic slip39words.Mnemonic, selected int) bool {
 	kbd := NewKeyboard(ctx, wordKeys)
 	wordLabel := ""
 	backBtn := &Clickable{Button: Button1}
 	okBtn := &Clickable{Button: Button2}
-	layoutWord := func(ops op.Ctx, n int, word string) image.Point {
+	layoutWord := func(b *op.Buffer, n int, word string) (op.Op, image.Point) {
 		style := ctx.Styles.word
-		return widget.Labelf(ops, style, th.Background, "%2d: %s", n, word)
+		return widget.Labelf(b, style, th.Background, "%2d: %s", n, word)
 	}
 	const (
 		widestWord = "WITHDRAW"
 	)
-	longest := layoutWord(op.Ctx{}, len(mnemonic), widestWord)
+	_, longest := layoutWord(nil, len(mnemonic), widestWord)
 	var nvalid int
 	for !ctx.Done {
 		for kbd.Update(ctx) {
@@ -712,34 +736,42 @@ func inputSLIP39Flow(ctx *Context, ops op.Ctx, th *Colors, mnemonic slip39words.
 			}
 		}
 		dims := ctx.Platform.DisplaySize()
-		op.ColorOp(ops, th.Background)
-		layoutTitle(ctx, ops, dims.X, th.Text, "Input Words")
-
 		screen := layout.Rectangle{Max: dims}
 		_, content := screen.CutTop(leadingSize)
 		content, _ = content.CutBottom(8)
 
-		kbdsz := kbd.Layout(ctx, ops.Begin(), th)
-		op.Position(ops, ops.End(), content.S(kbdsz))
+		kbdOp, kbdsz := kbd.Layout(ctx, th)
+		kbdOp = kbdOp.Offset(content.S(kbdsz))
 
-		layoutWord(ops.Begin(), selected+1, wordLabel)
-		word := ops.End()
+		word, _ := layoutWord(&ctx.B, selected+1, wordLabel)
 		r := image.Rectangle{Max: longest}
 		r.Min.Y -= 3
 		r.Max.Y += buttonPadY
 		r.Min.X -= buttonPadX
 		r.Max.X += buttonPadX
-		op.RoundedRect(ops.Begin(), r, cornerRadius)
-		op.ColorOp(ops, th.Text)
-		word.Add(ops)
 		top, _ := content.CutBottom(kbdsz.Y)
-		op.Position(ops, ops.End(), top.Center(longest))
+		word = op.Layer(
+			word,
+			op.Compose(
+				op.Color(&ctx.B, th.Text),
+				op.RoundedRect2(&ctx.B, r, cornerRadius),
+			),
+		).Offset(top.Center(longest))
 
-		layoutNavigation(ops, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
+		nav, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
 		if _, complete := completeSLIP39Word(kbd.Fragment, nvalid); complete {
-			layoutNavigation(ops, th, dims, []NavButton{{Clickable: okBtn, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
+			nav2, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{{Clickable: okBtn, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
+			nav = op.Layer(nav, nav2)
 		}
-		ctx.Frame()
+		title, _ := layoutTitle(ctx, dims.X, th.Text, "Input Words")
+
+		ctx.Frame(op.Layer(
+			kbdOp,
+			word,
+			nav,
+			title,
+			op.Color(&ctx.B, th.Background),
+		))
 	}
 	return false
 }
@@ -1069,7 +1101,8 @@ func (k *Keyboard) adjustCol(row int) bool {
 	return found
 }
 
-func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
+func (k *Keyboard) Layout(ctx *Context, th *Colors) (op.Op, image.Point) {
+	var content op.Op
 	for i, row := range k.keys {
 		for j, key := range row {
 			valid := k.Valid(key)
@@ -1089,34 +1122,46 @@ func (k *Keyboard) Layout(ctx *Context, ops op.Ctx, th *Colors) image.Point {
 				active = true
 				col = th.Background
 			}
+			bgr := image.Rectangle{Max: bgsz}
+			inpOp := op.Input(&ctx.B, &k.keys[i][j].clk).Clip(bgr)
+			var keyOp op.Op
 			var sz image.Point
 			if key.r == '⌫' {
 				icn := assets.KeyBackspace
 				sz = image.Pt(k.backspace.X, icn.Bounds().Dy())
-				op.ImageOp(ops.Begin(), icn, true)
-				op.ColorOp(ops, col)
+				keyOp = op.Compose(
+					op.Color(&ctx.B, col),
+					op.Mask(&ctx.B, icn),
+				)
 			} else {
-				sz = widget.Labelf(ops.Begin(), style, col, "%c", unicode.ToUpper(key.r))
+				keyOp, sz = widget.Labelf(&ctx.B, style, col, "%c", unicode.ToUpper(key.r))
 			}
-			key := ops.End()
-			bgr := image.Rectangle{Max: bgsz}
+			keyOp = keyOp.Offset(bgsz.Sub(sz).Div(2))
 			bgr.Min.X -= keyPadX
 			bgr.Max.X += keyPadX
 			bgr.Min.Y -= keyPadY
 			bgr.Max.Y += keyPadY
-			op.ClipOp(bgr).Add(ops.Begin())
-			op.InputOp(ops, &k.keys[i][j].clk)
+			bgOp := op.Color(&ctx.B, bgcol)
+			var mask op.MaskOp
 			if active {
-				op.RoundedRect(ops, bgr, keyCornerRadius)
+				mask = op.RoundedRect2(&ctx.B, bgr, keyCornerRadius)
 			} else {
-				op.RoundedOutline(ops, bgr, keyCornerRadius, keyLineWidth)
+				mask = op.RoundedOutline2(&ctx.B, bgr, keyCornerRadius, keyLineWidth)
 			}
-			op.ColorOp(ops, bgcol)
-			op.Position(ops, key, bgsz.Sub(sz).Div(2))
-			op.Position(ops, ops.End(), k.keys[i][j].pos)
+			btnOp := op.Layer(
+				inpOp,
+				keyOp,
+				op.Compose(
+					bgOp,
+					mask,
+				),
+			).Offset(k.keys[i][j].pos)
+			content = op.Layer(
+				content, btnOp,
+			)
 		}
 	}
-	return k.size
+	return content, k.size
 }
 
 func mulAlpha(col color.RGBA, a uint8) color.RGBA {
@@ -1137,11 +1182,11 @@ type ChoiceScreen struct {
 
 type Choice struct {
 	Size  image.Point
-	W     op.CallOp
+	W     op.Op
 	click Clickable
 }
 
-func (s *ChoiceScreen) Choose(ctx *Context, ops op.Ctx, th *Colors) (int, bool) {
+func (s *ChoiceScreen) Choose(ctx *Context, th *Colors) (int, bool) {
 	inp := new(InputTracker)
 	cancelBtn := &Clickable{Button: Button1}
 	chooseBtn := &Clickable{Button: Button3, AltButton: Center}
@@ -1183,27 +1228,22 @@ frames:
 		}
 
 		dims := ctx.Platform.DisplaySize()
-		s.Draw(ctx, ops, th, dims)
-
-		layoutNavigation(ops, th, dims, []NavButton{
+		nav, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{
 			{Clickable: cancelBtn, Style: StyleSecondary, Icon: assets.IconBack},
 			{Clickable: chooseBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		}...)
-		ctx.Frame()
+		content := s.Draw(ctx, th, dims)
+		ctx.Frame(op.Layer(nav, content))
 	}
 	return 0, false
 }
 
-func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
+func (s *ChoiceScreen) Draw(ctx *Context, th *Colors, dims image.Point) op.Op {
 	r := layout.Rectangle{Max: dims}
-	op.ColorOp(ops, th.Background)
-
-	layoutTitle(ctx, ops, dims.X, th.Text, s.Title)
-
 	_, bottom := r.CutTop(leadingSize)
-	sz := widget.Labelw(ops.Begin(), ctx.Styles.lead, dims.X-2*8, th.Text, s.Lead)
+	leadOp, sz := widget.Labelw(&ctx.B, ctx.Styles.lead, dims.X-2*8, th.Text, s.Lead)
 	content, lead := bottom.CutBottom(leadingSize)
-	op.Position(ops, ops.End(), lead.Center(sz))
+	leadOp = leadOp.Offset(lead.Center(sz))
 
 	content = content.Shrink(16, 0, 16, 0)
 
@@ -1217,17 +1257,16 @@ func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 		if i == s.choice {
 			col = th.Background
 		}
-		sz := widget.Label(ops.Begin(), style, col, c)
-		ch := ops.End()
+		o, sz := widget.Label(&ctx.B, style, col, c)
 		s.children[i].Size = sz
-		s.children[i].W = ch
+		s.children[i].W = o
 		if sz.X > maxW {
 			maxW = sz.X
 		}
 	}
 
-	inner := ops.Begin()
 	h := 0
+	var children op.Op
 	for i := range s.children {
 		c := &s.children[i]
 		xoff := (maxW-c.Size.X)/2 + buttonPadX
@@ -1239,21 +1278,33 @@ func (s *ChoiceScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Poi
 		bg.Min.Y -= buttonPadY
 		bg.Max.Y += buttonPadY
 		if i == s.choice {
-			op.RoundedRect(inner.Begin(), bg, cornerRadius)
-			op.ColorOp(inner, th.Text)
-			txt.Add(inner)
-			txt = inner.End()
+			txt = op.Layer(
+				txt,
+				op.Compose(
+					op.Color(&ctx.B, th.Text),
+					op.RoundedRect2(&ctx.B, bg, cornerRadius),
+				),
+			)
 		}
-		op.Offset(inner, pos)
-		op.ClipOp(bg).Add(inner)
-		op.InputOp(inner, &c.click)
-		op.Position(inner, txt, pos)
+		children = op.Layer(
+			children,
+			txt.Offset(pos),
+			op.Input(&ctx.B, &c.click).Clip(bg).Offset(pos),
+		)
 		h += c.Size.Y
 	}
-	op.Position(ops, ops.End(), content.Center(image.Pt(maxW, h)))
+	title, _ := layoutTitle(ctx, dims.X, th.Text, s.Title)
+
+	return op.Layer(
+		leadOp,
+		children.Offset(content.Center(image.Pt(maxW, h))),
+		title,
+		op.Color(&ctx.B, th.Background),
+	)
 }
 
 type MainScreen struct {
+	Version     string
 	page        program
 	scanTimeout time.Time
 	scanStatus  scanStatus
@@ -1261,12 +1312,12 @@ type MainScreen struct {
 
 const scanStatusTimeout = 1 * time.Second
 
-func (m *MainScreen) Flow(ctx *Context, ops op.Ctx) {
+func (m *MainScreen) Flow(ctx *Context) {
 	inp := new(InputTracker)
 	selectBtn := &Clickable{Button: Button3, AltButton: Center}
 	for !ctx.Done {
 		if selectBtn.Clicked(ctx) {
-			m.selectedFlow(ctx, ops)
+			m.selectedFlow(ctx)
 		}
 		if scan, ok := ctx.Scan(); ok {
 			if time.Now().Before(m.scanTimeout) {
@@ -1281,7 +1332,7 @@ func (m *MainScreen) Flow(ctx *Context, ops op.Ctx) {
 				case debugCommand:
 					switch cmd := cnt.Command; cmd {
 					case "FOREVERLAURA!":
-						qaEngraveFlow(ctx, ops)
+						qaEngraveFlow(ctx)
 						continue
 					case "lock-boot":
 						m.scanStatus = scanIdle
@@ -1294,7 +1345,7 @@ func (m *MainScreen) Flow(ctx *Context, ops op.Ctx) {
 						log.Printf("unknown debug command: %q", cmd)
 					}
 				}
-				if !engraveObjectFlow(ctx, ops, th, cnt) {
+				if !engraveObjectFlow(ctx, th, cnt) {
 					m.scanStatus = scanUnknownFormat
 				}
 			}
@@ -1329,11 +1380,11 @@ func (m *MainScreen) Flow(ctx *Context, ops op.Ctx) {
 			}
 		}
 		dims := ctx.Platform.DisplaySize()
-		m.draw(ctx, ops, dims)
-		layoutNavigation(ops, m.theme(), dims,
+		nav, _ := layoutNavigation(&ctx.B, m.theme(), dims,
 			NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		)
-		ctx.Frame()
+		content := m.draw(ctx, dims)
+		ctx.Frame(op.Layer(nav, content))
 	}
 }
 
@@ -1346,24 +1397,23 @@ func (m *MainScreen) theme() *Colors {
 	}
 }
 
-func (m *MainScreen) draw(ctx *Context, ops op.Ctx, dims image.Point) {
-	var title string
+func (m *MainScreen) draw(ctx *Context, dims image.Point) op.Op {
+	var titleTxt string
 	th := m.theme()
 	switch m.page {
 	case backupWallet:
-		title = "Backup Wallet"
+		titleTxt = "Backup Wallet"
 	}
-	op.ColorOp(ops, th.Background)
 
-	layoutTitle(ctx, ops, dims.X, th.Text, title)
+	title, _ := layoutTitle(ctx, dims.X, th.Text, titleTxt)
 
 	r := layout.Rectangle{Max: dims}
-	sz := m.layout(ops.Begin(), dims.X)
-	op.Position(ops, ops.End(), r.Center(sz))
+	content, sz := m.layout(&ctx.B, dims.X)
+	content = content.Offset(r.Center(sz))
 
-	sz = layoutMainPager(ops.Begin(), th, m.page)
+	inner, sz := layoutMainPager(&ctx.B, th, m.page)
 	_, middle := r.CutBottom(leadingSize)
-	op.Position(ops, ops.End(), middle.Center(sz))
+	inner = inner.Offset(middle.Center(sz))
 	sttxt := ""
 	if time.Now().Before(m.scanTimeout) {
 		ctx.WakeupAt(m.scanTimeout)
@@ -1378,25 +1428,32 @@ func (m *MainScreen) draw(ctx *Context, ops op.Ctx, dims image.Point) {
 			sttxt = "Unknown format"
 		}
 	}
-	stsz := widget.Labelw(ops.Begin(), ctx.Styles.subtitle, 300, th.Text, sttxt)
-	op.Position(ops, ops.End(), r.S(stsz).Sub(image.Pt(0, 16)))
+	subt, sz := widget.Labelw(&ctx.B, ctx.Styles.subtitle, 300, th.Text, sttxt)
+	subt = subt.Offset(r.S(sz).Sub(image.Pt(0, 16)))
 
-	versz := widget.Labelw(ops.Begin(), ctx.Styles.debug, 200, th.Text, ctx.Version)
-	op.Position(ops, ops.End(), r.SE(versz.Add(image.Pt(4, 0))))
-	shsz := widget.Labelw(ops.Begin(), ctx.Styles.debug, 100, th.Text, "SeedHammer")
-	op.Position(ops, ops.End(), r.SW(shsz).Add(image.Pt(3, 0)))
+	ver, sz := widget.Labelw(&ctx.B, ctx.Styles.debug, 200, th.Text, m.Version)
+	ver = ver.Offset(r.SE(sz.Add(image.Pt(4, 0))))
+	logo, sz := widget.Labelw(&ctx.B, ctx.Styles.debug, 100, th.Text, "SeedHammer")
+	logo = logo.Offset(r.SW(sz).Add(image.Pt(3, 0)))
+	return op.Layer(
+		title,
+		content,
+		inner,
+		subt,
+		ver, logo,
+		op.Color(&ctx.B, th.Background),
+	)
 }
 
-func layoutTitle(ctx *Context, ops op.Ctx, width int, col color.RGBA, title string) image.Rectangle {
-	return layoutTitlef(ctx, ops, width, col, "%s", title)
+func layoutTitle(ctx *Context, width int, col color.RGBA, title string) (op.Op, image.Rectangle) {
+	return layoutTitlef(ctx, width, col, "%s", title)
 }
 
-func layoutTitlef(ctx *Context, ops op.Ctx, width int, col color.RGBA, format string, args ...any) image.Rectangle {
+func layoutTitlef(ctx *Context, width int, col color.RGBA, format string, args ...any) (op.Op, image.Rectangle) {
 	const margin = 8
-	sz := widget.Labelwf(ops.Begin(), ctx.Styles.title, width-2*16, col, format, args...)
+	lbl, sz := widget.Labelwf(&ctx.B, ctx.Styles.title, width-2*16, col, format, args...)
 	pos := image.Pt((width-sz.X)/2, margin)
-	op.Position(ops, ops.End(), pos)
-	return image.Rectangle{
+	return lbl.Offset(pos), image.Rectangle{
 		Min: pos,
 		Max: pos.Add(sz),
 	}
@@ -1417,46 +1474,62 @@ type NavButton struct {
 	Progress  float32
 }
 
-func layoutNavigation(ops op.Ctx, th *Colors, dims image.Point, btns ...NavButton) image.Rectangle {
+func layoutNavigation(buf *op.Buffer, th *Colors, dims image.Point, btns ...NavButton) (op.Op, image.Rectangle) {
 	navsz := assets.NavBtnPrimary.Bounds().Size()
-	button := func(ops op.Ctx, b NavButton, t op.Tag, pressed bool) {
+	button := func(buf *op.Buffer, b NavButton, t op.Tag, pressed bool) op.Op {
 		if b.Style == StyleNone {
-			return
+			return op.Op{}
 		}
-		op.ClipOp(assets.NavBtnPrimary.Bounds()).Add(ops)
-		op.InputOp(ops, t)
-		switch b.Style {
-		case StyleSecondary:
-			op.ImageOp(ops, assets.NavBtnPrimary, true)
-			op.ColorOp(ops, th.Background)
-			op.ImageOp(ops, assets.NavBtnSecondary, true)
-			op.ColorOp(ops, th.Text)
-		case StylePrimary:
-			op.ImageOp(ops, assets.NavBtnPrimary, true)
-			op.ColorOp(ops, th.Primary)
+		content := op.Input(buf, t).Clip(assets.NavBtnPrimary.Bounds())
+		if b.Progress == 0 && pressed {
+			content = op.Layer(
+				content,
+				op.Compose(
+					op.Color(buf, color.RGBA{A: theme.activeMask}),
+					op.Mask(buf, assets.NavBtnPrimary),
+				),
+			)
 		}
 		const offset = 9
-		op.Offset(ops, image.Pt(offset, offset))
+		var icn op.MaskOp
 		if b.Progress > 0 {
-			(&ProgressImage{
+			icn = (&ProgressImage{
 				Progress: b.Progress,
 				Src:      assets.IconProgress,
-			}).Add(ops)
-			assets.IconProgress.Bounds().Size()
+			}).Op(buf)
 		} else {
-			op.ImageOp(ops, b.Icon, true)
-			b.Icon.Bounds().Size()
+			icn = op.Mask(buf, b.Icon)
 		}
+		content = op.Layer(
+			content,
+			op.Compose(
+				op.Color(buf, th.Text),
+				icn.Offset(image.Pt(offset, offset)),
+			),
+		)
 		switch b.Style {
 		case StyleSecondary:
-			op.ColorOp(ops, th.Text)
+			content = op.Layer(
+				content,
+				op.Compose(
+					op.Color(buf, th.Text),
+					op.Mask(buf, assets.NavBtnSecondary),
+				),
+				op.Compose(
+					op.Color(buf, th.Background),
+					op.Mask(buf, assets.NavBtnPrimary),
+				),
+			)
 		case StylePrimary:
-			op.ColorOp(ops, th.Text)
+			content = op.Layer(
+				content,
+				op.Compose(
+					op.Color(buf, th.Primary),
+					op.Mask(buf, assets.NavBtnPrimary),
+				),
+			)
 		}
-		if b.Progress == 0 && pressed {
-			op.ImageOp(ops, assets.NavBtnPrimary, true)
-			op.ColorOp(ops, color.RGBA{A: theme.activeMask})
-		}
+		return content
 	}
 	btnsz := assets.NavBtnPrimary.Bounds().Size()
 	ys := [3]int{
@@ -1465,95 +1538,103 @@ func layoutNavigation(ops op.Ctx, th *Colors, dims image.Point, btns ...NavButto
 		dims.Y - leadingSize - btnsz.Y,
 	}
 	var r image.Rectangle
+	var content op.Op
 	for _, b := range btns {
 		clk := b.Clickable
 		idx := int(clk.Button - Button1)
 		pressed := clk.Pressed && clk.Entered
-		button(ops.Begin(), b, clk, pressed)
+		bop := button(buf, b, clk, pressed)
 		y := ys[idx]
 		pos := image.Pt(dims.X-btnsz.X, y)
-		op.Position(ops, ops.End(), pos)
+		content = op.Layer(content, bop.Offset(pos))
 		r = r.Union(image.Rectangle{
 			Min: pos,
 			Max: pos.Add(navsz),
 		})
 	}
-	return r
+	return content, r
 }
 
-func (m *MainScreen) layout(ops op.Ctx, width int) image.Point {
-	th := m.theme()
-	op.ImageOp(ops.Begin(), assets.ArrowLeft, true)
-	op.ColorOp(ops, th.Text)
-	left := ops.End()
-	var h layout.Align
-	leftsz := h.Add(assets.ArrowLeft.Bounds().Size())
-
-	op.ImageOp(ops.Begin(), assets.ArrowRight, true)
-	op.ColorOp(ops, th.Text)
-	right := ops.End()
-	rightsz := h.Add(assets.ArrowRight.Bounds().Size())
-
-	contentsz := h.Add(layoutMainPlates(ops.Begin(), m.page))
-	content := ops.End()
-
+func (m *MainScreen) layout(buf *op.Buffer, width int) (op.Op, image.Point) {
 	const margin = 16
 
-	op.Position(ops, content, image.Pt((width-contentsz.X)/2, 8+h.Y(contentsz)))
+	th := m.theme()
+	left := op.Compose(
+		op.Color(buf, th.Text),
+		op.Mask(buf, assets.ArrowLeft),
+	)
+	var h layout.Align
+	leftsz := h.Add(assets.ArrowLeft.Bounds().Size())
+	left = left.Offset(image.Pt(margin, h.Y(leftsz)))
+
+	right := op.Compose(
+		op.Color(buf, th.Text),
+		op.Mask(buf, assets.ArrowRight),
+	)
+	rightsz := h.Add(assets.ArrowRight.Bounds().Size())
+	right = right.Offset(image.Pt(width-margin-rightsz.X, h.Y(rightsz)))
+
+	plates, sz := layoutMainPlates(buf, m.page)
+	contentsz := h.Add(sz)
+
+	content := plates.Offset(image.Pt((width-contentsz.X)/2, 8+h.Y(contentsz)))
 	const npage = int(backupWallet) + 1
 	if npage > 1 {
-		op.Position(ops, left, image.Pt(margin, h.Y(leftsz)))
-		op.Position(ops, right, image.Pt(width-margin-rightsz.X, h.Y(rightsz)))
+		content = op.Layer(content, left, right)
 	}
 
-	return image.Pt(width, h.Size.Y)
+	return content, image.Pt(width, h.Size.Y)
 }
 
-func layoutMainPlates(ops op.Ctx, page program) image.Point {
+func layoutMainPlates(buf *op.Buffer, page program) (op.Op, image.Point) {
 	switch page {
 	case backupWallet:
 		img := assets.Hammer
-		op.ImageOp(ops, img, false)
-		return img.Bounds().Size()
+		o := op.Image(buf, img)
+		return o, img.Bounds().Size()
 	}
 	panic("invalid page")
 }
 
-func layoutMainPager(ops op.Ctx, th *Colors, page program) image.Point {
+func layoutMainPager(buf *op.Buffer, th *Colors, page program) (op.Op, image.Point) {
 	const npages = int(backupWallet) + 1
 	const space = 4
 	if npages <= 1 {
-		return image.Point{}
+		return op.Op{}, image.Point{}
 	}
 	sz := assets.CircleFilled.Bounds().Size()
+	var content op.Op
 	for i := range npages {
-		op.Offset(ops, image.Pt((sz.X+space)*i, 0))
 		mask := assets.Circle
 		if i == int(page) {
 			mask = assets.CircleFilled
 		}
-		op.ImageOp(ops, mask, true)
-		op.ColorOp(ops, th.Text)
+		content = op.Layer(content,
+			op.Compose(
+				op.Color(buf, th.Text),
+				op.Mask(buf, mask),
+			).Offset(image.Pt((sz.X+space)*i, 0)),
+		)
 	}
-	return image.Pt((sz.X+space)*npages-space, sz.Y)
+	return content, image.Pt((sz.X+space)*npages-space, sz.Y)
 }
 
-func (m *MainScreen) selectedFlow(ctx *Context, ops op.Ctx) {
+func (m *MainScreen) selectedFlow(ctx *Context) {
 	th := m.theme()
 	switch m.page {
 	case backupWallet:
-		mnemonic, ok := newInputFlow(ctx, ops, th)
+		mnemonic, ok := newInputFlow(ctx, th)
 		if !ok {
 			break
 		}
-		engraveObjectFlow(ctx, ops, th, mnemonic)
+		engraveObjectFlow(ctx, th, mnemonic)
 	}
 }
 
-func engraveObjectFlow(ctx *Context, ops op.Ctx, th *Colors, obj any) bool {
+func engraveObjectFlow(ctx *Context, th *Colors, obj any) bool {
 	switch scan := obj.(type) {
 	case bip39.Mnemonic:
-		backupWalletFlow(ctx, ops, th, scan)
+		backupWalletFlow(ctx, th, scan)
 		// TODO: re-enable SLIP39. See also nfcpoller.go.
 	// case slip39.Share:
 	// 	w, err := scan.Words()
@@ -1592,19 +1673,19 @@ func engraveObjectFlow(ctx *Context, ops op.Ctx, th *Colors, obj any) bool {
 			Seed:  scan.String(),
 			Font:  constant.Font,
 		}
-		backupSeedStringFlow(ctx, ops, th, s)
+		backupSeedStringFlow(ctx, th, s)
 	case *bip380.Descriptor:
-		descriptorFlow(ctx, ops, th, scan)
+		descriptorFlow(ctx, th, scan)
 	default:
 		return false
 	}
 	return true
 }
 
-func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) {
+func backupWalletFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic) {
 	ss := new(SeedScreen)
 	for {
-		if !ss.Confirm(ctx, ops, th, mnemonic) {
+		if !ss.Confirm(ctx, th, mnemonic) {
 			return
 		}
 		plate, err := engraveSeed(ctx.Platform.EngraverParams(), mnemonic)
@@ -1612,25 +1693,23 @@ func backupWalletFlow(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemo
 			errScr := NewErrorScreen(err)
 			for !ctx.Done {
 				dims := ctx.Platform.DisplaySize()
-				dismissed := errScr.Layout(ctx, ops.Begin(), th, dims)
-				d := ops.End()
+				d, dismissed := errScr.Layout(ctx, th, dims)
 				if dismissed {
 					break
 				}
-				ss.Draw(ctx, ops, th, dims, mnemonic)
-				d.Add(ops)
-				ctx.Frame()
+				main := ss.Draw(ctx, th, dims, mnemonic)
+				ctx.Frame(op.Layer(d, main))
 			}
 			continue
 		}
-		completed := NewEngraveScreen(ctx, plate).Engrave(ctx, ops, &engraveTheme)
+		completed := NewEngraveScreen(ctx, plate).Engrave(ctx, &engraveTheme)
 		if completed {
 			return
 		}
 	}
 }
 
-func backupSeedStringFlow(ctx *Context, ops op.Ctx, th *Colors, s backup.SeedString) {
+func backupSeedStringFlow(ctx *Context, th *Colors, s backup.SeedString) {
 	params := ctx.Platform.EngraverParams()
 	p, err := backup.EngraveSeedString(params, s)
 	if err != nil {
@@ -1641,30 +1720,30 @@ func backupSeedStringFlow(ctx *Context, ops op.Ctx, th *Colors, s backup.SeedStr
 		return
 	}
 	for {
-		completed := NewEngraveScreen(ctx, plate).Engrave(ctx, ops, &engraveTheme)
+		completed := NewEngraveScreen(ctx, plate).Engrave(ctx, &engraveTheme)
 		if completed {
 			return
 		}
 	}
 }
 
-func descriptorFlow(ctx *Context, ops op.Ctx, th *Colors, desc *bip380.Descriptor) {
+func descriptorFlow(ctx *Context, th *Colors, desc *bip380.Descriptor) {
 	ds := &DescriptorScreen{
 		Descriptor: desc,
 	}
 	for {
-		plate, ok := ds.Confirm(ctx, ops, th)
+		plate, ok := ds.Confirm(ctx, th)
 		if !ok {
 			break
 		}
-		completed := NewEngraveScreen(ctx, plate).Engrave(ctx, ops, &engraveTheme)
+		completed := NewEngraveScreen(ctx, plate).Engrave(ctx, &engraveTheme)
 		if completed {
 			return
 		}
 	}
 }
 
-func newInputFlow(ctx *Context, ops op.Ctx, th *Colors) (any, bool) {
+func newInputFlow(ctx *Context, th *Colors) (any, bool) {
 	for {
 		cs := &ChoiceScreen{
 			Title:   "Input Seed",
@@ -1672,26 +1751,26 @@ func newInputFlow(ctx *Context, ops op.Ctx, th *Colors) (any, bool) {
 			Choices: []string{"12 WORDS", "24 WORDS" /* , "CODEX32", "SLIP-39" */},
 		}
 		for {
-			choice, ok := cs.Choose(ctx, ops, th)
+			choice, ok := cs.Choose(ctx, th)
 			if !ok {
 				return nil, false
 			}
 			switch choice {
 			case 0, 1:
 				mnemonic := emptyBIP39Mnemonic([]int{12, 24}[choice])
-				inputWordsFlow(ctx, ops, th, mnemonic, 0)
+				inputWordsFlow(ctx, th, mnemonic, 0)
 				if !isEmptyMnemonic(mnemonic) {
 					return mnemonic, true
 				}
 			case 2:
-				s, ok := inputCodex32Flow(ctx, ops, th)
+				s, ok := inputCodex32Flow(ctx, th)
 				if ok {
 					return s, true
 				}
 				// TODO: re-enable
 				// case 3:
 				// 	mnemonic := emptySLIP39Mnemonic(20)
-				// 	if ok := inputSLIP39Flow(ctx, ops, th, mnemonic, 0); !ok {
+				// 	if ok := inputSLIP39Flow(ctx, th, mnemonic, 0); !ok {
 				// 		break
 				// 	}
 				// 	share := new(strings.Builder)
@@ -1716,7 +1795,7 @@ type SeedScreen struct {
 	words    []Clickable
 }
 
-func (s *SeedScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors, mnemonic bip39.Mnemonic) bool {
+func (s *SeedScreen) Confirm(ctx *Context, th *Colors, mnemonic bip39.Mnemonic) bool {
 	inp := new(InputTracker)
 	backBtn := &Clickable{Button: Button1}
 	editBtn := &Clickable{Button: Button2, AltButton: Center}
@@ -1740,21 +1819,19 @@ events:
 			}
 			for !ctx.Done {
 				dims := ctx.Platform.DisplaySize()
-				res := confirm.Layout(ctx, ops.Begin(), th, dims)
-				d := ops.End()
+				d, res := confirm.Layout(ctx, th, dims)
 				switch res {
 				case ConfirmNo:
 					continue events
 				case ConfirmYes:
 					return false
 				}
-				s.Draw(ctx, ops, th, dims, mnemonic)
-				d.Add(ops)
-				ctx.Frame()
+				main := s.Draw(ctx, th, dims, mnemonic)
+				ctx.Frame(op.Layer(d, main))
 			}
 		}
 		if editBtn.Clicked(ctx) {
-			inputWordsFlow(ctx, ops, th, mnemonic, s.selected)
+			inputWordsFlow(ctx, th, mnemonic, s.selected)
 			continue
 		}
 		if confirmBtn.Clicked(ctx) {
@@ -1764,14 +1841,12 @@ events:
 			showErr := func(scr *ErrorScreen) {
 				for !ctx.Done {
 					dims := ctx.Platform.DisplaySize()
-					dismissed := scr.Layout(ctx, ops.Begin(), th, dims)
-					d := ops.End()
+					d, dismissed := scr.Layout(ctx, th, dims)
 					if dismissed {
 						break
 					}
-					s.Draw(ctx, ops, th, dims, mnemonic)
-					d.Add(ops)
-					ctx.Frame()
+					main := s.Draw(ctx, th, dims, mnemonic)
+					ctx.Frame(op.Layer(d, main))
 				}
 			}
 			if !mnemonic.Valid() {
@@ -1819,18 +1894,22 @@ events:
 		}
 
 		dims := ctx.Platform.DisplaySize()
-		s.Draw(ctx, ops, th, dims, mnemonic)
-
-		layoutNavigation(ops, th, dims, []NavButton{
+		nav, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{
 			{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack},
 			{Clickable: editBtn, Style: StyleSecondary, Icon: assets.IconEdit},
 		}...)
 		if isMnemonicComplete(mnemonic) {
-			layoutNavigation(ops, th, dims, []NavButton{
+			nav2, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{
 				{Clickable: confirmBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 			}...)
+			nav = op.Layer(nav, nav2)
 		}
-		ctx.Frame()
+		content := s.Draw(ctx, th, dims, mnemonic)
+
+		ctx.Frame(op.Layer(
+			nav,
+			content,
+		))
 	}
 	return false
 }
@@ -1842,25 +1921,23 @@ func isMnemonicComplete(m bip39.Mnemonic) bool {
 	return len(m) > 0
 }
 
-func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point, mnemonic bip39.Mnemonic) {
+func (s *SeedScreen) Draw(ctx *Context, th *Colors, dims image.Point, mnemonic bip39.Mnemonic) op.Op {
 	if len(s.words) != len(mnemonic) {
 		s.words = make([]Clickable, len(mnemonic))
 	}
-	op.ColorOp(ops, th.Background)
-	layoutTitle(ctx, ops, dims.X, th.Text, "Engrave Seed")
 
 	style := ctx.Styles.word
 	longestPrefix := style.Measure(math.MaxInt, "24: ")
-	layoutWord := func(ops op.Ctx, col color.RGBA, n int, word string) image.Point {
-		prefix := widget.Labelf(ops.Begin(), style, col, "%d: ", n)
-		op.Position(ops, ops.End(), image.Pt(longestPrefix.X-prefix.X, 0))
-		txt := widget.Label(ops.Begin(), style, col, word)
-		op.Position(ops, ops.End(), image.Pt(longestPrefix.X, 0))
-		return image.Pt(longestPrefix.X+txt.X, txt.Y)
+	layoutWord := func(b *op.Buffer, col color.RGBA, n int, word string) (op.Op, image.Point) {
+		numOp, prefix := widget.Labelf(b, style, col, "%d: ", n)
+		numOp = numOp.Offset(image.Pt(longestPrefix.X-prefix.X, 0))
+		txtOp, txt := widget.Label(b, style, col, word)
+		txtOp = txtOp.Offset(image.Pt(longestPrefix.X, 0))
+		return op.Layer(numOp, txtOp), image.Pt(longestPrefix.X+txt.X, txt.Y)
 	}
 
 	y := 0
-	longest := layoutWord(op.Ctx{}, color.RGBA{}, 24, widestWord)
+	_, longest := layoutWord(nil, color.RGBA{}, 24, widestWord)
 	r := layout.Rectangle{Max: dims}
 	navw := assets.NavBtnPrimary.Bounds().Dx()
 	list := r.Shrink(leadingSize, 0, 0, 0)
@@ -1880,55 +1957,70 @@ func (s *SeedScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point
 		scroll = 0
 	}
 	off := content.Min.Add(image.Pt(0, -scroll*lineHeight))
-	{
-		ops := ops.Begin()
-		for i, w := range mnemonic {
-			ops.Begin()
-			col := th.Text
-			r := image.Rectangle{Max: longest}
-			if i == s.selected {
-				col = th.Background
-				r.Min.Y -= 3
-				r.Max.Y += buttonPadY
-				r.Min.X -= buttonPadX
-				r.Max.X += buttonPadX
-				op.RoundedRect(ops, r, cornerRadius)
-				op.ColorOp(ops, th.Text)
-			}
-			word := bip39.LabelFor(w)
-			layoutWord(ops, col, i+1, word)
-			op.ClipOp(r).Add(ops)
-			op.InputOp(ops, &s.words[i])
-			pos := image.Pt(0, y).Add(off)
-			op.Position(ops, ops.End(), pos)
-			y += lineHeight
-			// TODO: hack to show words on two columns in
-			// touch mode.
-			if largeScreen && i == 11 {
-				y = 0
-				off.X += longest.X + 16
-			}
+	var m op.Op
+	for i, w := range mnemonic {
+		col := th.Text
+		if i == s.selected {
+			col = th.Background
+		}
+		r := image.Rectangle{Max: longest}
+		word := bip39.LabelFor(w)
+		w, _ := layoutWord(&ctx.B, col, i+1, word)
+		inp := op.Input(&ctx.B, &s.words[i]).Clip(r)
+		wordOp := op.Layer(
+			w,
+			inp,
+		)
+		if i == s.selected {
+			col = th.Background
+			r.Min.Y -= 3
+			r.Max.Y += buttonPadY
+			r.Min.X -= buttonPadX
+			r.Max.X += buttonPadX
+			wordOp = op.Layer(
+				wordOp,
+				op.Compose(
+					op.Color(&ctx.B, th.Text),
+					op.RoundedRect2(&ctx.B, r, cornerRadius),
+				),
+			)
+		}
+		pos := image.Pt(0, y).Add(off)
+		m = op.Layer(
+			m,
+			wordOp.Offset(pos),
+		)
+		y += lineHeight
+		// TODO: hack to show words on two columns in
+		// touch mode.
+		if largeScreen && i == 11 {
+			y = 0
+			off.X += longest.X + 16
 		}
 	}
-	fadeClip(ops, ops.End(), image.Rectangle(list))
+	m = fadeClip(&ctx.B, m, image.Rectangle(list))
+	title, _ := layoutTitle(ctx, dims.X, th.Text, "Engrave Seed")
+	return op.Layer(
+		m,
+		title,
+		op.Color(&ctx.B, th.Background),
+	)
 }
 
 type DescriptorScreen struct {
 	Descriptor *bip380.Descriptor
 }
 
-func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (Plate, bool) {
+func (s *DescriptorScreen) Confirm(ctx *Context, th *Colors) (Plate, bool) {
 	showErr := func(errScreen *ErrorScreen) {
 		for !ctx.Done {
 			dims := ctx.Platform.DisplaySize()
-			dismissed := errScreen.Layout(ctx, ops.Begin(), th, dims)
-			d := ops.End()
+			d, dismissed := errScreen.Layout(ctx, th, dims)
 			if dismissed {
 				break
 			}
-			s.Draw(ctx, ops, th, dims)
-			d.Add(ops)
-			ctx.Frame()
+			main := s.Draw(ctx, th, dims)
+			ctx.Frame(op.Layer(d, main))
 		}
 	}
 	backBtn := &Clickable{Button: Button1}
@@ -1948,7 +2040,7 @@ func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (Plate,
 				Lead:    "Choose engraving",
 				Choices: labels,
 			}
-			choice, ok := cs.Choose(ctx, ops, th)
+			choice, ok := cs.Choose(ctx, th)
 			if ok {
 				e := engravings[choice]
 				return e, true
@@ -1956,57 +2048,59 @@ func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (Plate,
 		}
 
 		dims := ctx.Platform.DisplaySize()
-		s.Draw(ctx, ops, th, dims)
-		layoutNavigation(ops, th, dims, []NavButton{
+		nav, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{
 			{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack},
 			{Clickable: confirmBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		}...)
-		ctx.Frame()
+		content := s.Draw(ctx, th, dims)
+		ctx.Frame(op.Layer(nav, content))
 	}
 	return Plate{}, false
 }
 
-func (s *DescriptorScreen) Draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
+func (s *DescriptorScreen) Draw(ctx *Context, th *Colors, dims image.Point) op.Op {
 	const infoSpacing = 8
 
 	desc := s.Descriptor
-	op.ColorOp(ops, th.Background)
 
 	// Title.
 	r := layout.Rectangle{Max: dims}
-	layoutTitle(ctx, ops, dims.X, th.Text, "Engrave Descriptor")
 
 	btnw := assets.NavBtnPrimary.Bounds().Dx()
 	body := r.Shrink(leadingSize, btnw, 0, btnw)
 
-	{
-		ops := ops.Begin()
-		var bodytxt richText
+	var bodytxt richText
 
-		bodyst := ctx.Styles.body
-		subst := ctx.Styles.subtitle
-		if desc.Title != "" {
-			bodytxt.Add(ops, subst, body.Dx(), th.Text, "Title")
-			bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Title)
-			bodytxt.Y += infoSpacing
-		}
-		bodytxt.Add(ops, subst, body.Dx(), th.Text, "Type")
-		testnet := any("") // TODO: TinyGo allocates without explicit interface conversion.
-		if len(desc.Keys) > 0 && desc.Keys[0].Network != &chaincfg.MainNetParams {
-			testnet = " (testnet)"
-		}
-		switch desc.Type {
-		case bip380.Singlesig:
-			bodytxt.Addf(ops, bodyst, body.Dx(), th.Text, "Singlesig%s", testnet)
-		default:
-			bodytxt.Addf(ops, bodyst, body.Dx(), th.Text, "%d-of-%d multisig%s", desc.Threshold, len(desc.Keys), testnet)
-		}
+	bodyst := ctx.Styles.body
+	subst := ctx.Styles.subtitle
+	if desc.Title != "" {
+		bodytxt.Add(&ctx.B, subst, body.Dx(), th.Text, "Title")
+		bodytxt.Add(&ctx.B, bodyst, body.Dx(), th.Text, desc.Title)
 		bodytxt.Y += infoSpacing
-		bodytxt.Add(ops, subst, body.Dx(), th.Text, "Script")
-		bodytxt.Add(ops, bodyst, body.Dx(), th.Text, desc.Script.String())
 	}
+	bodytxt.Add(&ctx.B, subst, body.Dx(), th.Text, "Type")
+	testnet := any("") // TODO: TinyGo allocates without explicit interface conversion.
+	if len(desc.Keys) > 0 && desc.Keys[0].Network != &chaincfg.MainNetParams {
+		testnet = " (testnet)"
+	}
+	switch desc.Type {
+	case bip380.Singlesig:
+		bodytxt.Addf(&ctx.B, bodyst, body.Dx(), th.Text, "Singlesig%s", testnet)
+	default:
+		bodytxt.Addf(&ctx.B, bodyst, body.Dx(), th.Text, "%d-of-%d multisig%s", desc.Threshold, len(desc.Keys), testnet)
+	}
+	bodytxt.Y += infoSpacing
+	bodytxt.Add(&ctx.B, subst, body.Dx(), th.Text, "Script")
+	bodytxt.Add(&ctx.B, bodyst, body.Dx(), th.Text, desc.Script.String())
 
-	op.Position(ops, ops.End(), body.Min.Add(image.Pt(0, scrollFadeDist)))
+	bodyOp := bodytxt.Content.Offset(body.Min.Add(image.Pt(0, scrollFadeDist)))
+
+	title, _ := layoutTitle(ctx, dims.X, th.Text, "Engrave Descriptor")
+	return op.Layer(
+		bodyOp,
+		title,
+		op.Color(&ctx.B, th.Background),
+	)
 }
 
 func NewEngraveScreen(ctx *Context, plate Plate) *EngraveScreen {
@@ -2021,7 +2115,7 @@ type EngraveScreen struct {
 	job      *engraveJob
 }
 
-func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
+func (s *EngraveScreen) Engrave(ctx *Context, th *Colors) bool {
 	defer s.job.Stop()
 	inp := new(InputTracker)
 	backBtn := &Clickable{Button: Button1}
@@ -2067,9 +2161,9 @@ frames:
 					}
 				}
 				dims := ctx.Platform.DisplaySize()
-				s.draw(ctx, ops, th, dims)
-				s.drawNav(ops, th, dims, p, backBtn, selectBtn)
-				ctx.Frame()
+				nav := s.drawNav(&ctx.B, th, dims, p, backBtn, selectBtn)
+				content := s.draw(ctx, th, dims)
+				ctx.Frame(op.Layer(nav, content))
 			}
 		}
 
@@ -2079,47 +2173,46 @@ frames:
 		}
 
 		dims := ctx.Platform.DisplaySize()
-		s.draw(ctx, ops, th, dims)
-		s.drawNav(ops, th, dims, 0, backBtn, selectBtn)
+		nav := s.drawNav(&ctx.B, th, dims, 0, backBtn, selectBtn)
+		content := s.draw(ctx, th, dims)
 
-		ctx.Frame()
+		ctx.Frame(op.Layer(nav, content))
 	}
 	return false
 }
 
-func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Point) {
-	op.ColorOp(ops, th.Background)
-	layoutTitle(ctx, ops, dims.X, th.Text, "Engrave Plate")
-
+func (s *EngraveScreen) draw(ctx *Context, th *Colors, dims image.Point) op.Op {
 	r := layout.Rectangle{Max: dims}
 
 	const margin = 8
 	_, content := r.CutTop(leadingSize)
 
 	st := s.job.Status()
+	var contentOp op.Op
 	switch st.State {
 	default:
 		content := content.Shrink(0, margin, 0, margin)
 		content, _ = content.CutBottom(leadingSize)
 		var bodysz image.Point
+		var bodyOp op.Op
 		switch st.State {
 		case engraveIdle:
 			const body = "Insert a blank plate and close the lock.\n\nHold button to start the engraving process. The process is loud, use hearing protection."
-			bodysz = widget.Labelw(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text, body)
+			bodyOp, bodysz = widget.Labelw(&ctx.B, ctx.Styles.lead, content.Dx(), th.Text, body)
 		case engraveDone:
 			const body = "Engraving completed successfully."
-			bodysz = widget.Labelw(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text, body)
+			bodyOp, bodysz = widget.Labelw(&ctx.B, ctx.Styles.lead, content.Dx(), th.Text, body)
 		case engraveStopped:
 			const body = "Engraving paused.\nHold button to resume."
-			bodysz = widget.Labelw(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text, body)
+			bodyOp, bodysz = widget.Labelw(&ctx.B, ctx.Styles.lead, content.Dx(), th.Text, body)
 		case engraveStopping:
 			const body = "Engraving stopping..."
-			bodysz = widget.Labelw(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text, body)
+			bodyOp, bodysz = widget.Labelw(&ctx.B, ctx.Styles.lead, content.Dx(), th.Text, body)
 		case engraveFailed:
-			bodysz = widget.Labelwf(ops.Begin(), ctx.Styles.lead, content.Dx(), th.Text,
+			bodyOp, bodysz = widget.Labelwf(&ctx.B, ctx.Styles.lead, content.Dx(), th.Text,
 				"Engraving failed.\nHold button to retry.\n\nError: %s", st.Error)
 		}
-		op.Position(ops, ops.End(), content.Center(bodysz))
+		contentOp = bodyOp.Offset(content.Center(bodysz))
 	case engraveRunning:
 		middle, lead := content.CutBottom(leadingSize)
 		// Remaining seconds, rounded up.
@@ -2127,31 +2220,42 @@ func (s *EngraveScreen) draw(ctx *Context, ops op.Ctx, th *Colors, dims image.Po
 		tps := ctx.Platform.EngraverParams().TicksPerSecond
 		remSec := (rem + tps - 1) / tps
 		min, sec := remSec/60, remSec%60
-		sz := widget.Labelf(ops.Begin(), ctx.Styles.progress, th.Text, "%d:%.2d", min, sec)
-		op.Position(ops, ops.End(), middle.Center(sz))
+		remOp, sz := widget.Labelf(&ctx.B, ctx.Styles.progress, th.Text, "%d:%.2d", min, sec)
+		remOp = remOp.Offset(middle.Center(sz))
 		const leadTxt = "Engraving plate"
-		leadsz := widget.Labelw(ops.Begin(), ctx.Styles.lead, dims.X-2*margin, th.Text, leadTxt)
-		op.Position(ops, ops.End(), lead.Center(leadsz))
+		leadOp, leadsz := widget.Labelw(&ctx.B, ctx.Styles.lead, dims.X-2*margin, th.Text, leadTxt)
+		leadOp = leadOp.Offset(lead.Center(leadsz))
+		contentOp = op.Layer(remOp, leadOp)
 	}
+	title, _ := layoutTitle(ctx, dims.X, th.Text, "Engrave Plate")
+	return op.Layer(
+		contentOp,
+		title,
+		op.Color(&ctx.B, th.Background),
+	)
 }
 
-func (s *EngraveScreen) drawNav(ops op.Ctx, th *Colors, dims image.Point, progress float32, backBtn, selectBtn *Clickable) {
+func (s *EngraveScreen) drawNav(b *op.Buffer, th *Colors, dims image.Point, progress float32, backBtn, selectBtn *Clickable) op.Op {
 	st := s.job.Status()
+	var nav op.Op
 	switch st.State {
 	case engraveRunning:
-		layoutNavigation(ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconLeft})
+		nav, _ = layoutNavigation(b, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconLeft})
 	case engraveDone:
-		layoutNavigation(ops, th, dims, NavButton{
+		nav, _ = layoutNavigation(b, th, dims, NavButton{
 			Clickable: selectBtn,
 			Style:     StylePrimary,
 			Icon:      assets.IconRight,
 		})
 	case engraveStopping:
-		layoutNavigation(ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack})
+		nav, _ = layoutNavigation(b, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack})
 	default:
-		layoutNavigation(ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack})
-		layoutNavigation(ops, th, dims, NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconHammer, Progress: progress})
+		nav, _ = layoutNavigation(b, th, dims,
+			NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack},
+			NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconHammer, Progress: progress},
+		)
 	}
+	return nav
 }
 
 type Platform interface {
@@ -2194,12 +2298,7 @@ const idleTimeout = 3 * time.Minute
 func Run(pl Platform, version string) func(yield func() bool) {
 	return func(yield func() bool) {
 		ctx := NewContext(pl)
-		ctx.Version = "Firmware: " + version + "\nHardware: " + pl.HardwareVersion()
-		if !pl.Features().Has(FeatureSecureBoot) {
-			ctx.Version += " (UNLOCKED)"
-		}
 		a := struct {
-			root op.Ops
 			mask *image.Alpha
 			idle struct {
 				start  time.Time
@@ -2247,17 +2346,25 @@ func Run(pl Platform, version string) func(yield func() bool) {
 		}
 		a.idle.start = time.Now()
 
-		it := func(yield func() bool) {
-			ctx.FrameCallback = func() {
-				ctx.Done = ctx.Done || !yield()
+		it := func(yield func(op.Op) bool) {
+			ctx.FrameCallback = func(op op.Op) {
+				ctx.Done = ctx.Done || !yield(op)
 			}
-			m := new(MainScreen)
-			m.Flow(ctx, a.root.Context())
+			version := "Firmware: " + version + "\nHardware: " + pl.HardwareVersion()
+			if !pl.Features().Has(FeatureSecureBoot) {
+				version += " (UNLOCKED)"
+			}
+			m := &MainScreen{
+				Version: version,
+			}
+			m.Flow(ctx)
 		}
 		startTime := time.Now()
 		var evts []Event
 		stats := new(runtimeStats)
-		for range it {
+		d := new(op.Drawer)
+		for content := range it {
+			d.Reset()
 			dirty := image.Rectangle{Max: pl.DisplaySize()}
 			layoutTime := time.Since(startTime)
 			if err := pl.Dirty(dirty); err != nil {
@@ -2274,7 +2381,7 @@ func Run(pl Platform, version string) func(yield func() bool) {
 					a.mask = image.NewAlpha(image.Rectangle{Max: fbdims})
 				}
 				a.mask.Rect = image.Rectangle{Max: fbdims}
-				a.root.Draw(fb, a.mask)
+				d.Draw(fb, a.mask, content)
 			}
 			drawTime := time.Since(startTime)
 			if debug {
@@ -2292,7 +2399,7 @@ func Run(pl Platform, version string) func(yield func() bool) {
 				}
 				ctx.Reset()
 				if !a.idle.active {
-					ctx.Router.Events(&a.root, evts...)
+					ctx.Router.Events(d, evts...)
 				}
 				select {
 				case scan := <-scans:
@@ -2306,10 +2413,6 @@ func Run(pl Platform, version string) func(yield func() bool) {
 					a.idle.active = idle
 					if idle {
 						a.idle.state = saver.State{}
-					} else {
-						// The screen saver has invalidated the cached
-						// frame content.
-						a.root.Reset()
 					}
 				}
 				if a.idle.active {
@@ -2322,7 +2425,6 @@ func Run(pl Platform, version string) func(yield func() bool) {
 				ctx.WakeupAt(idleWakeup)
 				break
 			}
-			a.root.Reset()
 			startTime = time.Now()
 		}
 	}

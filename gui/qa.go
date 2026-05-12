@@ -11,7 +11,7 @@ import (
 	"seedhammer.com/gui/widget"
 )
 
-func qaEngraveFlow(ctx *Context, ops op.Ctx) {
+func qaEngraveFlow(ctx *Context) {
 	p := ctx.Platform
 	const sz = SquarePlate
 	params := p.EngraverParams()
@@ -43,23 +43,26 @@ func qaEngraveFlow(ctx *Context, ops op.Ctx) {
 		if eerr == "" {
 			eerr = lastSt.Error
 		}
-		drawQA(ctx, ops, stats, maxXLoad, maxYLoad, eerr)
+		qa := drawQA(ctx, stats, maxXLoad, maxYLoad, eerr)
 		p.Wakeup()
-		ctx.Frame()
+		ctx.Frame(qa)
 	}
 }
 
-func drawQA(ctx *Context, ops op.Ctx, st EngraverStats, maxXLoad, maxYLoad int, eerr string) {
+func drawQA(ctx *Context, st EngraverStats, maxXLoad, maxYLoad int, eerr string) op.Op {
 	dims := ctx.Platform.DisplaySize()
 	th := &descriptorTheme
-	op.ColorOp(ops, th.Background)
-	txtsz := layoutTitle(ctx, ops, dims.X, th.Text, "FOREVER, LAURA!")
+	title, txtsz := layoutTitle(ctx, dims.X, th.Text, "FOREVER, LAURA!")
 	r := layout.Rectangle{Max: dims}
 	r = r.Shrink(txtsz.Max.Y, 8, 0, 8)
-	widget.Labelwf(ops.Begin(), ctx.Styles.body, r.Dx(), th.Text,
+	body, _ := widget.Labelwf(&ctx.B, ctx.Styles.body, r.Dx(), th.Text,
 		"X Speed: %dmm/s\nY Speed: %dmm/s\nX Load: %d (now: %d)\nY Load: %d (now: %d)\nX Stalls: %d\nY Stalls: %d\nError: %s",
 		st.XSpeed, st.YSpeed, maxXLoad, st.XLoad, maxYLoad, st.YLoad, st.XStalls, st.YStalls, eerr)
-	op.Position(ops, ops.End(), r.Min)
+	return op.Layer(
+		title,
+		body.Offset(r.Min),
+		op.Color(&ctx.B, th.Background),
+	)
 }
 
 func qaPlan(mm int, dims bezier.Point) engrave.Engraving {

@@ -28,18 +28,20 @@ import (
 func BenchmarkRedraw(b *testing.B) {
 	b.ReportAllocs()
 
-	ops := new(op.Ops)
 	ctx := NewContext(newPlatform())
-	ctx.FrameCallback = func() {
+	var frame op.Op
+	ctx.FrameCallback = func(content op.Op) {
+		frame = content
 		ctx.Done = true
 	}
 	m := new(MainScreen)
-	m.Flow(ctx, ops.Context())
+	m.Flow(ctx)
 	clip := image.Rectangle{Max: ctx.Platform.DisplaySize()}
 	fb := rgb565.New(clip)
 	maskfb := image.NewAlpha(clip)
+	d := new(op.Drawer)
 	for b.Loop() {
-		ops.Draw(fb, maskfb)
+		d.Draw(fb, maskfb, frame)
 	}
 }
 
@@ -57,23 +59,21 @@ func BenchmarkAllocs(b *testing.B) {
 		Descriptor: desc,
 	}
 	m := new(MainScreen)
-	screens := []func(*Context, op.Ctx){
+	screens := []func(*Context){
 		m.Flow,
-		func(ctx *Context, ops op.Ctx) {
-			ds.Confirm(ctx, ops, &descriptorTheme)
+		func(ctx *Context) {
+			ds.Confirm(ctx, &descriptorTheme)
 		},
 	}
 	var frames []func()
 	for _, s := range screens {
 		it := func(yield func(struct{}) bool) {
-			ops := new(op.Ops)
 			ctx := NewContext(newPlatform())
-			ctx.FrameCallback = func() {
+			ctx.FrameCallback = func(op.Op) {
 				ctx.Done = !yield(struct{}{})
 				ctx.Reset()
-				ops.Reset()
 			}
-			s(ctx, ops.Context())
+			s(ctx)
 		}
 		next, quit := iter.Pull(it)
 		defer quit()
@@ -93,12 +93,13 @@ func TestAllocs(t *testing.T) {
 	}
 }
 
-func dumpUI(t testing.TB, ops *op.Ops, path string) {
+func dumpUI(t testing.TB, o op.Op, path string) {
 	t.Helper()
 	clip := image.Rectangle{Max: image.Pt(testDisplayDim, testDisplayDim)}
 	fb := rgb565.New(clip)
 	maskfb := image.NewAlpha(clip)
-	ops.Draw(fb, maskfb)
+	d := new(op.Drawer)
+	d.Draw(fb, maskfb, o)
 	buf := new(bytes.Buffer)
 	if err := png.Encode(buf, fb); err != nil {
 		t.Error(err)
@@ -157,8 +158,7 @@ func TestEngraveScreenCancel(t *testing.T) {
 		p := newPlatform()
 		p.engraver = e
 		ctx := NewContext(p)
-		ops := new(op.Ops)
-		frame, quit := runUI(ctx, ops, func() {
+		frame, quit := runUI(ctx, func() {
 			scr := NewEngraveScreen(
 				ctx,
 				// A slow engrave job, to allow for cancelling to
@@ -169,7 +169,7 @@ func TestEngraveScreenCancel(t *testing.T) {
 					},
 				},
 			)
-			if ok := scr.Engrave(ctx, ops.Context(), &engraveTheme); ok {
+			if ok := scr.Engrave(ctx, &engraveTheme); ok {
 				t.Error("EngraveScreen: succeeded unexpectedly")
 			}
 		})
@@ -204,10 +204,9 @@ func TestEngraveScreenError(t *testing.T) {
 		p := newPlatform()
 		p.engraver = e
 		ctx := NewContext(p)
-		ops := new(op.Ops)
 		scr := newTestEngraveScreen(t, ctx)
-		frame, quit := runUI(ctx, ops, func() {
-			scr.Engrave(ctx, ops.Context(), &engraveTheme)
+		frame, quit := runUI(ctx, func() {
+			scr.Engrave(ctx, &engraveTheme)
 		})
 		defer quit()
 
@@ -242,11 +241,10 @@ func TestEngraveScreen(t *testing.T) {
 		p := newPlatform()
 		p.engraver = e
 		ctx := NewContext(p)
-		ops := new(op.Ops)
 		scr := newTestEngraveScreen(t, ctx)
 		success := false
-		frame, quit := runUI(ctx, ops, func() {
-			success = scr.Engrave(ctx, ops.Context(), &engraveTheme)
+		frame, quit := runUI(ctx, func() {
+			success = scr.Engrave(ctx, &engraveTheme)
 		})
 		defer quit()
 
@@ -280,7 +278,7 @@ func TestWordKeyboardScreen(t *testing.T) {
 		runes(&ctx.Router, w)
 		click(&ctx.Router, Button2)
 		m := make(bip39.Mnemonic, 1)
-		inputWordsFlow(ctx, op.Ctx{}, &descriptorTheme, m, 0)
+		inputWordsFlow(ctx, &descriptorTheme, m, 0)
 		if got := bip39.LabelFor(m[0]); got != w {
 			t.Errorf("keyboard mapped %q to %q", w, got)
 		}
@@ -462,13 +460,13 @@ func newEngraver() *testEngraver {
 	return t
 }
 
-func runUI(ctx *Context, ops *op.Ops, ui func()) (frame func() (string, bool), close func()) {
+func runUI(ctx *Context, ui func()) (frame func() (string, bool), close func()) {
 	return iter.Pull(func(yield func(content string) bool) {
-		ctx.FrameCallback = func() {
+		ctx.FrameCallback = func(o op.Op) {
 			r := image.Rectangle{Max: ctx.Platform.DisplaySize()}
-			content := ops.ExtractText(r)
+			d := new(op.Drawer)
+			content := d.ExtractText(r, o)
 			ctx.Reset()
-			ops.Reset()
 			ctx.Done = ctx.Done || !yield(content)
 		}
 		ui()

@@ -20,12 +20,14 @@ func BenchmarkOps(b *testing.B) {
 	bounds := image.Rect(0, 0, 100, 100)
 	fb := rgb565.New(bounds)
 	mask := image.NewAlpha(bounds)
-	ops := new(Ops)
+	d := new(Drawer)
+	buf := new(Buffer)
 	for b.Loop() {
-		ops.Reset()
-		ctx := ops.Context()
-		Offset(ctx, image.Pt(50, 50))
-		ColorOp(ctx, color.RGBA{})
-		ops.Draw(fb, mask)
+		d.Reset()
+		buf.Reset()
+		d.Draw(fb, mask,
+			Color(buf, color.RGBA{}).
+				Offset(image.Pt(50, 50)),
+		)
 	}
 }
