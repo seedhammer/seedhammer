@@ -4,6 +4,9 @@ This repository contains the source code to run the controller program for the
 [SeedHammer II](https://seedhammer.com) engraving machine. The hardware is
 [open source](https://github.com/seedhammer/hardware).
 
+The [user manual](https://seedhammer.com/doc/manual) contains detailed instructions
+for operating the machine.
+
 ## Installation
 
 Press and hold the firmware upgrade button while connecting the machine to
