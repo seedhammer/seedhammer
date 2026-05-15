@@ -16,8 +16,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/btcsuite/btcd/btcutil/hdkeychain"
-	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/btcutil/v2/hdkeychain"
+	"github.com/btcsuite/btcd/chaincfg/v2"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip39"
 	"seedhammer.com/bip85"

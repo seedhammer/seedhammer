@@ -9,20 +9,20 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/btcsuite/btcd/address/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
-	"github.com/btcsuite/btcd/btcutil"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/chaincfg/v2"
+	"github.com/btcsuite/btcd/txscript/v2"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"seedhammer.com/bip380"
 )
 
 func Change(desc *bip380.Descriptor, index uint32) (string, error) {
-	return address(desc, index, true)
+	return addressAt(desc, index, true)
 }
 
 func Receive(desc *bip380.Descriptor, index uint32) (string, error) {
-	return address(desc, index, false)
+	return addressAt(desc, index, false)
 }
 
 func Supported(desc *bip380.Descriptor) bool {
@@ -32,12 +32,12 @@ func Supported(desc *bip380.Descriptor) bool {
 
 var errUnsupported = errors.New("unsupported descriptor")
 
-func address(desc *bip380.Descriptor, index uint32, change bool) (string, error) {
-	var addr btcutil.Address
+func addressAt(desc *bip380.Descriptor, index uint32, change bool) (string, error) {
+	var addr address.Address
 	var network *chaincfg.Params
 	switch desc.Type {
 	case bip380.SortedMulti:
-		var keys []*btcutil.AddressPubKey
+		var keys []*address.AddressPubKey
 		for _, k := range desc.Keys {
 			pub, err := derivePubKey(k, index, change)
 			if err != nil {
@@ -47,13 +47,13 @@ func address(desc *bip380.Descriptor, index uint32, change bool) (string, error)
 				return "", fmt.Errorf("address: multisig descriptor mixes networks: %w", errUnsupported)
 			}
 			network = k.Network
-			addrPub, err := btcutil.NewAddressPubKey(pub.SerializeCompressed(), network)
+			addrPub, err := address.NewAddressPubKey(pub.SerializeCompressed(), network)
 			if err != nil {
 				return "", fmt.Errorf("address: %w", err)
 			}
 			keys = append(keys, addrPub)
 		}
-		slices.SortFunc(keys, func(addr1, addr2 *btcutil.AddressPubKey) int {
+		slices.SortFunc(keys, func(addr1, addr2 *address.AddressPubKey) int {
 			return bytes.Compare(addr1.PubKey().SerializeCompressed(), addr2.PubKey().SerializeCompressed())
 		})
 		script, err := txscript.MultiSigScript(keys, desc.Threshold)
@@ -62,10 +62,10 @@ func address(desc *bip380.Descriptor, index uint32, change bool) (string, error)
 		}
 		switch desc.Script {
 		case bip380.P2SH:
-			addr, err = btcutil.NewAddressScriptHash(script, network)
+			addr, err = address.NewAddressScriptHash(script, network)
 		case bip380.P2WSH, bip380.P2SH_P2WSH:
 			hash := sha256.Sum256(script)
-			addr, err = btcutil.NewAddressWitnessScriptHash(hash[:], network)
+			addr, err = address.NewAddressWitnessScriptHash(hash[:], network)
 		default:
 			return "", fmt.Errorf("address: multisig script: %s: %w", desc.Script, errUnsupported)
 		}
@@ -81,14 +81,14 @@ func address(desc *bip380.Descriptor, index uint32, change bool) (string, error)
 		}
 		switch desc.Script {
 		case bip380.P2PKH:
-			pkHash := btcutil.Hash160(pub.SerializeCompressed())
-			addr, err = btcutil.NewAddressPubKeyHash(pkHash, network)
+			pkHash := address.Hash160(pub.SerializeCompressed())
+			addr, err = address.NewAddressPubKeyHash(pkHash, network)
 		case bip380.P2WPKH, bip380.P2SH_P2WPKH:
-			pkHash := btcutil.Hash160(pub.SerializeCompressed())
-			addr, err = btcutil.NewAddressWitnessPubKeyHash(pkHash, network)
+			pkHash := address.Hash160(pub.SerializeCompressed())
+			addr, err = address.NewAddressWitnessPubKeyHash(pkHash, network)
 		case bip380.P2TR:
 			tkey := txscript.ComputeTaprootKeyNoScript(pub)
-			addr, err = btcutil.NewAddressTaproot(schnorr.SerializePubKey(tkey), network)
+			addr, err = address.NewAddressTaproot(schnorr.SerializePubKey(tkey), network)
 		default:
 			return "", fmt.Errorf("address: singlesig script: %s: %w", desc.Script, errUnsupported)
 		}
@@ -105,7 +105,7 @@ func address(desc *bip380.Descriptor, index uint32, change bool) (string, error)
 		if err != nil {
 			return "", fmt.Errorf("address: %w", err)
 		}
-		addr, err = btcutil.NewAddressScriptHash(script, network)
+		addr, err = address.NewAddressScriptHash(script, network)
 		if err != nil {
 			return "", fmt.Errorf("address: %w", err)
 		}

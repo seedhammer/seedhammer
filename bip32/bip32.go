@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/btcsuite/btcd/btcutil"
-	"github.com/btcsuite/btcd/btcutil/hdkeychain"
-	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/address/v2"
+	"github.com/btcsuite/btcd/btcutil/v2/hdkeychain"
+	"github.com/btcsuite/btcd/chaincfg/v2"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
@@ -36,7 +36,7 @@ func (p Path) String() string {
 
 // Fingerprint is the first 4 bytes of the RIPEMD160(SHA256(pkey)).
 func Fingerprint(pkey *secp256k1.PublicKey) uint32 {
-	mfp := btcutil.Hash160(pkey.SerializeCompressed())[:4]
+	mfp := address.Hash160(pkey.SerializeCompressed())[:4]
 	return binary.BigEndian.Uint32(mfp)
 }
 

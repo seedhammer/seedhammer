@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/btcsuite/btcd/btcutil/hdkeychain"
+	"github.com/btcsuite/btcd/btcutil/v2/hdkeychain"
 	"seedhammer.com/codex32"
 )
 
