@@ -19,7 +19,6 @@ import (
 
 var (
 	update = flag.Bool("update", false, "update golden files")
-	dump   = flag.String("dump", "", "dump SVG files to directory")
 )
 
 func TestInterpolator(t *testing.T) {
@@ -155,11 +154,9 @@ func TestInterpolatePoints(t *testing.T) {
 			t.Fatal(err)
 		}
 		cuspline := expandUniformBSpline(uspline)
-		if dir := *dump; dir != "" {
-			path := filepath.Join(dir, fmt.Sprintf("dump%d.svg", i))
-			if err := dumpBSplineToSVG(path, cuspline, waypoints); err != nil {
-				t.Fatal(err)
-			}
+		path := filepath.Join(t.ArtifactDir(), fmt.Sprintf("dump%d.svg", i))
+		if err := dumpBSplineToSVG(path, cuspline, waypoints); err != nil {
+			t.Fatal(err)
 		}
 		var seg Segment
 		// Test that the spline passes through every line segment

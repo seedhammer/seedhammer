@@ -26,7 +26,6 @@ import (
 
 var (
 	update = flag.Bool("update", false, "update golden files")
-	dump   = flag.String("dump", "", "dump original and new splines to directory")
 )
 
 func TestCSQR(t *testing.T) {
@@ -165,7 +164,7 @@ func TestFonts(t *testing.T) {
 			spline := verifiedEngraving(t, conf, PlanEngraving(conf, plan))
 			m := f.face.Metrics()
 			bounds := bspline.Bounds{Max: bezier.Pt(width*em/m.Height, em)}
-			if err := golden.CompareBSpline(p, *update, *dump, strokeWidth, bounds, spline); err != nil {
+			if err := golden.CompareBSpline(p, *update, t.ArtifactDir(), strokeWidth, bounds, spline); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -185,7 +184,7 @@ func TestConstantFont(t *testing.T) {
 	bounds := bspline.Bounds{
 		Max: bezier.Pt(width, height),
 	}
-	if err := golden.CompareBSpline(p, *update, *dump, strokeWidth, bounds, spline); err != nil {
+	if err := golden.CompareBSpline(p, *update, t.ArtifactDir(), strokeWidth, bounds, spline); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -26,7 +26,6 @@ import (
 
 var (
 	update = flag.Bool("update", false, "update golden files")
-	dump   = flag.String("dump", "", "dump original and new splines to directory")
 )
 
 const (
@@ -386,7 +385,7 @@ func compareGolden(t testing.TB, name string, plan engrave.Engraving) {
 		},
 	}
 	sw := params.StrokeWidth
-	if err := golden.CompareBSpline(p, *update, *dump, sw, bounds, spline); err != nil {
+	if err := golden.CompareBSpline(p, *update, t.ArtifactDir(), sw, bounds, spline); err != nil {
 		t.Fatal(err)
 	}
 }

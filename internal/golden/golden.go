@@ -18,11 +18,9 @@ import (
 
 func CompareBSpline(path string, update bool, dumpDir string, strokeWidth int, bounds bspline.Bounds, spline bspline.Curve) error {
 	bpath := filepath.Base(path)
-	if dumpDir != "" {
-		fpath := filepath.Join(dumpDir, bpath+".svg")
-		if err := dumpSVG(fpath, strokeWidth, bounds, spline); err != nil {
-			return err
-		}
+	fpath := filepath.Join(dumpDir, bpath+".svg")
+	if err := dumpSVG(fpath, strokeWidth, bounds, spline); err != nil {
+		return err
 	}
 	if update {
 		buf := new(bytes.Buffer)
@@ -61,12 +59,10 @@ func CompareBSpline(path string, update bool, dumpDir string, strokeWidth int, b
 		}
 	}
 	if mismatches > 0 || len(knots) != len(golden) {
-		if dumpDir != "" {
-			orig := slices.Values(golden)
-			fpath := filepath.Join(dumpDir, bpath+".orig.svg")
-			if err := dumpSVG(fpath, strokeWidth, bounds, orig); err != nil {
-				return err
-			}
+		orig := slices.Values(golden)
+		fpath := filepath.Join(dumpDir, bpath+".orig.svg")
+		if err := dumpSVG(fpath, strokeWidth, bounds, orig); err != nil {
+			return err
 		}
 		return fmt.Errorf("spline lengths %d, %d, with %d/%d knot mismatches", len(knots), len(golden), mismatches, len(golden))
 	}

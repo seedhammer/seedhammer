@@ -19,8 +19,7 @@ import (
 )
 
 var (
-	artifacts = flag.Bool("artifacts", false, "dump mismatching images")
-	update    = flag.Bool("update", false, "update golden images")
+	update = flag.Bool("update", false, "update golden images")
 )
 
 func TestDrawAlphaUniformOver(t *testing.T) {
@@ -164,10 +163,9 @@ func testGolden(t *testing.T, name string, w, h int, f func(ctx Ctx)) {
 		t.Fatal(err)
 	}
 	if err := compareImages(got, golden); err != nil {
-		if *artifacts {
-			if err := os.WriteFile(name+"-mismatch.png", imgBytes, 0o660); err != nil {
-				t.Error(err)
-			}
+		n := filepath.Join(t.ArtifactDir(), name+"-mismatch.png")
+		if err := os.WriteFile(n, imgBytes, 0o660); err != nil {
+			t.Error(err)
 		}
 		t.Error(err)
 	}
