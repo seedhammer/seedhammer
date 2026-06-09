@@ -58,8 +58,7 @@ type Context struct {
 	FrameCallback func()
 
 	// Global UI state.
-	Version        string
-	LastDescriptor *bip380.Descriptor
+	Version string
 
 	// scan is the last scanned object (seed, descriptor
 	// etc.).
