@@ -3,7 +3,6 @@ package gui
 
 import (
 	"errors"
-	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -20,10 +19,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil/v2/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg/v2"
 	qr "github.com/seedhammer/kortschak-qr"
-	"seedhammer.com/address"
 	"seedhammer.com/backup"
-	"seedhammer.com/bc/ur"
-	"seedhammer.com/bc/urtypes"
 	"seedhammer.com/bezier"
 	"seedhammer.com/bip32"
 	"seedhammer.com/bip380"
@@ -194,152 +190,6 @@ func (r *richText) Addf(ops op.Ctx, style text.Style, width int, col color.RGBA,
 	r.Y = offy + m.Descent.Ceil()
 }
 
-func ShowAddressesScreen(ctx *Context, ops op.Ctx, th *Colors, desc *bip380.Descriptor) {
-	var s struct {
-		addresses [2][]string
-		page      int
-		scroll    int
-	}
-
-	counter := 0
-	for page := range len(s.addresses) {
-		for len(s.addresses[page]) < 20 {
-			var addr string
-			var err error
-			switch page {
-			case 0:
-				addr, err = address.Receive(desc, uint32(counter))
-			case 1:
-				addr, err = address.Change(desc, uint32(counter))
-			}
-			counter++
-			if err != nil {
-				// Very unlikely.
-				continue
-			}
-			const addrLen = 12
-			fmtAddr := fmt.Sprintf("%d: %s", len(s.addresses[page])+1, shortenAddress(addrLen, addr))
-			s.addresses[page] = append(s.addresses[page], fmtAddr)
-		}
-	}
-
-	const maxPage = len(s.addresses)
-	inp := new(InputTracker)
-	backBtn := &Clickable{Button: Button1}
-	for !ctx.Done {
-		scrollDelta := 0
-		if backBtn.Clicked(ctx) {
-			return
-		}
-		for {
-			e, ok := inp.Next(ctx, ButtonFilter(Left), ButtonFilter(Right), ButtonFilter(Up), ButtonFilter(Down))
-			if !ok {
-				break
-			}
-			if e, ok := e.AsButton(); ok {
-				switch e.Button {
-				case Left:
-					if e.Pressed {
-						s.page = (s.page - 1 + maxPage) % maxPage
-						s.scroll = 0
-					}
-				case Right:
-					if e.Pressed {
-						s.page = (s.page + 1) % maxPage
-						s.scroll = 0
-					}
-				case Up:
-					if e.Pressed {
-						scrollDelta--
-					}
-				case Down:
-					if e.Pressed {
-						scrollDelta++
-					}
-				}
-			}
-		}
-		op.ColorOp(ops, th.Background)
-		dims := ctx.Platform.DisplaySize()
-
-		// Title.
-		r := layout.Rectangle{Max: dims}
-		title := "Receive"
-		if s.page == 1 {
-			title = "Change"
-		}
-		layoutTitle(ctx, ops, dims.X, th.Text, title)
-
-		op.ImageOp(ops.Begin(), assets.ArrowLeft, true)
-		op.ColorOp(ops, th.Text)
-		left := ops.End()
-
-		op.ImageOp(ops.Begin(), assets.ArrowRight, true)
-		op.ColorOp(ops, th.Text)
-		right := ops.End()
-
-		leftsz := assets.ArrowLeft.Bounds().Size()
-		rightsz := assets.ArrowRight.Bounds().Size()
-
-		content := r.Shrink(0, 12, 0, 12)
-		body := content.Shrink(leadingSize, rightsz.X+12, 0, leftsz.X+12)
-		inner := body.Shrink(scrollFadeDist, 0, scrollFadeDist, 0)
-
-		op.Position(ops, left, content.W(leftsz))
-		op.Position(ops, right, content.E(rightsz))
-
-		var bodytxt richText
-		ops.Begin()
-		addrs := s.addresses[s.page]
-		for _, addr := range addrs {
-			ops := ops
-			bodytxt.Add(ops, ctx.Styles.body, inner.Dx(), th.Text, addr)
-		}
-		addresses := ops.End()
-
-		s.scroll += scrollDelta * body.Dy() / 2
-		maxScroll := bodytxt.Y - inner.Dy()
-		s.scroll = min(max(0, s.scroll), maxScroll)
-		pos := inner.Min.Sub(image.Pt(0, s.scroll))
-		op.Position(ops.Begin(), addresses, pos)
-		fadeClip(ops, ops.End(), image.Rectangle(body))
-
-		layoutNavigation(ops, th, dims, NavButton{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack})
-		ctx.Frame()
-	}
-}
-
-func shortenAddress(n int, addr string) string {
-	if len(addr) <= n {
-		return addr
-	}
-	return addr[:n/2] + "......" + addr[len(addr)-n/2:]
-}
-
-func descriptorKeyIdx(desc *bip380.Descriptor, m bip39.Mnemonic, pass string) (int, bool) {
-	if len(desc.Keys) == 0 {
-		return 0, false
-	}
-	network := desc.Keys[0].Network
-	seed := bip39.MnemonicSeed(m, pass)
-	mk, err := hdkeychain.NewMaster(seed, network)
-	if err != nil {
-		return 0, false
-	}
-	for i, k := range desc.Keys {
-		xpub, err := bip32.Derive(mk, k.DerivationPath)
-		if err != nil {
-			// A derivation that generates an invalid key is by itself very unlikely,
-			// but also means that the seed doesn't match this xpub.
-			continue
-		}
-		if k.String() == xpub.String() {
-			return i, true
-		}
-	}
-	return 0, false
-}
-
 func deriveMasterKey(m bip39.Mnemonic, net *chaincfg.Params) (*hdkeychain.ExtendedKey, bool) {
 	seed := bip39.MnemonicSeed(m, "")
 	mk, err := hdkeychain.NewMaster(seed, net)
@@ -349,86 +199,6 @@ func deriveMasterKey(m bip39.Mnemonic, net *chaincfg.Params) (*hdkeychain.Extend
 	//
 	// [0] https://bitcoin.stackexchange.com/questions/53180/bip-32-seed-resulting-in-an-invalid-private-key
 	return mk, err == nil
-}
-
-// scaleRot is a specialized function for fast scaling and rotation of
-// the camera frames for display.
-func scaleRot(dst, src *image.Gray, rot180 bool) {
-	db := dst.Bounds()
-	sb := src.Bounds()
-	if db.Empty() {
-		return
-	}
-	scale := sb.Dx() / db.Dx()
-	for y := 0; y < db.Dy(); y++ {
-		sx := sb.Max.X - 1 - y*scale
-		dy := db.Max.Y - y
-		if rot180 {
-			dy = y + db.Min.Y
-		}
-		for x := 0; x < db.Dx(); x++ {
-			sy := x*scale + sb.Min.Y
-			c := src.GrayAt(sx, sy)
-			dx := db.Max.X - 1 - x
-			if rot180 {
-				dx = x + db.Min.X
-			}
-			dst.SetGray(dx, dy, c)
-		}
-	}
-}
-
-type QRDecoder struct {
-	decoder   ur.Decoder
-	nsdecoder nonstandard.Decoder
-}
-
-func (d *QRDecoder) Progress() int {
-	progress := int(100 * d.decoder.Progress())
-	if progress == 0 {
-		progress = int(100 * d.nsdecoder.Progress())
-	}
-	return progress
-}
-
-func (d *QRDecoder) parseNonStandard(qr []byte) (any, bool) {
-	if err := d.nsdecoder.Add(string(qr)); err != nil {
-		d.nsdecoder = nonstandard.Decoder{}
-		return qr, true
-	}
-	enc := d.nsdecoder.Result()
-	if enc == nil {
-		return nil, false
-	}
-	return enc, true
-}
-
-func (d *QRDecoder) parseQR(qr []byte) (any, bool) {
-	uqr := strings.ToUpper(string(qr))
-	if !strings.HasPrefix(uqr, "UR:") {
-		d.decoder = ur.Decoder{}
-		return d.parseNonStandard(qr)
-	}
-	d.nsdecoder = nonstandard.Decoder{}
-	if err := d.decoder.Add(uqr); err != nil {
-		// Incompatible fragment. Reset decoder and try again.
-		d.decoder = ur.Decoder{}
-		d.decoder.Add(uqr)
-	}
-	typ, enc, err := d.decoder.Result()
-	if err != nil {
-		d.decoder = ur.Decoder{}
-		return nil, false
-	}
-	if enc == nil {
-		return nil, false
-	}
-	d.decoder = ur.Decoder{}
-	v, err := urtypes.Parse(typ, enc)
-	if err != nil {
-		return nil, true
-	}
-	return v, true
 }
 
 type ErrorScreen struct {
@@ -724,15 +494,6 @@ func masterFingerprintFor(m bip39.Mnemonic, network *chaincfg.Params) (uint32, e
 		return 0, err
 	}
 	return bip32.Fingerprint(pkey), nil
-}
-
-func plateName(p PlateSize) string {
-	switch p {
-	case SquarePlate:
-		return "SH02"
-	default:
-		panic("unsupported plate")
-	}
 }
 
 func isEmptyMnemonic(m bip39.Mnemonic) bool {
@@ -1498,25 +1259,6 @@ type MainScreen struct {
 	scanStatus  scanStatus
 }
 
-func (m *MainScreen) showError(ctx *Context, ops op.Ctx, title, content string) {
-	ws := &ErrorScreen{
-		Title: title,
-		Body:  content,
-	}
-	th := m.theme()
-	for !ctx.Done {
-		dims := ctx.Platform.DisplaySize()
-		res := ws.Layout(ctx, ops.Begin(), th, dims)
-		if res {
-			break
-		}
-		dialog := ops.End()
-		m.draw(ctx, ops, dims)
-		dialog.Add(ops)
-		ctx.Frame()
-	}
-}
-
 const scanStatusTimeout = 1 * time.Second
 
 func (m *MainScreen) Flow(ctx *Context, ops op.Ctx) {
@@ -2190,16 +1932,11 @@ func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (Plate,
 		}
 	}
 	backBtn := &Clickable{Button: Button1}
-	// TODO: re-enable addresses screen.
-	// infoBtn := &Clickable{Button: Button2}
 	confirmBtn := &Clickable{Button: Button3}
 	for !ctx.Done {
 		if backBtn.Clicked(ctx) {
 			break
 		}
-		// for infoBtn.Clicked(ctx) {
-		// 	ShowAddressesScreen(ctx, ops, th, s.Descriptor)
-		// }
 		if confirmBtn.Clicked(ctx) {
 			labels, engravings, err := validateDescriptor(ctx.Platform.EngraverParams(), s.Descriptor)
 			if err != nil {
@@ -2222,7 +1959,6 @@ func (s *DescriptorScreen) Confirm(ctx *Context, ops op.Ctx, th *Colors) (Plate,
 		s.Draw(ctx, ops, th, dims)
 		layoutNavigation(ops, th, dims, []NavButton{
 			{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack},
-			// {Clickable: infoBtn, Style: StyleSecondary, Icon: assets.IconInfo},
 			{Clickable: confirmBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		}...)
 		ctx.Frame()
@@ -2283,20 +2019,6 @@ func NewEngraveScreen(ctx *Context, plate Plate) *EngraveScreen {
 type EngraveScreen struct {
 	duration uint
 	job      *engraveJob
-}
-
-func (s *EngraveScreen) showError(ctx *Context, ops op.Ctx, th *Colors, errScr *ErrorScreen) {
-	for !ctx.Done {
-		dims := ctx.Platform.DisplaySize()
-		dismissed := errScr.Layout(ctx, ops.Begin(), th, dims)
-		d := ops.End()
-		if dismissed {
-			break
-		}
-		s.draw(ctx, ops, th, dims)
-		d.Add(ops)
-		ctx.Frame()
-	}
 }
 
 func (s *EngraveScreen) Engrave(ctx *Context, ops op.Ctx, th *Colors) bool {
