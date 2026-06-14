@@ -154,6 +154,7 @@ type program int
 
 const (
 	backupWallet program = iota
+	qaProgram
 )
 
 type richText struct {
@@ -1303,51 +1304,82 @@ func (s *ChoiceScreen) Draw(ctx *Context, th *Colors, dims image.Point) op.Op {
 	)
 }
 
-type MainScreen struct {
+func uiFlow(ctx *Context, version string) {
+	th := &descriptorTheme
+	s := &StartScreen{
+		Version: version,
+	}
+	for {
+		act, ok := s.Flow(ctx, th)
+		if !ok {
+			continue
+		}
+		obj := act.scan
+		if obj == nil {
+			switch act.prog {
+			case qaProgram:
+				qaEngraveFlow(ctx)
+				continue
+			case backupWallet:
+				mnemonic, ok := newInputFlow(ctx, th)
+				if !ok {
+					continue
+				}
+				obj = mnemonic
+			}
+		}
+		if !engraveObjectFlow(ctx, th, obj) {
+			s.Status = scanUnknownFormat
+		}
+	}
+}
+
+type StartScreen struct {
 	Version     string
-	page        program
+	Status      scanStatus
+	prog        program
 	scanTimeout time.Time
-	scanStatus  scanStatus
+}
+
+type startScreenAction struct {
+	prog program
+	scan any
 }
 
 const scanStatusTimeout = 1 * time.Second
 
-func (m *MainScreen) Flow(ctx *Context) {
+func (m *StartScreen) Flow(ctx *Context, th *Colors) (startScreenAction, bool) {
 	inp := new(InputTracker)
 	selectBtn := &Clickable{Button: Button3, AltButton: Center}
 	for !ctx.Done {
 		if selectBtn.Clicked(ctx) {
-			m.selectedFlow(ctx)
+			return startScreenAction{prog: m.prog}, true
 		}
 		if scan, ok := ctx.Scan(); ok {
 			if time.Now().Before(m.scanTimeout) {
-				m.scanStatus = max(m.scanStatus, scan.Status)
+				m.Status = max(m.Status, scan.Status)
 			} else {
-				m.scanStatus = scan.Status
+				m.Status = scan.Status
 			}
-			th := &descriptorTheme
 			m.scanTimeout = time.Now().Add(scanStatusTimeout)
 			if cnt := scan.Object; cnt != nil {
 				switch cnt := cnt.(type) {
 				case debugCommand:
 					switch cmd := cnt.Command; cmd {
 					case "FOREVERLAURA!":
-						qaEngraveFlow(ctx)
-						continue
+						return startScreenAction{prog: qaProgram}, true
 					case "lock-boot":
-						m.scanStatus = scanIdle
+						m.Status = scanIdle
 						if err := ctx.Platform.LockBoot(); err != nil {
 							log.Printf("lock-boot: %v", err)
-							m.scanStatus = scanFailed
+							m.Status = scanFailed
 						}
 						continue
 					default:
 						log.Printf("unknown debug command: %q", cmd)
 					}
 				}
-				if !engraveObjectFlow(ctx, th, cnt) {
-					m.scanStatus = scanUnknownFormat
-				}
+				return startScreenAction{scan: cnt}, true
 			}
 		}
 		for {
@@ -1364,43 +1396,34 @@ func (m *MainScreen) Flow(ctx *Context) {
 					if !e.Pressed {
 						break
 					}
-					m.page--
-					if m.page < 0 {
-						m.page = backupWallet
+					m.prog--
+					if m.prog < 0 {
+						m.prog = backupWallet
 					}
 				case Right:
 					if !e.Pressed {
 						break
 					}
-					m.page++
-					if m.page > backupWallet {
-						m.page = 0
+					m.prog++
+					if m.prog > backupWallet {
+						m.prog = 0
 					}
 				}
 			}
 		}
 		dims := ctx.Platform.DisplaySize()
-		nav, _ := layoutNavigation(&ctx.B, m.theme(), dims,
+		nav, _ := layoutNavigation(&ctx.B, th, dims,
 			NavButton{Clickable: selectBtn, Style: StylePrimary, Icon: assets.IconCheckmark},
 		)
-		content := m.draw(ctx, dims)
+		content := m.draw(ctx, th, dims)
 		ctx.Frame(op.Layer(nav, content))
 	}
+	return startScreenAction{}, false
 }
 
-func (m *MainScreen) theme() *Colors {
-	switch m.page {
-	case backupWallet:
-		return &descriptorTheme
-	default:
-		panic("invalid page")
-	}
-}
-
-func (m *MainScreen) draw(ctx *Context, dims image.Point) op.Op {
+func (m *StartScreen) draw(ctx *Context, th *Colors, dims image.Point) op.Op {
 	var titleTxt string
-	th := m.theme()
-	switch m.page {
+	switch m.prog {
 	case backupWallet:
 		titleTxt = "Backup Wallet"
 	}
@@ -1408,16 +1431,16 @@ func (m *MainScreen) draw(ctx *Context, dims image.Point) op.Op {
 	title, _ := layoutTitle(ctx, dims.X, th.Text, titleTxt)
 
 	r := layout.Rectangle{Max: dims}
-	content, sz := m.layout(&ctx.B, dims.X)
+	content, sz := m.layout(&ctx.B, th, dims.X)
 	content = content.Offset(r.Center(sz))
 
-	inner, sz := layoutMainPager(&ctx.B, th, m.page)
+	inner, sz := layoutMainPager(&ctx.B, th, m.prog)
 	_, middle := r.CutBottom(leadingSize)
 	inner = inner.Offset(middle.Center(sz))
 	sttxt := ""
 	if time.Now().Before(m.scanTimeout) {
 		ctx.WakeupAt(m.scanTimeout)
-		switch m.scanStatus {
+		switch m.Status {
 		case scanFailed:
 			sttxt = "Scan error"
 		case scanOverflow:
@@ -1555,10 +1578,9 @@ func layoutNavigation(buf *op.Buffer, th *Colors, dims image.Point, btns ...NavB
 	return content, r
 }
 
-func (m *MainScreen) layout(buf *op.Buffer, width int) (op.Op, image.Point) {
+func (m *StartScreen) layout(buf *op.Buffer, th *Colors, width int) (op.Op, image.Point) {
 	const margin = 16
 
-	th := m.theme()
 	left := op.Compose(
 		op.Color(buf, th.Text),
 		op.Mask(buf, assets.ArrowLeft),
@@ -1574,7 +1596,7 @@ func (m *MainScreen) layout(buf *op.Buffer, width int) (op.Op, image.Point) {
 	rightsz := h.Add(assets.ArrowRight.Bounds().Size())
 	right = right.Offset(image.Pt(width-margin-rightsz.X, h.Y(rightsz)))
 
-	plates, sz := layoutMainPlates(buf, m.page)
+	plates, sz := layoutMainPlates(buf, m.prog)
 	contentsz := h.Add(sz)
 
 	content := plates.Offset(image.Pt((width-contentsz.X)/2, 8+h.Y(contentsz)))
@@ -1617,18 +1639,6 @@ func layoutMainPager(buf *op.Buffer, th *Colors, page program) (op.Op, image.Poi
 		)
 	}
 	return content, image.Pt((sz.X+space)*npages-space, sz.Y)
-}
-
-func (m *MainScreen) selectedFlow(ctx *Context) {
-	th := m.theme()
-	switch m.page {
-	case backupWallet:
-		mnemonic, ok := newInputFlow(ctx, th)
-		if !ok {
-			break
-		}
-		engraveObjectFlow(ctx, th, mnemonic)
-	}
 }
 
 func engraveObjectFlow(ctx *Context, th *Colors, obj any) bool {
@@ -2354,10 +2364,7 @@ func Run(pl Platform, version string) func(yield func() bool) {
 			if !pl.Features().Has(FeatureSecureBoot) {
 				version += " (UNLOCKED)"
 			}
-			m := &MainScreen{
-				Version: version,
-			}
-			m.Flow(ctx)
+			uiFlow(ctx, version)
 		}
 		startTime := time.Now()
 		var evts []Event
