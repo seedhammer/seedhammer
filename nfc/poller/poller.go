@@ -14,6 +14,7 @@ import (
 
 type Device interface {
 	Close() error
+	Interrupt()
 	Detect() (bool, error)
 	SetProtocol(prot Protocol) error
 	Sleep() error
@@ -22,9 +23,10 @@ type Device interface {
 }
 
 type Poller struct {
-	d    Device
-	bufr *bufio.Reader
-	emu  *type4.Tag
+	d       Device
+	bufr    *bufio.Reader
+	emu     *type4.Tag
+	reading chan struct{}
 	// r is the active reader.
 	r io.Reader
 }
@@ -38,13 +40,18 @@ const (
 
 func New(d Device) *Poller {
 	return &Poller{
-		d:    d,
-		bufr: bufio.NewReaderSize(nil, 256),
-		emu:  type4.NewTag(d),
+		d:       d,
+		bufr:    bufio.NewReaderSize(nil, 256),
+		emu:     type4.NewTag(d),
+		reading: make(chan struct{}, 1),
 	}
 }
 
 func (p *Poller) Read(buf []byte) (int, error) {
+	p.reading <- struct{}{}
+	defer func() {
+		<-p.reading
+	}()
 	for {
 		if p.r != nil {
 			n, err := p.r.Read(buf)
@@ -80,6 +87,16 @@ func (p *Poller) Read(buf []byte) (int, error) {
 		}
 		p.r = ndef.NewRecordReader(r)
 	}
+}
+
+func (p *Poller) Close() error {
+	select {
+	case p.reading <- struct{}{}:
+	default:
+		p.d.Interrupt()
+		p.reading <- struct{}{}
+	}
+	return p.d.Close()
 }
 
 // poll attempts to select a tag, trying each protocol in turn.
