@@ -504,7 +504,7 @@ func (p *Platform) Features() gui.Features {
 	return p.feats
 }
 
-func (p *Platform) NFCReader() io.Reader {
+func (p *Platform) NFCReader() io.ReadCloser {
 	return poller.New(p.nfc)
 }
 

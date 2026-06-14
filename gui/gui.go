@@ -64,10 +64,6 @@ type Context struct {
 	FrameCallback func(op.Op)
 	B             op.Buffer
 
-	// scan is the last scanned object (seed, descriptor
-	// etc.).
-	scan scanResult
-
 	Router EventRouter
 }
 
@@ -86,12 +82,6 @@ func NewContext(pl Platform) *Context {
 	return c
 }
 
-func (c *Context) Scan() (scanResult, bool) {
-	s := c.scan
-	c.scan = scanResult{}
-	return s, s.Object != nil || s.Status > scanIdle
-}
-
 func (c *Context) WakeupAt(t time.Time) {
 	if c.Wakeup.IsZero() || t.Before(c.Wakeup) {
 		c.Wakeup = t
@@ -99,7 +89,6 @@ func (c *Context) WakeupAt(t time.Time) {
 }
 
 func (c *Context) Reset() {
-	c.scan = scanResult{}
 	c.Wakeup = time.Time{}
 	// Immediately wake up to process remaining events.
 	if c.Router.Reset() {
@@ -1349,19 +1338,74 @@ type startScreenAction struct {
 const scanStatusTimeout = 1 * time.Second
 
 func (m *StartScreen) Flow(ctx *Context, th *Colors) (startScreenAction, bool) {
+	scans := make(chan scanResult, 1)
+	if r := ctx.Platform.NFCReader(); r != nil {
+		closer := make(chan struct{})
+		closed := make(chan struct{})
+		defer func() {
+			close(closer)
+			r.Close()
+			<-closed
+		}()
+		wakeup := ctx.Platform.Wakeup
+		go func() {
+			s := new(scanner)
+			for {
+				select {
+				case <-closer:
+					close(closed)
+					return
+				default:
+				}
+				obj, err := s.Scan(r)
+				scan := scanResult{
+					Object: obj,
+				}
+				switch {
+				case errors.Is(err, errScanInProgress):
+					scan.Status = scanStarted
+				case errors.Is(err, errScanUnknownFormat):
+					scan.Status = scanUnknownFormat
+				case err == nil || err == io.EOF:
+				default:
+					scan.Status = scanFailed
+					log.Printf("nfc scan: %v", err)
+				}
+				// Merge the previous result.
+				select {
+				case old := <-scans:
+					if scan.Object == nil {
+						scan.Object = old.Object
+					}
+					scan.Status = max(scan.Status, old.Status)
+				default:
+				}
+				scans <- scan
+				wakeup()
+				if scan.Status == scanFailed {
+					// Wait a bit before attempting to scan again.
+					time.Sleep(1 * time.Second)
+				}
+			}
+		}()
+	}
 	inp := new(InputTracker)
 	selectBtn := &Clickable{Button: Button3, AltButton: Center}
 	for !ctx.Done {
 		if selectBtn.Clicked(ctx) {
 			return startScreenAction{prog: m.prog}, true
 		}
-		if scan, ok := ctx.Scan(); ok {
+		select {
+		case scan := <-scans:
 			if time.Now().Before(m.scanTimeout) {
 				m.Status = max(m.Status, scan.Status)
 			} else {
 				m.Status = scan.Status
 			}
 			m.scanTimeout = time.Now().Add(scanStatusTimeout)
+			if scan.Object == nil && scan.Status == scanIdle {
+				break
+			}
 			if cnt := scan.Object; cnt != nil {
 				switch cnt := cnt.(type) {
 				case debugCommand:
@@ -1381,6 +1425,7 @@ func (m *StartScreen) Flow(ctx *Context, th *Colors) (startScreenAction, bool) {
 				}
 				return startScreenAction{scan: cnt}, true
 			}
+		default:
 		}
 		for {
 			e, ok := inp.Next(ctx,
@@ -2273,7 +2318,7 @@ type Platform interface {
 	AppendEvents(deadline time.Time, evts []Event) []Event
 	Wakeup()
 	Engraver(stall bool) (Engraver, error)
-	NFCReader() io.Reader
+	NFCReader() io.ReadCloser
 	EngraverParams() engrave.Params
 	DisplaySize() image.Point
 	// Dirty begins a refresh of the content
@@ -2316,44 +2361,6 @@ func Run(pl Platform, version string) func(yield func() bool) {
 				state  saver.State
 			}
 		}{}
-		scans := make(chan scanResult, 1)
-		if r := pl.NFCReader(); r != nil {
-			wakeup := pl.Wakeup
-			go func() {
-				s := new(scanner)
-				for {
-					obj, err := s.Scan(r)
-					scan := scanResult{
-						Object: obj,
-					}
-					switch {
-					case errors.Is(err, errScanInProgress):
-						scan.Status = scanStarted
-					case errors.Is(err, errScanUnknownFormat):
-						scan.Status = scanUnknownFormat
-					case err == nil:
-					default:
-						scan.Status = scanFailed
-						log.Printf("nfc scan: %v", err)
-					}
-					select {
-					case old := <-scans:
-						// Merge the previous result.
-						if scan.Object == nil {
-							scan.Object = old.Object
-						}
-						scan.Status = max(scan.Status, old.Status)
-					default:
-					}
-					scans <- scan
-					wakeup()
-					if scan.Status == scanFailed {
-						// Wait a bit before attempting to scan again.
-						time.Sleep(1 * time.Second)
-					}
-				}
-			}()
-		}
 		a.idle.start = time.Now()
 
 		it := func(yield func(op.Op) bool) {
@@ -2407,12 +2414,6 @@ func Run(pl Platform, version string) func(yield func() bool) {
 				ctx.Reset()
 				if !a.idle.active {
 					ctx.Router.Events(d, evts...)
-				}
-				select {
-				case scan := <-scans:
-					ctx.scan = scan
-					a.idle.start = time.Now()
-				default:
 				}
 				idleWakeup := a.idle.start.Add(idleTimeout)
 				idle := now.Sub(idleWakeup) >= 0
