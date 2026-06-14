@@ -410,13 +410,34 @@ func (p *Platform) EngraverParams() engrave.Params {
 	return engraverParams
 }
 
+func rebootIntoBOOTSEL() {
+	// See rp2350 datasheet "5.2.4. Watchdog boot vector".
+	const (
+		specialBootModeEntryPoint = 0xb007c0d3
+		stackPointerBOOTSEL       = 0x2
+		bootModeMagic             = 0xb007c0d3
+	)
+	rp.WATCHDOG.SCRATCH7.Set(specialBootModeEntryPoint)
+	rp.WATCHDOG.SCRATCH6.Set(stackPointerBOOTSEL)
+	rp.WATCHDOG.SCRATCH5.Set(specialBootModeEntryPoint ^ 0x4ff83f2d)
+	rp.WATCHDOG.SCRATCH4.Set(bootModeMagic)
+	machine.CPUReset()
+	panic("reboot failed")
+}
+
 func (p *Platform) monitorPowerSupply(d *ap33772s.Device) (int, error) {
 	USBPD_INT.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
 
 	voltage, err := adjustSupplyVoltage(d, minVoltage, maxVoltage)
 	if err != nil {
-		// Give up if the power supply doesn't initially offer higher voltages.
-		return 0, err
+		// If the power supply is insufficient, we shouldn't allow the user
+		// to operate the machine, only to later find out engraving won't work.
+		// A common case of insufficient power is that the machine is connected
+		// to a device for flash programming.
+		// Reboot into programming mode to both stop operation and help the
+		// user in case they didn't hold the BOOTSEL button while connecting.
+		rebootIntoBOOTSEL()
+		panic("reboot failed")
 	}
 
 	interrupts := make(chan struct{}, 1)
