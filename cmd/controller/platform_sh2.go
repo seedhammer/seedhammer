@@ -493,7 +493,8 @@ func (p *Platform) LockBoot() error {
 	if err := otp.EnableSecureBoot(); err != nil {
 		return err
 	}
-	return nil
+	machine.CPUReset()
+	panic("reboot failed")
 }
 
 func (p *Platform) HardwareVersion() string {
