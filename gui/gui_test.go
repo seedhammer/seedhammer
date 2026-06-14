@@ -34,8 +34,8 @@ func BenchmarkRedraw(b *testing.B) {
 		frame = content
 		ctx.Done = true
 	}
-	m := new(MainScreen)
-	m.Flow(ctx)
+	m := new(StartScreen)
+	m.Flow(ctx, &descriptorTheme)
 	clip := image.Rectangle{Max: ctx.Platform.DisplaySize()}
 	fb := rgb565.New(clip)
 	maskfb := image.NewAlpha(clip)
@@ -58,9 +58,11 @@ func BenchmarkAllocs(b *testing.B) {
 	ds := &DescriptorScreen{
 		Descriptor: desc,
 	}
-	m := new(MainScreen)
+	m := new(StartScreen)
 	screens := []func(*Context){
-		m.Flow,
+		func(ctx *Context) {
+			m.Flow(ctx, &descriptorTheme)
+		},
 		func(ctx *Context) {
 			ds.Confirm(ctx, &descriptorTheme)
 		},
@@ -401,7 +403,7 @@ func (p *testPlatform) EngraverParams() engrave.Params {
 	return engraverParams
 }
 
-func (p *testPlatform) NFCReader() io.Reader {
+func (p *testPlatform) NFCReader() io.ReadCloser {
 	return nil
 }
 
