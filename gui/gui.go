@@ -1803,7 +1803,7 @@ func newInputFlow(ctx *Context, th *Colors) (any, bool) {
 		cs := &ChoiceScreen{
 			Title:   "Input Seed",
 			Lead:    "Choose number of words",
-			Choices: []string{"12 WORDS", "24 WORDS" /* , "CODEX32", "SLIP-39" */},
+			Choices: []string{"12 WORDS", "24 WORDS", "CODEX32" /* , "SLIP-39" */},
 		}
 		for {
 			choice, ok := cs.Choose(ctx, th)
