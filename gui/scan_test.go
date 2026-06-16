@@ -51,6 +51,16 @@ func TestScan(t *testing.T) {
 			Content: b39,
 		},
 		{
+			Name:    "md1",
+			Encoded: "md1yqpqqxqq8xtwhw4xwn4qh",
+			Content: mdmkText("md1yqpqqxqq8xtwhw4xwn4qh"),
+		},
+		{
+			Name:    "mk1",
+			Encoded: "mk1qpzg69ppsnz4v7cjv3qfjhf76k4t5pt96u0psdrqfqvll8qh7h5athg837pmkf3dpug2mmjtfel6x",
+			Content: mdmkText("mk1qpzg69ppsnz4v7cjv3qfjhf76k4t5pt96u0psdrqfqvll8qh7h5athg837pmkf3dpug2mmjtfel6x"),
+		},
+		{
 			Name:    "Command",
 			Encoded: "command: sudo-make-me-a-sandwich!",
 			Content: debugCommand{"sudo-make-me-a-sandwich!"},

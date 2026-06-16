@@ -67,10 +67,15 @@ func (s *scanner) Scan(r io.Reader) (any, error) {
 		return d, nil
 	} else if s, err := codex32.New(string(buf)); err == nil {
 		return s, nil
+	} else if codex32.ValidMD(string(buf)) || codex32.ValidMK(string(buf)) {
+		return mdmkText(buf), nil
 	} else {
 		return nil, errScanUnknownFormat
 	}
 }
+
+// mdmkText is a BCH-validated md1/mk1 string, engraved verbatim as text/QR.
+type mdmkText string
 
 type debugCommand struct {
 	Command string

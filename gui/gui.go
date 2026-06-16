@@ -1731,10 +1731,75 @@ func engraveObjectFlow(ctx *Context, th *Colors, obj any) bool {
 		backupSeedStringFlow(ctx, th, s)
 	case *bip380.Descriptor:
 		descriptorFlow(ctx, th, scan)
+	case mdmkText:
+		mdmkFlow(ctx, th, scan)
 	default:
 		return false
 	}
 	return true
+}
+
+// validateMdmk lays out an md1/mk1 string as TEXT+QR / TEXT / QR-ONLY plates,
+// mirroring validateDescriptor but engraving the string verbatim (the QR
+// payload is the string itself). Modes that don't fit a plate are dropped; an
+// error is returned only if none fit.
+func validateMdmk(params engrave.Params, s string) ([]string, []Plate, error) {
+	qrc, err := qr.Encode(s, qr.L)
+	if err != nil {
+		return nil, nil, err
+	}
+	const qrScale = 3
+	type textEngraving struct {
+		Label     string
+		Paragraph backup.Paragraph
+	}
+	engravings := []textEngraving{
+		{"TEXT + QR", backup.Paragraph{Text: s, QR: qrc, QRScale: qrScale}},
+		{"TEXT ONLY", backup.Paragraph{Text: s}},
+		{"QR ONLY", backup.Paragraph{QR: qrc, QRScale: qrScale}},
+	}
+	var validLabels []string
+	var validEngravings []Plate
+	var lastErr error
+	for _, e := range engravings {
+		plate := backup.Text{
+			Paragraphs: []backup.Paragraph{e.Paragraph},
+			Font:       sh.Font,
+		}
+		plan := backup.EngraveText(params, plate)
+		p, err := toPlate(plan, params)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		validLabels = append(validLabels, e.Label)
+		validEngravings = append(validEngravings, p)
+	}
+	if len(validEngravings) == 0 {
+		return nil, nil, lastErr
+	}
+	return validLabels, validEngravings, nil
+}
+
+// mdmkFlow lets the operator pick an engraving variant for an md1/mk1 string
+// and engrave it, mirroring descriptorFlow.
+func mdmkFlow(ctx *Context, th *Colors, s mdmkText) {
+	labels, engravings, err := validateMdmk(ctx.Platform.EngraverParams(), string(s))
+	if err != nil {
+		// Only reached if no mode fits a plate (rare for an md1/mk1 string);
+		// like descriptorFlow's siblings, bail rather than engrave nothing.
+		return
+	}
+	cs := &ChoiceScreen{Title: "Engrave", Lead: "Choose engraving", Choices: labels}
+	for {
+		choice, ok := cs.Choose(ctx, th)
+		if !ok {
+			return
+		}
+		if NewEngraveScreen(ctx, engravings[choice]).Engrave(ctx, &engraveTheme) {
+			return
+		}
+	}
 }
 
 func backupWalletFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic) {
