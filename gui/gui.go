@@ -1786,8 +1786,9 @@ func validateMdmk(params engrave.Params, s string) ([]string, []Plate, error) {
 func mdmkFlow(ctx *Context, th *Colors, s mdmkText) {
 	labels, engravings, err := validateMdmk(ctx.Platform.EngraverParams(), string(s))
 	if err != nil {
-		// Only reached if no mode fits a plate (rare for an md1/mk1 string);
-		// like descriptorFlow's siblings, bail rather than engrave nothing.
+		// Only reached if no engraving variant fits a plate (rare for an md1/mk1
+		// string). Return silently — like backupSeedStringFlow, NOT like
+		// descriptorFlow (whose ErrorScreen "Too Large" copy is descriptor-specific).
 		return
 	}
 	cs := &ChoiceScreen{Title: "Engrave", Lead: "Choose engraving", Choices: labels}

@@ -74,12 +74,28 @@ func TestMDMKRejectsAllZeros(t *testing.T) {
 }
 
 func TestMDMKLengthBracket(t *testing.T) {
-	// Data-part lengths in the reserved gap (94..95) or out of range are rejected.
-	if ValidMK("mk1" + strings.Repeat("q", 94)) {
-		t.Error("mk1 with reserved-gap (94) data length accepted")
+	// Out-of-bracket data-part lengths are rejected: too-short (<14), the
+	// reserved gap (94, 95), and just over the long-code max (109). Matches
+	// mk-codec bch_code_for_length (regular 14..93, long 96..108).
+	for _, n := range []int{5, 94, 95, 109} {
+		if ValidMK("mk1" + strings.Repeat("q", n)) {
+			t.Errorf("mk1 with out-of-bracket data length %d accepted", n)
+		}
 	}
-	if ValidMK("mk1" + strings.Repeat("q", 5)) {
-		t.Error("mk1 with too-short data length accepted")
+}
+
+func TestMDMKCaseHandling(t *testing.T) {
+	// Consistent uppercase validates (BIP-173 / codex32 case-tolerance).
+	if !ValidMD(strings.ToUpper(md1Regular)) {
+		t.Error("uppercase md1 rejected; verifyMDMK must be case-tolerant like codex32.New")
+	}
+	if !ValidMK(strings.ToUpper(mk1Regular)) {
+		t.Error("uppercase mk1 rejected")
+	}
+	// Mixed case (lowercase HRP + uppercase data) is rejected.
+	mixed := "md1" + strings.ToUpper(md1Regular[len("md1"):])
+	if ValidMD(mixed) {
+		t.Errorf("mixed-case md1 %q accepted", mixed)
 	}
 }
 

@@ -24,6 +24,18 @@ func TestMdmkOversizeRejected(t *testing.T) {
 	ctx := NewContext(newPlatform())
 	huge := "md1" + strings.Repeat("q", 5000)
 	if _, _, err := validateMdmk(ctx.Platform.EngraverParams(), huge); err == nil {
-		t.Error("expected error for oversize input (no plate fits / QR overflow)")
+		t.Error("expected error for oversize input (QR overflow)")
+	}
+}
+
+// TestMdmkNoModeFitsRejected covers the no-plate-fits branch: ~1200 chars is
+// within QR byte capacity (so qr.Encode succeeds) but far too long to fit any
+// plate, so validateMdmk returns the toPlate error — distinct from the
+// QR-overflow path above.
+func TestMdmkNoModeFitsRejected(t *testing.T) {
+	ctx := NewContext(newPlatform())
+	big := "md1" + strings.Repeat("q", 1200)
+	if _, _, err := validateMdmk(ctx.Platform.EngraverParams(), big); err == nil {
+		t.Error("expected error: no engraving variant fits a plate")
 	}
 }

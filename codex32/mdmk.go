@@ -1,5 +1,7 @@
 package codex32
 
+import "strings"
+
 // md1 (HRP "md") and mk1 (HRP "mk") are sibling formats that reuse codex32's
 // BCH machinery (the BIP-93 BCH(93,80,8) regular code and BCH(108,93,8) long
 // code) with NUMS-derived target residues and a NON-codex32 initial residue.
@@ -89,7 +91,9 @@ func unpackSyms(hi, lo uint64, n int) []fe {
 // Pure verify, no error correction.
 func verifyMDMK(s, hrp string, generator []fe, targetHi, targetLo uint64, n int) bool {
 	gotHRP, data := splitHRP(s)
-	if gotHRP != hrp {
+	// Case-insensitive HRP match, like codex32.New: a consistently upper- or
+	// lower-cased string is valid; mixed case is rejected below by the engine.
+	if !strings.EqualFold(gotHRP, hrp) {
 		return false
 	}
 	// A valid string carries at least the n-symbol checksum in its data part.
@@ -101,7 +105,10 @@ func verifyMDMK(s, hrp string, generator []fe, targetHi, targetLo uint64, n int)
 		residue:   unpackSyms(0, mdmkPolymodInitLo, n), // POLYMOD_INIT — NOT codex32's 1
 		target:    unpackSyms(targetHi, targetLo, n),
 	}
-	if err := e.inputHRP(hrp); err != nil {
+	// Feed the ORIGINAL-cased HRP (not the lowercase literal) so the engine's
+	// case state matches the data; this is what makes uppercase strings validate
+	// and mixed-case ones fail (errInvalidCase), exactly like codex32.New.
+	if err := e.inputHRP(gotHRP); err != nil {
 		return false
 	}
 	if err := e.inputData(data); err != nil {
