@@ -497,3 +497,31 @@ func TestWordFlowProgressTitle(t *testing.T) {
 		t.Errorf("title missing %q; got %q", "Word 1 of 24", content)
 	}
 }
+
+func TestWordFlowMatchCount(t *testing.T) {
+	ctx := NewContext(newPlatform())
+	m := emptyBIP39Mnemonic(24)
+	frame, quit := runUI(ctx, func() {
+		inputWordsFlow(ctx, &descriptorTheme, m, 0)
+	})
+	defer quit()
+
+	// Empty fragment: no match count shown.
+	content, ok := frame()
+	if !ok {
+		t.Fatal("no frame")
+	}
+	if uiContains(content, "match") {
+		t.Errorf("match count shown on empty fragment; got %q", content)
+	}
+
+	// Type a complete word (ABANDON) -> exactly one match.
+	runes(&ctx.Router, "abandon")
+	content, ok = frame()
+	if !ok {
+		t.Fatal("no frame after typing")
+	}
+	if !uiContains(content, "1 match") {
+		t.Errorf("expected %q; got %q", "1 match", content)
+	}
+}

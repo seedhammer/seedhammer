@@ -592,6 +592,7 @@ func inputWordsFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic, selected 
 		r.Min.X -= buttonPadX
 		r.Max.X += buttonPadX
 		top, _ := content.CutBottom(kbdsz.Y)
+		wordOff := top.Center(longest)
 		word, _ := layoutWord(&ctx.B, selected+1, wordLabel)
 		txtBg := op.Layer(
 			word,
@@ -599,7 +600,21 @@ func inputWordsFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic, selected 
 				op.Color(&ctx.B, th.Text),
 				op.RoundedRect2(&ctx.B, r, cornerRadius),
 			),
-		).Offset(top.Center(longest))
+		).Offset(wordOff)
+
+		var countOp op.Op
+		if len(kbd.Fragment) > 0 {
+			noun := "matches"
+			if nvalid == 1 {
+				noun = "match"
+			}
+			cl, csz := widget.Labelf(&ctx.B, ctx.Styles.word, th.Text, "%d %s", nvalid, noun)
+			countY := wordOff.Y + longest.Y + 8
+			if lim := top.Max.Y - csz.Y; countY > lim { // clamp so the count never overlaps the keyboard
+				countY = lim
+			}
+			countOp = cl.Offset(image.Pt((dims.X-csz.X)/2, countY))
+		}
 
 		nav, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
 		if _, complete := completeBIP39Word(kbd.Fragment, nvalid); complete {
@@ -613,6 +628,7 @@ func inputWordsFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic, selected 
 		ctx.Frame(op.Layer(
 			kbdOp,
 			txtBg,
+			countOp,
 			nav,
 			title,
 			op.Color(&ctx.B, th.Background),
