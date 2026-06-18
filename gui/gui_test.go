@@ -13,6 +13,7 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+	"unicode"
 
 	"github.com/btcsuite/btcd/btcutil/v2/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg/v2"
@@ -523,5 +524,68 @@ func TestWordFlowMatchCount(t *testing.T) {
 	}
 	if !uiContains(content, "1 match") {
 		t.Errorf("expected %q; got %q", "1 match", content)
+	}
+}
+
+func validMnemonic(n int) bip39.Mnemonic {
+	m := make(bip39.Mnemonic, n)
+	for i := range m {
+		m[i] = bip39.Word(i % int(bip39.NumWords))
+	}
+	return m.FixChecksum()
+}
+
+func TestCompleteCandidateWord(t *testing.T) {
+	v := validMnemonic(24)
+	cands := bip39.LastWordCandidates(v)
+	if len(cands) != 8 {
+		t.Fatalf("expected 8 candidates, got %d", len(cands))
+	}
+	last := v[len(v)-1]
+
+	// Exact candidate label completes to that word.
+	if w, ok := completeCandidateWord(cands, bip39.LabelFor(last), 1); !ok || w != last {
+		t.Errorf("exact candidate: got (%d,%v), want (%d,true)", w, ok, last)
+	}
+
+	// A non-candidate BIP-39 word must NOT complete to ITSELF (the I2 hole).
+	inCands := map[bip39.Word]bool{}
+	for _, w := range cands {
+		inCands[w] = true
+	}
+	var nonCand bip39.Word = -1
+	for w := bip39.Word(0); w < bip39.NumWords; w++ {
+		if !inCands[w] {
+			nonCand = w
+			break
+		}
+	}
+	if w, ok := completeCandidateWord(cands, bip39.LabelFor(nonCand), 1); ok && w == nonCand {
+		t.Errorf("non-candidate word %q completed to itself but must not", bip39.LabelFor(nonCand))
+	}
+}
+
+func TestUpdateValidCandidateKeys(t *testing.T) {
+	ctx := NewContext(newPlatform())
+	v := validMnemonic(24)
+	cands := bip39.LastWordCandidates(v)
+
+	wantEnabled := map[rune]bool{}
+	for _, w := range cands {
+		label := bip39.LabelFor(w)
+		wantEnabled[unicode.ToLower(rune(label[0]))] = true
+	}
+
+	kbd := NewKeyboard(ctx, wordKeys)
+	updateValidCandidateKeys(cands, "", kbd.allKeys)
+	for i := range kbd.allKeys {
+		key := &kbd.allKeys[i]
+		if key.r == '⌫' {
+			continue
+		}
+		enabled := !key.disabled
+		if enabled != wantEnabled[key.r] {
+			t.Errorf("key %q: enabled=%v, want %v", key.r, enabled, wantEnabled[key.r])
+		}
 	}
 }

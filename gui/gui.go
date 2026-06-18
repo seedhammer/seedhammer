@@ -934,6 +934,52 @@ func updateValidSLIP39Keys(frag string, keys []keyboardKey) int {
 	return nvalid
 }
 
+// completeCandidateWord reports completion against a fixed candidate set
+// (the checksum-valid last words). Unlike completeBIP39Word it never
+// completes on a non-candidate label, so a checksum-invalid final word can
+// never be accepted.
+func completeCandidateWord(cands []bip39.Word, frag string, nvalid int) (bip39.Word, bool) {
+	for _, w := range cands {
+		if frag == bip39.LabelFor(w) {
+			return w, true
+		}
+	}
+	if nvalid == 1 {
+		for _, w := range cands {
+			if strings.HasPrefix(bip39.LabelFor(w), frag) {
+				return w, true
+			}
+		}
+	}
+	return -1, false
+}
+
+// updateValidCandidateKeys restricts the keyboard to letters that extend the
+// fragment toward one of the candidate words, mirroring updateValidBIP39Keys
+// but over a fixed candidate set. Returns the number of still-matching
+// candidates.
+func updateValidCandidateKeys(cands []bip39.Word, frag string, keys []keyboardKey) int {
+	mask := ^uint32(0)
+	nvalid := 0
+	for _, w := range cands {
+		label := bip39.LabelFor(w)
+		if !strings.HasPrefix(label, frag) {
+			continue
+		}
+		nvalid++
+		suffix := label[len(frag):]
+		if len(suffix) > 0 {
+			idx := unicode.ToLower(rune(suffix[0])) - 'a'
+			mask &^= 1 << idx
+		}
+	}
+	if nvalid == 1 {
+		mask = ^uint32(0)
+	}
+	updateValidKeys(mask, keys)
+	return nvalid
+}
+
 func updateValidKeys(mask uint32, keys []keyboardKey) {
 	for i := range keys {
 		key := &keys[i]
