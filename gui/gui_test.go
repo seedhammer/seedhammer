@@ -278,7 +278,7 @@ func TestWordKeyboardScreen(t *testing.T) {
 	for i := range bip39.NumWords {
 		w := bip39.LabelFor(i)
 		runes(&ctx.Router, w)
-		click(&ctx.Router, Button2)
+		click(&ctx.Router, Button3)
 		m := make(bip39.Mnemonic, 1)
 		inputWordsFlow(ctx, &descriptorTheme, m, 0)
 		if got := bip39.LabelFor(m[0]); got != w {

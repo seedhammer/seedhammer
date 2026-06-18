@@ -540,7 +540,7 @@ func inputWordsFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic, selected 
 	kbd := NewKeyboard(ctx, wordKeys)
 	wordLabel := ""
 	backBtn := &Clickable{Button: Button1}
-	okBtn := &Clickable{Button: Button2}
+	okBtn := &Clickable{Button: Button3}
 	layoutWord := func(buf *op.Buffer, n int, word string) (op.Op, image.Point) {
 		style := ctx.Styles.word
 		return widget.Labelf(buf, style, th.Background, "%2d: %s", n, word)
@@ -625,7 +625,7 @@ func inputCodex32Flow(ctx *Context, th *Colors) (codex32.String, bool) {
 
 	kbd := NewKeyboard(ctx, alph)
 	backBtn := &Clickable{Button: Button1}
-	okBtn := &Clickable{Button: Button2}
+	okBtn := &Clickable{Button: Button3}
 	var share codex32.String
 	valid := false
 	for !ctx.Done {
@@ -685,7 +685,7 @@ func inputSLIP39Flow(ctx *Context, th *Colors, mnemonic slip39words.Mnemonic, se
 	kbd := NewKeyboard(ctx, wordKeys)
 	wordLabel := ""
 	backBtn := &Clickable{Button: Button1}
-	okBtn := &Clickable{Button: Button2}
+	okBtn := &Clickable{Button: Button3}
 	layoutWord := func(b *op.Buffer, n int, word string) (op.Op, image.Point) {
 		style := ctx.Styles.word
 		return widget.Labelf(b, style, th.Background, "%2d: %s", n, word)
@@ -949,7 +949,7 @@ func (k *Keyboard) Update(ctx *Context) bool {
 		}
 	}
 	for {
-		e, ok := k.inp.Next(ctx, ButtonFilter(Left), ButtonFilter(Right), ButtonFilter(Up), ButtonFilter(Down), ButtonFilter(Center), RuneFilter(), ButtonFilter(Button3))
+		e, ok := k.inp.Next(ctx, ButtonFilter(Left), ButtonFilter(Right), ButtonFilter(Up), ButtonFilter(Down), ButtonFilter(Center), RuneFilter())
 		if !ok {
 			break
 		}
@@ -1006,7 +1006,7 @@ func (k *Keyboard) Update(ctx *Context) bool {
 						break
 					}
 				}
-			case Center, Button3:
+			case Center:
 				k.rune()
 				return true
 			}
