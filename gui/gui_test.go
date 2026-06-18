@@ -589,3 +589,79 @@ func TestUpdateValidCandidateKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestWordFlowLastWord24(t *testing.T) {
+	v := validMnemonic(24)
+
+	// Candidate count visible on entering the last word (empty fragment).
+	{
+		ctx := NewContext(newPlatform())
+		m := make(bip39.Mnemonic, 24)
+		copy(m, v)
+		m[23] = -1 // last slot unset; first 23 are valid
+		frame, quit := runUI(ctx, func() {
+			inputWordsFlow(ctx, &descriptorTheme, m, 23)
+		})
+		content, ok := frame()
+		quit()
+		if !ok {
+			t.Fatal("no frame at last word")
+		}
+		if !uiContains(content, "8 matches") {
+			t.Errorf("expected %q at last word; got %q", "8 matches", content)
+		}
+	}
+
+	// Typing the correct last word commits it.
+	{
+		ctx := NewContext(newPlatform())
+		m := make(bip39.Mnemonic, 24)
+		copy(m, v)
+		m[23] = -1
+		want := v[23]
+		runes(&ctx.Router, bip39.LabelFor(want))
+		click(&ctx.Router, Button3)
+		inputWordsFlow(ctx, &descriptorTheme, m, 23)
+		if m[23] != want {
+			t.Errorf("last word committed %d (%q), want %d (%q)",
+				m[23], bip39.LabelFor(m[23]), want, bip39.LabelFor(want))
+		}
+	}
+}
+
+func TestWordFlowLastWord12(t *testing.T) {
+	v := validMnemonic(12)
+
+	{
+		ctx := NewContext(newPlatform())
+		m := make(bip39.Mnemonic, 12)
+		copy(m, v)
+		m[11] = -1
+		frame, quit := runUI(ctx, func() {
+			inputWordsFlow(ctx, &descriptorTheme, m, 11)
+		})
+		content, ok := frame()
+		quit()
+		if !ok {
+			t.Fatal("no frame at last word")
+		}
+		if !uiContains(content, "128 matches") {
+			t.Errorf("expected %q at last word; got %q", "128 matches", content)
+		}
+	}
+
+	{
+		ctx := NewContext(newPlatform())
+		m := make(bip39.Mnemonic, 12)
+		copy(m, v)
+		m[11] = -1
+		want := v[11]
+		runes(&ctx.Router, bip39.LabelFor(want))
+		click(&ctx.Router, Button3)
+		inputWordsFlow(ctx, &descriptorTheme, m, 11)
+		if m[11] != want {
+			t.Errorf("last word committed %d (%q), want %d (%q)",
+				m[11], bip39.LabelFor(m[11]), want, bip39.LabelFor(want))
+		}
+	}
+}

@@ -547,11 +547,35 @@ func inputWordsFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic, selected 
 	}
 	_, longest := layoutWord(nil, 24, widestWord)
 	var nvalid int
+	var cands []bip39.Word
+	candsFor := -1
+	onLastWord := func() bool { return selected == len(mnemonic)-1 && cands != nil }
+	updateKeys := func(frag string) int {
+		if onLastWord() {
+			return updateValidCandidateKeys(cands, frag, kbd.allKeys)
+		}
+		return updateValidBIP39Keys(frag, kbd.allKeys)
+	}
+	completeWord := func(frag string, nv int) (bip39.Word, bool) {
+		if onLastWord() {
+			return completeCandidateWord(cands, frag, nv)
+		}
+		return completeBIP39Word(frag, nv)
+	}
 	for !ctx.Done {
-		for kbd.Update(ctx) {
-			nvalid = updateValidBIP39Keys(kbd.Fragment, kbd.allKeys)
+		if selected == len(mnemonic)-1 && candsFor != selected {
+			cands = bip39.LastWordCandidates(mnemonic)
+			candsFor = selected
+			nvalid = updateKeys(kbd.Fragment)
 			wordLabel = kbd.Fragment
-			if completedWord, complete := completeBIP39Word(wordLabel, nvalid); complete {
+			if cw, ok := completeWord(kbd.Fragment, nvalid); ok {
+				wordLabel = bip39.LabelFor(cw)
+			}
+		}
+		for kbd.Update(ctx) {
+			nvalid = updateKeys(kbd.Fragment)
+			wordLabel = kbd.Fragment
+			if completedWord, ok := completeWord(wordLabel, nvalid); ok {
 				wordLabel = bip39.LabelFor(completedWord)
 			}
 		}
@@ -559,8 +583,8 @@ func inputWordsFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic, selected 
 			return
 		}
 		for okBtn.Clicked(ctx) {
-			w, complete := completeBIP39Word(kbd.Fragment, nvalid)
-			if !complete {
+			w, ok := completeWord(kbd.Fragment, nvalid)
+			if !ok {
 				continue
 			}
 			kbd.Clear()
@@ -603,7 +627,7 @@ func inputWordsFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic, selected 
 		).Offset(wordOff)
 
 		var countOp op.Op
-		if len(kbd.Fragment) > 0 {
+		if len(kbd.Fragment) > 0 || onLastWord() {
 			noun := "matches"
 			if nvalid == 1 {
 				noun = "match"
@@ -617,7 +641,7 @@ func inputWordsFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic, selected 
 		}
 
 		nav, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{{Clickable: backBtn, Style: StyleSecondary, Icon: assets.IconBack}}...)
-		if _, complete := completeBIP39Word(kbd.Fragment, nvalid); complete {
+		if _, ok := completeWord(kbd.Fragment, nvalid); ok {
 			nav2, _ := layoutNavigation(&ctx.B, th, dims, []NavButton{{Clickable: okBtn, Style: StylePrimary, Icon: assets.IconCheckmark}}...)
 			nav = op.Layer(
 				nav,
