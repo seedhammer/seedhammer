@@ -207,6 +207,64 @@ var testVectors = []struct {
 	},
 }
 
+func TestLastWordCandidates(t *testing.T) {
+	build := func(n int) Mnemonic {
+		m := make(Mnemonic, n)
+		for i := range m {
+			m[i] = Word(i % int(NumWords))
+		}
+		return m.FixChecksum()
+	}
+
+	// 24-word: exactly 8 candidates, all valid, including the real last word.
+	v24 := build(24)
+	c24 := LastWordCandidates(v24)
+	if len(c24) != 8 {
+		t.Fatalf("24-word: got %d candidates, want 8", len(c24))
+	}
+	foundLast := false
+	for _, w := range c24 {
+		m := make(Mnemonic, len(v24))
+		copy(m, v24)
+		m[len(m)-1] = w
+		if !m.Valid() {
+			t.Errorf("24-word candidate %d is not checksum-valid", w)
+		}
+		if w == v24[len(v24)-1] {
+			foundLast = true
+		}
+	}
+	if !foundLast {
+		t.Errorf("24-word candidates %v do not include the real last word %d", c24, v24[len(v24)-1])
+	}
+
+	// 12-word: exactly 128 candidates.
+	v12 := build(12)
+	if c12 := LastWordCandidates(v12); len(c12) != 128 {
+		t.Fatalf("12-word: got %d candidates, want 128", len(c12))
+	}
+
+	// Incomplete prefix (an earlier word unset) -> nil.
+	bad := make(Mnemonic, len(v24))
+	copy(bad, v24)
+	bad[5] = -1
+	if got := LastWordCandidates(bad); got != nil {
+		t.Errorf("incomplete prefix: got %v, want nil", got)
+	}
+
+	// Unsupported length (len%3 != 0) -> nil.
+	if got := LastWordCandidates(make(Mnemonic, 13)); got != nil {
+		t.Errorf("len 13: got %v, want nil", got)
+	}
+
+	// Must not mutate the input's final slot.
+	before := v24[len(v24)-1]
+	_ = LastWordCandidates(v24)
+	if v24[len(v24)-1] != before {
+		t.Errorf("LastWordCandidates mutated input final slot: %d -> %d", before, v24[len(v24)-1])
+	}
+}
+
 func TestDiceToWord(t *testing.T) {
 	counts := make([]int, len(index))
 	dice := Roll{1, 1, 1, 1, 1}

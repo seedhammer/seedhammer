@@ -125,6 +125,34 @@ func (m Mnemonic) FixChecksum() Mnemonic {
 	return m2
 }
 
+// LastWordCandidates returns every word that, placed in the final slot,
+// yields a checksum-valid mnemonic given the already-filled earlier words.
+// It operates on a copy and does not mutate prefix. It returns nil if
+// len(prefix)%3 != 0 or if any of the first len(prefix)-1 words is unset
+// (< 0) or out of range (>= NumWords). Otherwise it returns 8 candidates
+// for a 24-word mnemonic and 128 for a 12-word one. The final slot of
+// prefix is ignored.
+func LastWordCandidates(prefix Mnemonic) []Word {
+	if len(prefix) == 0 || len(prefix)%3 != 0 {
+		return nil
+	}
+	for _, w := range prefix[:len(prefix)-1] {
+		if w < 0 || w >= NumWords {
+			return nil
+		}
+	}
+	m := make(Mnemonic, len(prefix))
+	copy(m, prefix)
+	var cands []Word
+	for w := Word(0); w < NumWords; w++ {
+		m[len(m)-1] = w
+		if m.Valid() {
+			cands = append(cands, w)
+		}
+	}
+	return cands
+}
+
 // Entropy returns the entropy represented by the mnemonic. It
 // panics if the mnemonic is invalid.
 func (m Mnemonic) Entropy() []byte {
