@@ -609,7 +609,7 @@ func inputWordsFlow(ctx *Context, th *Colors, mnemonic bip39.Mnemonic, selected 
 				nav2,
 			)
 		}
-		title, _ := layoutTitle(ctx, dims.X, th.Text, "Input Words")
+		title, _ := layoutTitlef(ctx, dims.X, th.Text, "Word %d of %d", selected+1, len(mnemonic))
 		ctx.Frame(op.Layer(
 			kbdOp,
 			txtBg,

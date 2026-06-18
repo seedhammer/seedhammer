@@ -481,3 +481,19 @@ func uiContains(content, str string) bool {
 	clean := strings.ReplaceAll(strings.ToLower(str), " ", "")
 	return strings.Contains(txt, clean)
 }
+
+func TestWordFlowProgressTitle(t *testing.T) {
+	ctx := NewContext(newPlatform())
+	m := emptyBIP39Mnemonic(24)
+	frame, quit := runUI(ctx, func() {
+		inputWordsFlow(ctx, &descriptorTheme, m, 0)
+	})
+	defer quit()
+	content, ok := frame()
+	if !ok {
+		t.Fatal("inputWordsFlow produced no frame")
+	}
+	if !uiContains(content, "Word 1 of 24") {
+		t.Errorf("title missing %q; got %q", "Word 1 of 24", content)
+	}
+}
