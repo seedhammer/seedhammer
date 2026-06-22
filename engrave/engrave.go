@@ -1464,7 +1464,7 @@ func (s *SafePointer) Progress(p uint) {
 		k := s.history[s.completed]
 		// Stop when an engraving knot later than progress
 		// is reached.
-		if k.Engrave && s.progress < k.T {
+		if s.progress < k.T {
 			break
 		}
 		s.progress -= k.T
